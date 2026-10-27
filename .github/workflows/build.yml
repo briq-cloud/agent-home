@@ -2,7 +2,8 @@
 # and writes REFERENCE.md from what it has. Every Monday after the sandbox image it is built on, on
 # every push to main, and by hand. A pull request builds it without pushing.
 #
-# Tags: `latest` and `<date>`. A date tag never moves; `latest` follows the newest build.
+# Tags: `latest` and `<date>` (`<date>.2` for a second build that day). A date tag never moves;
+# `latest` follows the newest build.
 name: build
 
 on:
@@ -42,8 +43,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A date tag never moves: a second build the same day takes `<date>.<n>`.
       - id: date
-        run: echo "tag=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -eu
+          d="$(date -u +%Y-%m-%d)" t="$d" n=1
+          while docker buildx imagetools inspect "$IMAGE:$t" > /dev/null 2>&1; do n=$((n + 1)); t="$d.$n"; done
+          echo "tag=$t" >> "$GITHUB_OUTPUT"
 
       # Each CLI's current stable release and the GitHub assets' digests, resolved once here (with
       # the job's token: unauthenticated GitHub API calls are rate-limited) and passed in, so the
