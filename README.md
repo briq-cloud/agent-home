@@ -33,6 +33,11 @@ and `ttyd` for a terminal page. Every version, as the last build left them:
   `/etc/codex/config.toml`, `COPILOT_AUTO_UPDATE=false`, `GROK_DISABLE_AUTOUPDATER` and
   `/etc/grok/managed_config.toml`. Cursor and Vibe read theirs from the user's own config, which
   the briq recipe writes at boot.
+- **Checked downloads.** Each one against its publisher's checksum (Claude Code's manifest, the
+  GitHub release digests, ttyd's `SHA256SUMS`, PyPI's); Cursor and Grok publish none, so their
+  hashes are recorded. Every sha256 and the base image's digest are in REFERENCE.md.
+- **Provenance.** Each pushed image is attested by this repo's build:
+  `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:<tag> --repo briq-cloud/agent-home`.
 - **No browser.** A CLI that opens a link (a sign-in page) calls `xdg-open` or `$BROWSER`; here both
   are `show-url`, which shows the link as plain text in a terminal window of its own.
 
