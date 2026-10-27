@@ -93,9 +93,9 @@ RUN V="${GROK_VERSION:-$(curl -fsSL https://x.ai/cli/stable)}" \
   && chmod 755 /usr/local/bin/grok \
   && mkdir -p /etc/grok && printf '[cli]\nauto_update = false\n' > /etc/grok/managed_config.toml
 
-# Mistral Vibe: its wheel from PyPI, an exact version, checked against PyPI's sha256, as a uv tool.
+# Mistral Vibe: its Linux x86_64 wheel from PyPI, an exact version, checked against PyPI's sha256, as a uv tool.
 RUN V="${VIBE_VERSION:-$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)}" \
-  && W="$(curl -fsSL "https://pypi.org/pypi/mistral-vibe/${V}/json" | jq -c '[.urls[] | select(.packagetype == "bdist_wheel")][0]')" \
+  && W="$(curl -fsSL "https://pypi.org/pypi/mistral-vibe/${V}/json" | jq -c '[.urls[] | select(.filename | test("manylinux.*_x86_64\\.whl$"))][0]')" \
   && F="/tmp/$(echo "$W" | jq -r .filename)" H="$(echo "$W" | jq -r .digests.sha256)" \
   && curl -fsSL "$(echo "$W" | jq -r .url)" -o "$F" \
   && echo "$H  $F" | sha256sum -c - \
