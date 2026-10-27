@@ -1,0 +1,10 @@
+#!/bin/sh
+# The BROWSER of a machine with no browser: show the link, to open on the person's own device.
+# In tmux (the home's terminal) it gets a window of its own, as plain text over the program that
+# asked; Enter closes it. Anywhere else it goes to the terminal.
+url="$1"
+if [ -n "${TMUX:-}" ] && tmux new-window -n link sh -c \
+  'printf "\n  Open this link in your browser:\n\n  %s\n\n  Then press Enter to go back.\n" "$1"; read x' sh "$url"; then
+  exit 0
+fi
+printf '\nOpen this link in your browser:\n\n  %s\n\n' "$url" > /dev/tty 2> /dev/null || printf '%s\n' "$url" >&2

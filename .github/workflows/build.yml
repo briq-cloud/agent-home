@@ -1,0 +1,101 @@
+# Builds the agent home image, pushes it to ghcr.io/briq-cloud/agent-home and writes REFERENCE.md
+# from what it has. Every Monday after the sandbox image it is built on, on every push to main, and
+# by hand.
+#
+# Tags: `latest` and `<date>`. A date tag never moves; `latest` follows the newest build.
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['REFERENCE.md']
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/briq-cloud/agent-home
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: date
+        run: echo "tag=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      # Each CLI's current stable release, resolved once here (with the job's token: unauthenticated
+      # GitHub API calls are rate-limited) and passed in, so the image has exactly these.
+      - name: Resolve the versions
+        id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          {
+            echo "claude=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable)"
+            echo "codex=$(gh api repos/openai/codex/releases/latest --jq .tag_name | sed 's/^rust-v//')"
+            echo "copilot=$(gh api repos/github/copilot-cli/releases/latest --jq .tag_name | sed 's/^v//')"
+            echo "cursor=$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)"
+            echo "grok=$(curl -fsSL https://x.ai/cli/stable)"
+            echo "vibe=$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)"
+            echo "ttyd=$(gh api repos/tsl0922/ttyd/releases/latest --jq .tag_name)"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          build-args: |
+            CLAUDE_VERSION=${{ steps.v.outputs.claude }}
+            CODEX_VERSION=${{ steps.v.outputs.codex }}
+            COPILOT_VERSION=${{ steps.v.outputs.copilot }}
+            CURSOR_VERSION=${{ steps.v.outputs.cursor }}
+            GROK_VERSION=${{ steps.v.outputs.grok }}
+            VIBE_VERSION=${{ steps.v.outputs.vibe }}
+            TTYD_VERSION=${{ steps.v.outputs.ttyd }}
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ steps.date.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Write the reference from the image
+        run: |
+          set -eu
+          t="${{ steps.date.outputs.tag }}"
+          docker run --rm "$IMAGE:$t" agent-home-versions > REFERENCE.md
+          mb="$(docker manifest inspect "$IMAGE:$t" | jq '[.layers[].size] | add / 1048576 | round')"
+          printf '\n## Image\n\n`%s:%s`, %s MB compressed, on `ghcr.io/briq-cloud/sandbox:latest`. The Dockerfile: [Dockerfile](Dockerfile).\n' \
+            "$IMAGE" "$t" "$mb" >> REFERENCE.md
+          cat REFERENCE.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit the reference
+        run: |
+          set -eu
+          git config user.name 'briq build'
+          git config user.email 'hello@briq.cloud'
+          git add REFERENCE.md
+          git diff --cached --quiet && exit 0
+          git commit -m "Reference: ${{ steps.date.outputs.tag }}"
+          git push
