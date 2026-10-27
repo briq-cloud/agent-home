@@ -28,3 +28,13 @@ echo
 echo "## Terminal"
 echo
 echo "\`ttyd\` $(ver ttyd --version) serves it. A link a CLI opens (\`BROWSER\`, \`xdg-open\`) shows as plain text in a window of its own: \`show-url\`."
+echo
+echo "## Downloads"
+echo
+echo "Each one checked against its publisher's checksum at build, or recorded where none is published."
+echo
+echo "| Download | sha256 | Checked against |"
+echo "| --- | --- | --- |"
+while IFS="$(printf '\t')" read -r what sum how; do
+  row "$what" "\`$sum\`" "$how"
+done < /etc/agent-home/downloads

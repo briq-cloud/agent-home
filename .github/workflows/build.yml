@@ -1,14 +1,16 @@
-# Builds the agent home image, pushes it to ghcr.io/briq-cloud/agent-home and writes REFERENCE.md
-# from what it has. Every Monday after the sandbox image it is built on, on every push to main, and
-# by hand.
+# Builds the agent home image, pushes it to ghcr.io/briq-cloud/agent-home, attests its provenance
+# and writes REFERENCE.md from what it has. Every Monday after the sandbox image it is built on, on
+# every push to main, and by hand. A pull request builds it without pushing.
 #
-# Tags: `latest` and `<date>`. A date tag never moves; `latest` follows the newest build.
+# Tags: `latest` and `<date>` (`<date>.2` for a second build that day). A date tag never moves;
+# `latest` follows the newest build.
 name: build
 
 on:
   push:
     branches: [main]
     paths-ignore: ['REFERENCE.md']
+  pull_request:
   schedule:
     - cron: '0 7 * * 1'
   workflow_dispatch:
@@ -16,9 +18,11 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
+  attestations: write
 
 concurrency:
-  group: build
+  group: build-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
   cancel-in-progress: false
 
 env:
@@ -33,43 +37,64 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A date tag never moves: a second build the same day takes `<date>.<n>`.
       - id: date
-        run: echo "tag=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -eu
+          d="$(date -u +%Y-%m-%d)" t="$d" n=1
+          while docker buildx imagetools inspect "$IMAGE:$t" > /dev/null 2>&1; do n=$((n + 1)); t="$d.$n"; done
+          echo "tag=$t" >> "$GITHUB_OUTPUT"
 
-      # Each CLI's current stable release, resolved once here (with the job's token: unauthenticated
-      # GitHub API calls are rate-limited) and passed in, so the image has exactly these.
+      # Each CLI's current stable release and the GitHub assets' digests, resolved once here (with
+      # the job's token: unauthenticated GitHub API calls are rate-limited) and passed in, so the
+      # image has exactly these; the base by digest, so the image says which one it is built on.
       - name: Resolve the versions
         id: v
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -eu
+          digest() { gh api "repos/$1/releases/tags/$2" --jq ".assets[] | select(.name == \"$3\") | .digest" | sed 's/^sha256://'; }
+          codex="$(gh api repos/openai/codex/releases/latest --jq .tag_name | sed 's/^rust-v//')"
+          copilot="$(gh api repos/github/copilot-cli/releases/latest --jq .tag_name | sed 's/^v//')"
+          base="ghcr.io/briq-cloud/sandbox@$(docker buildx imagetools inspect ghcr.io/briq-cloud/sandbox:latest --format '{{json .Manifest}}' | jq -r .digest)"
           {
+            echo "base=$base"
             echo "claude=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable)"
-            echo "codex=$(gh api repos/openai/codex/releases/latest --jq .tag_name | sed 's/^rust-v//')"
-            echo "copilot=$(gh api repos/github/copilot-cli/releases/latest --jq .tag_name | sed 's/^v//')"
+            echo "codex=$codex"
+            echo "codex_sha256=$(digest openai/codex "rust-v$codex" codex-package-x86_64-unknown-linux-musl.tar.gz)"
+            echo "copilot=$copilot"
+            echo "copilot_sha256=$(digest github/copilot-cli "v$copilot" copilot-linux-x64.tar.gz)"
             echo "cursor=$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)"
             echo "grok=$(curl -fsSL https://x.ai/cli/stable)"
             echo "vibe=$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)"
             echo "ttyd=$(gh api repos/tsl0922/ttyd/releases/latest --jq .tag_name)"
           } | tee -a "$GITHUB_OUTPUT"
 
+      # One manifest, as Fly pulls it: the provenance is attested on GitHub below, not pushed as an
+      # attestation manifest beside the image.
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
           provenance: false
           build-args: |
+            BASE=${{ steps.v.outputs.base }}
             CLAUDE_VERSION=${{ steps.v.outputs.claude }}
             CODEX_VERSION=${{ steps.v.outputs.codex }}
+            CODEX_SHA256=${{ steps.v.outputs.codex_sha256 }}
             COPILOT_VERSION=${{ steps.v.outputs.copilot }}
+            COPILOT_SHA256=${{ steps.v.outputs.copilot_sha256 }}
             CURSOR_VERSION=${{ steps.v.outputs.cursor }}
             GROK_VERSION=${{ steps.v.outputs.grok }}
             VIBE_VERSION=${{ steps.v.outputs.vibe }}
@@ -80,17 +105,26 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Attest the provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+
       - name: Write the reference from the image
         run: |
           set -eu
           t="${{ steps.date.outputs.tag }}"
           docker run --rm "$IMAGE:$t" agent-home-versions > REFERENCE.md
+          [ "${{ github.event_name }}" = pull_request ] && { cat REFERENCE.md >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           mb="$(docker manifest inspect "$IMAGE:$t" | jq '[.layers[].size] | add / 1048576 | round')"
-          printf '\n## Image\n\n`%s:%s`, %s MB compressed, on `ghcr.io/briq-cloud/sandbox:latest`. The Dockerfile: [Dockerfile](Dockerfile).\n' \
-            "$IMAGE" "$t" "$mb" >> REFERENCE.md
+          printf '\n## Image\n\n`%s:%s`, %s MB compressed, digest `%s`, on `%s`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://%s:%s --repo briq-cloud/agent-home`.\n' \
+            "$IMAGE" "$t" "$mb" "${{ steps.build.outputs.digest }}" "${{ steps.v.outputs.base }}" "$IMAGE" "$t" >> REFERENCE.md
           cat REFERENCE.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit the reference
+        if: github.event_name != 'pull_request'
         run: |
           set -eu
           git config user.name 'briq build'

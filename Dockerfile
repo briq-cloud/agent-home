@@ -7,6 +7,12 @@
 # version this build resolved (a date tag never moves), with its self-update off: a newer CLI comes
 # with next week's build, never from inside a running home. Pass a version as a build arg to pin it;
 # empty means the vendor's current stable release. What is inside, with versions: REFERENCE.md.
+#
+# Every download is checked against the checksum its publisher gives (Claude Code's manifest, the
+# GitHub release's asset digest, ttyd's SHA256SUMS, PyPI's), and fails the build on a mismatch.
+# Cursor and Grok publish none, as their own installers check none: their hashes are recorded.
+# Each one's sha256 is in /etc/agent-home/downloads and REFERENCE.md. The build passes BASE pinned
+# by digest; its provenance is attested on GitHub (`gh attestation verify`).
 ARG BASE=ghcr.io/briq-cloud/sandbox:latest
 FROM ${BASE}
 
@@ -17,6 +23,9 @@ ARG CURSOR_VERSION=
 ARG GROK_VERSION=
 ARG VIBE_VERSION=
 ARG TTYD_VERSION=
+
+# One line per download: what, its sha256, how it was checked.
+RUN mkdir -p /etc/agent-home && : > /etc/agent-home/downloads
 
 # Updates off, for every process: the variables each CLI reads, and the system-wide config files
 # they read before the person's own (which live on the briq's volume, empty at build).
@@ -31,29 +40,48 @@ ENV DISABLE_AUTOUPDATER=1 \
 RUN B=https://downloads.claude.ai/claude-code-releases \
   && V="${CLAUDE_VERSION:-$(curl -fsSL "$B/stable")}" \
   && curl -fsSL "$B/$V/linux-x64/claude" -o /usr/local/bin/claude \
-  && echo "$(curl -fsSL "$B/$V/manifest.json" | jq -r '.platforms["linux-x64"].checksum')  /usr/local/bin/claude" | sha256sum -c - \
+  && H="$(curl -fsSL "$B/$V/manifest.json" | jq -r '.platforms["linux-x64"].checksum')" \
+  && echo "$H  /usr/local/bin/claude" | sha256sum -c - \
+  && printf 'Claude Code\t%s\tits release manifest\n' "$H" >> /etc/agent-home/downloads \
   && chmod 755 /usr/local/bin/claude \
   && mkdir -p /etc/claude-code \
   && echo '{"env":{"DISABLE_AUTOUPDATER":"1","DISABLE_UPDATES":"1"}}' > /etc/claude-code/managed-settings.json
 
+# A GitHub release asset's sha256, as GitHub computed it at upload: `gh-digest owner/repo tag name`.
+# The build passes each one in (resolved with its token); a local build asks the API.
+COPY bin/gh-digest /usr/local/bin/gh-digest
+
 # Codex: its release package, as published (the binary, the code-mode host that runs its tools,
 # its bwrap and rg), under /opt/codex; the sign-in in a file under CODEX_HOME.
+ARG CODEX_SHA256=
 RUN V="${CODEX_VERSION:-$(curl -fsSL https://api.github.com/repos/openai/codex/releases/latest | jq -r .tag_name | sed 's/^rust-v//')}" \
-  && mkdir -p /opt/codex \
-  && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${V}/codex-package-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C /opt/codex \
+  && A=codex-package-x86_64-unknown-linux-musl.tar.gz \
+  && H="${CODEX_SHA256:-$(gh-digest openai/codex "rust-v${V}" "$A")}" \
+  && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${V}/$A" -o "/tmp/$A" \
+  && echo "$H  /tmp/$A" | sha256sum -c - \
+  && printf 'Codex\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
+  && mkdir -p /opt/codex && tar -xzf "/tmp/$A" -C /opt/codex && rm "/tmp/$A" \
   && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
   && mkdir -p /etc/codex \
   && printf 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n' > /etc/codex/config.toml
 
 # Copilot CLI: the single binary from its GitHub release.
+ARG COPILOT_SHA256=
 RUN V="${COPILOT_VERSION:-$(curl -fsSL https://api.github.com/repos/github/copilot-cli/releases/latest | jq -r .tag_name | sed 's/^v//')}" \
-  && curl -fsSL "https://github.com/github/copilot-cli/releases/download/v${V}/copilot-linux-x64.tar.gz" | tar -xz -C /usr/local/bin \
+  && A=copilot-linux-x64.tar.gz \
+  && H="${COPILOT_SHA256:-$(gh-digest github/copilot-cli "v${V}" "$A")}" \
+  && curl -fsSL "https://github.com/github/copilot-cli/releases/download/v${V}/$A" -o "/tmp/$A" \
+  && echo "$H  /tmp/$A" | sha256sum -c - \
+  && printf 'Copilot CLI\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
+  && tar -xzf "/tmp/$A" -C /usr/local/bin && rm "/tmp/$A" \
   && chmod 755 /usr/local/bin/copilot
 
 # Cursor's `agent`: the package its installer downloads, under /opt; `agent` and `cursor-agent`.
 RUN V="${CURSOR_VERSION:-$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)}" \
   && mkdir -p /opt/cursor-agent \
-  && curl -fsSL "https://downloads.cursor.com/lab/${V}/linux/x64/agent-cli-package.tar.gz" | tar --strip-components=1 -xz -C /opt/cursor-agent \
+  && curl -fsSL "https://downloads.cursor.com/lab/${V}/linux/x64/agent-cli-package.tar.gz" -o /tmp/cursor.tar.gz \
+  && printf 'Cursor\t%s\tnone published: recorded\n' "$(sha256sum /tmp/cursor.tar.gz | cut -d' ' -f1)" >> /etc/agent-home/downloads \
+  && tar --strip-components=1 -xzf /tmp/cursor.tar.gz -C /opt/cursor-agent && rm /tmp/cursor.tar.gz \
   && ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/cursor-agent \
   && ln -s /opt/cursor-agent/cursor-agent /usr/local/bin/agent \
   && echo "$V" > /opt/cursor-agent/VERSION
@@ -61,17 +89,27 @@ RUN V="${CURSOR_VERSION:-$(curl -fsSL https://cursor.com/install | grep -oE 'lab
 # Grok Build: the binary its installer downloads, as `grok` only (its installer also takes `agent`).
 RUN V="${GROK_VERSION:-$(curl -fsSL https://x.ai/cli/stable)}" \
   && curl -fsSL "https://x.ai/cli/grok-${V}-linux-x86_64" -o /usr/local/bin/grok \
+  && printf 'Grok Build\t%s\tnone published: recorded\n' "$(sha256sum /usr/local/bin/grok | cut -d' ' -f1)" >> /etc/agent-home/downloads \
   && chmod 755 /usr/local/bin/grok \
   && mkdir -p /etc/grok && printf '[cli]\nauto_update = false\n' > /etc/grok/managed_config.toml
 
-# Mistral Vibe: from PyPI, an exact version, as a uv tool.
+# Mistral Vibe: its Linux x86_64 wheel from PyPI, an exact version, checked against PyPI's sha256, as a uv tool.
 RUN V="${VIBE_VERSION:-$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)}" \
-  && uv tool install "mistral-vibe==${V}" \
-  && uv cache clean
+  && W="$(curl -fsSL "https://pypi.org/pypi/mistral-vibe/${V}/json" | jq -c '[.urls[] | select(.filename | test("manylinux.*_x86_64\\.whl$"))][0]')" \
+  && F="/tmp/$(echo "$W" | jq -r .filename)" H="$(echo "$W" | jq -r .digests.sha256)" \
+  && curl -fsSL "$(echo "$W" | jq -r .url)" -o "$F" \
+  && echo "$H  $F" | sha256sum -c - \
+  && printf 'Mistral Vibe\t%s\tthe PyPI digest of its wheel\n' "$H" >> /etc/agent-home/downloads \
+  && uv tool install "$F" \
+  && rm "$F" && uv cache clean
 
 # The terminal page: ttyd, one static binary.
 RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/releases/latest | jq -r .tag_name)}" \
-  && curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${V}/ttyd.x86_64" -o /usr/local/bin/ttyd \
+  && R="https://github.com/tsl0922/ttyd/releases/download/${V}" \
+  && curl -fsSL "$R/ttyd.x86_64" -o /usr/local/bin/ttyd \
+  && H="$(curl -fsSL "$R/SHA256SUMS" | awk '$2 == "ttyd.x86_64" { print $1 }')" \
+  && echo "$H  /usr/local/bin/ttyd" | sha256sum -c - \
+  && printf 'ttyd\t%s\tits SHA256SUMS\n' "$H" >> /etc/agent-home/downloads \
   && chmod 755 /usr/local/bin/ttyd
 
 # A link a CLI opens (a sign-in page) shows in the terminal instead: `show-url`, as BROWSER and as

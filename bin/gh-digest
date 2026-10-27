@@ -1,0 +1,7 @@
+#!/bin/sh
+# A GitHub release asset's sha256 (`gh-digest owner/repo tag name`), as GitHub computed it at
+# upload. Fails when the release or the asset has none.
+set -eu
+d="$(curl -fsSL "https://api.github.com/repos/$1/releases/tags/$2" \
+  | jq -r --arg n "$3" '.assets[] | select(.name == $n) | .digest // empty')"
+case $d in sha256:*) echo "${d#sha256:}" ;; *) echo "gh-digest: no digest for $3 in $1 $2" >&2; exit 1 ;; esac
