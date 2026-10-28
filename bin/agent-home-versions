@@ -29,6 +29,10 @@ echo "## Terminal"
 echo
 echo "\`ttyd\` $(ver ttyd --version) serves it. A link a CLI opens (\`BROWSER\`, \`xdg-open\`) shows as plain text in a window of its own: \`show-url\`."
 echo
+echo "## Runner"
+echo
+echo "\`agent-home-runner\` $(jq -r .version /opt/agent-home-runner/package.json) drives the CLIs over ACP for apps ([runner/README.md](runner/README.md)), with \`claude-agent-acp\` $(jq -r .version /opt/agent-home-runner/node_modules/@agentclientprotocol/claude-agent-acp/package.json) and \`codex-acp\` $(jq -r .version /opt/agent-home-runner/node_modules/@agentclientprotocol/codex-acp/package.json), on \`@agentclientprotocol/sdk\` $(jq -r .version /opt/agent-home-runner/node_modules/@agentclientprotocol/sdk/package.json)."
+echo
 echo "## Downloads"
 echo
 echo "Each one checked against its publisher's checksum at build, or recorded where none is published."

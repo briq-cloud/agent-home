@@ -1,0 +1,24 @@
+{
+  "name": "agent-home-runner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Drives the agent CLIs of an agent home over ACP, for apps, while nobody is connected.",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.98.0",
+    "@agentclientprotocol/codex-acp": "2.3.0",
+    "@agentclientprotocol/sdk": "2.1.0",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "typescript": "5.9.3"
+  }
+}

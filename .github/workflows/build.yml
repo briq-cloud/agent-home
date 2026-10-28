@@ -34,6 +34,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The runner's checks before anything is built: its types, then its tests against a mock agent.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check the runner
+        working-directory: runner
+        run: |
+          npm ci --omit=optional --no-fund --no-audit
+          npm run typecheck
+          npm test
+
       - uses: docker/setup-buildx-action@v3
 
       - uses: docker/login-action@v3
