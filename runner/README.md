@@ -96,6 +96,20 @@ credential gateway's proxy and CA, a vendor's API-key placeholder when the home 
 effort…) come in the `session/new` answer, set with `session/set_mode` and
 `session/set_config_option`; MCP servers go in `session/new`'s `mcpServers`.
 
+## A home as a local agent: `agent-home-acp`
+
+For an ACP client that only starts agents on its own machine (Zed, JetBrains, VS Code, `acpx`):
+`bin/agent-home-acp.ts` speaks ACP on stdin and stdout and relays it to a home's runner.
+
+```json
+{ "agents": { "home": { "argv": ["node", "agent-home-acp.ts", "wss://home-x7k2.briq.run/acp"] } } }
+```
+
+`AGENT_HOME_TOKEN` is the runner's key, `AGENT_HOME_BRIQ_TOKEN` the private URL's token (sent as
+its cookie). The client's folder does not exist on the home: a session's `cwd` becomes
+`AGENT_HOME_CWD`, or `/work/<the folder's name>`. The agent works on the home's files, not the
+laptop's. Measured on the staging home: `acpx` through it, Codex in 11 s, `/acp` (Claude) in 6 s.
+
 ## Usage
 
 Read from the session logs, so it survives restarts. What each CLI reports through ACP:
