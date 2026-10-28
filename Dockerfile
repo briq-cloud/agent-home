@@ -139,7 +139,8 @@ RUN V="${GEMINI_VERSION:-$(npm view @google/gemini-cli version)}" \
   && mkdir -p /etc/gemini-cli \
   && echo '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}},"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false},"privacy":{"usageStatisticsEnabled":false}}' > /etc/gemini-cli/settings.json
 
-# Qwen Code: its standalone package from the GitHub release (with its own Node), under /opt.
+# Qwen Code: its standalone package from the GitHub release (with its own Node), under /opt. Its
+# launcher finds that Node from its own path, so it is called through a script, never a link.
 # API keys only since its free sign-in ended (2026-04); updates and usage statistics off.
 ARG QWEN_SHA256=
 RUN V="${QWEN_VERSION:-$(npm view @qwen-code/qwen-code version)}" \
@@ -149,7 +150,9 @@ RUN V="${QWEN_VERSION:-$(npm view @qwen-code/qwen-code version)}" \
   && echo "$H  /tmp/$A" | sha256sum -c - \
   && printf 'Qwen Code\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
   && mkdir -p /opt/qwen-code && tar -xzf "/tmp/$A" -C /opt/qwen-code && rm "/tmp/$A" \
-  && ln -s "$(find /opt/qwen-code -type f -name qwen -perm -u+x | head -n 1)" /usr/local/bin/qwen \
+  && Q="$(find /opt/qwen-code -path '*/bin/qwen' -type f | head -n 1)" && test -n "$Q" \
+  && printf '#!/bin/sh\nexec %s "$@"\n' "$Q" > /usr/local/bin/qwen && chmod 755 /usr/local/bin/qwen \
+  && qwen --version \
   && mkdir -p /etc/qwen-code \
   && echo '{"general":{"enableAutoUpdate":false},"privacy":{"usageStatisticsEnabled":false}}' > /etc/qwen-code/settings.json
 
