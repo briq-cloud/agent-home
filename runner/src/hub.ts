@@ -204,6 +204,8 @@ export interface HubOptions {
   signedIn?: (cli: string) => Promise<boolean | null>;
 }
 
+/** A plan this used (its fullest window) comes last in `/acp`'s picks. */
+const NEAR_LIMIT = 0.9;
 /** How long a CLI that hit its plan's limit is left out of `/acp`'s picks, when it gives no reset. */
 const LIMITED_MS = 15 * 60_000;
 /** What a turn that failed on its plan's limit says. */
@@ -224,6 +226,8 @@ export class Hub {
   private readonly stateDir: string;
   /** CLIs at their plan's limit, until when: `/acp` picks another. */
   private readonly limited = new Map<string, number>();
+  /** How much of its plan each CLI last said it used, its fullest window (0 to 1). */
+  private readonly used = new Map<string, number>();
 
   constructor(opts: HubOptions) {
     this.slots = new Slots(opts.maxTurns);
@@ -399,17 +403,17 @@ export class Hub {
       return asked;
     }
     const now = Date.now();
-    const fit: Array<{ cli: string; rank: number; busy: number }> = [];
+    const fit: Array<{ cli: string; rank: number; busy: number; nearLimit: boolean }> = [];
     for (const [rank, cli] of this.route.entries()) {
       if ((this.limited.get(cli) ?? 0) > now) continue;
       if ((await this.signedIn(cli)) === false) continue;
       let busy = 0;
       for (const s of this.engine(cli).sessions.values()) if (s.turn.state !== 'idle') busy++;
-      fit.push({ cli, rank, busy });
+      fit.push({ cli, rank, busy, nearLimit: (this.used.get(cli) ?? 0) >= NEAR_LIMIT });
     }
-    // The least busy, then the earliest in the route: a second session goes to the next CLI
-    // while the first is busy, rather than queue behind it.
-    fit.sort((a, b) => a.busy - b.busy || a.rank - b.rank);
+    // A plan nearly used up last; then the least busy, then the earliest in the route: a second
+    // session goes to the next CLI while the first is busy, rather than queue behind it.
+    fit.sort((a, b) => Number(a.nearLimit) - Number(b.nearLimit) || a.busy - b.busy || a.rank - b.rank);
     const first = fit[0];
     if (!first) throw new RpcFailure({ code: -32002, message: 'no CLI to give a session to: all are signed out or at their limit' });
     return first.cli;
@@ -444,9 +448,14 @@ export class Hub {
     if (!s || s.replaying) return;
     // A CLI that says it is at its plan's limit (Claude: `_claude/rateLimit`, status "rejected").
     const meta = msg.params?.update?._meta as Record<string, { status?: string; resetsAt?: number }> | undefined;
-    for (const [key, value] of Object.entries(meta ?? {}))
-      if (/rate.?limit/i.test(key) && value?.status === 'rejected')
+    for (const [key, value] of Object.entries(meta ?? {})) {
+      if (!/rate.?limit/i.test(key) || !value) continue;
+      if (value.status === 'rejected')
         this.limit(cli, typeof value.resetsAt === 'number' ? (value.resetsAt < 1e12 ? value.resetsAt * 1000 : value.resetsAt) : undefined);
+      // Its fullest window (Claude's `unifiedWindows`); a report without windows says none is full.
+      const windows = Object.values((value as { unifiedWindows?: Record<string, { utilization?: number }> }).unifiedWindows ?? {});
+      this.used.set(cli, Math.max(0, ...windows.map((w) => (typeof w?.utilization === 'number' ? w.utilization : 0))));
+    }
     if (msg.method === 'session/update' && MODEL_UPDATES.has(msg.params?.update?.sessionUpdate)) {
       s.firstCall?.();
       s.firstCall = undefined;

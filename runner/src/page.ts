@@ -54,13 +54,24 @@ let usage = {};
 let limited = {};
 const today = () => new Date().toISOString().slice(0, 10);
 const num = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
-/** A CLI's word on its plan's limits, as it gave it: a status, and when it resets. */
+const STATUS = { allowed: 'within its limits', allowed_warning: 'near a limit', rejected: 'at its limit' };
+const WINDOW = { five_hour: '5 h', seven_day: 'week', seven_day_opus: 'week (Opus)' };
+const when = (at) => typeof at === 'number' ? new Date(at < 1e12 ? at * 1000 : at).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+/**
+ * A CLI's word on its plan's limits, as it gave it: how much of each window is used (Claude's
+ * \`unifiedWindows\`), else a status and when it resets.
+ */
 function limitsLine(l) {
   if (!l || typeof l.value !== 'object') return null;
-  const v = l.value, at = v.resetsAt ?? v.resets_at;
-  const when = typeof at === 'number' ? new Date(at < 1e12 ? at * 1000 : at) : null;
-  const parts = [v.status ? 'plan ' + String(v.status).replace(/_/g, ' ') : null, when ? 'resets ' + when.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : null].filter(Boolean);
-  return parts.length ? parts.join(', ') : null;
+  const v = l.value;
+  const plan = 'Plan ' + (STATUS[v.status] || String(v.status || '').replace(/_/g, ' ') || 'limits');
+  const windows = v.unifiedWindows && typeof v.unifiedWindows === 'object'
+    ? Object.entries(v.unifiedWindows).filter(([, w]) => w && typeof w.utilization === 'number')
+      .map(([name, w]) => (WINDOW[name] || name.replace(/_/g, ' ')) + ' ' + Math.round(w.utilization * 100) + '%' + (when(w.resetsAt) ? ' until ' + when(w.resetsAt) : ''))
+    : [];
+  if (windows.length) return plan + ': ' + windows.join(', ');
+  const reset = when(v.resetsAt ?? v.resets_at);
+  return v.status || reset ? plan + (reset ? ', resets ' + reset : '') : null;
 }
 
 function card(c) {
