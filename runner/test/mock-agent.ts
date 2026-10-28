@@ -48,6 +48,7 @@ async function handle(m: Msg): Promise<unknown> {
       const { sessionId, prompt } = m.params;
       const text = prompt?.[0]?.text ?? '';
       if (text === 'die') process.exit(1);
+      if (text === 'limit') throw Object.assign(new Error("You've hit your usage limit. Try again later."), { code: -32603 });
       if (text === 'slow') await new Promise((r) => setTimeout(r, 500));
       if (text === 'ask') {
         update(sessionId, 'asking');

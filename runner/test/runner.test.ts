@@ -50,6 +50,7 @@ before(async () => {
       RUNNER_STATE: join(dir, 'state'),
       RUNNER_MAX_TURNS: '1',
       RUNNER_TERMINAL: `http://127.0.0.1:${TERMINAL_PORT}`,
+      RUNNER_ROUTE: 'off,mock,second',
       MOCK_HOME: dir,
       RUNNER_CLIS: JSON.stringify([
         {
@@ -60,6 +61,9 @@ before(async () => {
           signIn: { file: '$MOCK_HOME/auth.json', refreshedAt: 'last_refresh', days: 30, refreshAfterDays: 8 },
         },
         { name: 'fixed', acp: mock, login: ['true'], signIn: { file: '$MOCK_HOME/fixed.json', endsAt: 'refreshTokenExpiresAt' } },
+        // For /acp: one never signed in, one more to route to.
+        { name: 'off', acp: mock, login: ['true'], status: ['false'] },
+        { name: 'second', acp: mock, login: ['true'], status: ['true'] },
       ]),
     },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -88,8 +92,8 @@ class App {
   private readonly waiting = new Map<string | number, (m: Msg) => void>();
   private readonly watchers: Array<() => void> = [];
 
-  constructor() {
-    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}/acp/mock`, { headers: { authorization: `Bearer ${TOKEN}` } });
+  constructor(path = '/acp/mock') {
+    this.ws = new WebSocket(`ws://127.0.0.1:${PORT}${path}`, { headers: { authorization: `Bearer ${TOKEN}` } });
     this.ws.on('message', (data) => {
       const m = JSON.parse(String(data)) as Msg;
       if (m.method === undefined && m.id !== undefined) this.waiting.get(m.id)?.(m);
@@ -144,11 +148,11 @@ class App {
   }
 }
 
-async function connect(): Promise<App> {
-  const app = new App();
+async function connect(path = '/acp/mock', agent = 'mock'): Promise<App> {
+  const app = new App(path);
   await app.open();
   const init = await app.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-  assert.equal(init.result.agentInfo.name, 'mock');
+  assert.equal(init.result.agentInfo.name, agent);
   return app;
 }
 
@@ -163,6 +167,8 @@ test('refuses a caller without the key, and says what it runs', async () => {
   assert.deepEqual(clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]), [
     ['mock', true],
     ['fixed', null],
+    ['off', false],
+    ['second', true],
   ]);
   // The dates of each sign-in, never its tokens.
   assert.deepEqual(clis[0].life, {
@@ -317,4 +323,40 @@ test('counts what the sessions used, from the logs, per session, per CLI and per
   assert.ok(today.turns >= 2 && today.tokens.total >= 220);
   assert.deepEqual(mock.limits.value, { status: 'allowed', resetsAt: 1800000000 });
   assert.equal(mock.limits.key, '_mock/rateLimit');
+});
+
+test('/acp routes each session: the CLI asked for, else the first fit, skipping one signed out', async () => {
+  const app = await connect('/acp', 'agent-home');
+  const picked = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  // `off` comes first in the route but is signed out: the next one, with its own capabilities.
+  assert.equal(picked.result._meta.agentHome.cli, 'mock');
+  assert.equal(picked.result._meta.agentHome.agentCapabilities.loadSession, true);
+  const asked = await app.request('session/new', { cwd: '/tmp', mcpServers: [], _meta: { agentHome: { cli: 'second' } } });
+  assert.equal(asked.result._meta.agentHome.cli, 'second');
+  // Later calls go to the CLI that holds the session, whatever the endpoint.
+  const done = await app.request('session/prompt', say(asked.result.sessionId, 'hello'));
+  assert.equal(done.result.stopReason, 'end_turn');
+  const none = await app.request('session/new', { cwd: '/tmp', mcpServers: [], _meta: { agentHome: { cli: 'nope' } } });
+  assert.match(none.error.message, /no CLI named nope/);
+  app.close();
+
+  // A session started on /acp loads again on /acp, by its id alone.
+  const back = await connect('/acp', 'agent-home');
+  const loaded = await back.request('session/load', { sessionId: asked.result.sessionId, cwd: '/tmp', mcpServers: [] });
+  assert.ok(!loaded.error);
+  assert.deepEqual(back.texts(), ['hi']);
+  back.close();
+});
+
+test('/acp leaves out a CLI that hit its plan limit, until its reset', async () => {
+  const app = await connect('/acp', 'agent-home');
+  const first = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.equal(first.result._meta.agentHome.cli, 'mock');
+  const limited = await app.request('session/prompt', say(first.result.sessionId, 'limit'));
+  assert.match(limited.error.message, /usage limit/);
+  const next = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.equal(next.result._meta.agentHome.cli, 'second');
+  const status = await (await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  assert.ok(status.limited.mock);
+  app.close();
 });

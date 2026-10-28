@@ -23,7 +23,9 @@ class App {
   private readonly watchers = new Set<() => void>();
 
   constructor(cli: string) {
-    this.ws = new WebSocket(`${base}/acp/${cli}`, { headers: { authorization: `Bearer ${token}`, ...cookie } });
+    // `auto`: the runner's own endpoint, which picks the CLI.
+    const path = cli === 'auto' ? '/acp' : `/acp/${cli}`;
+    this.ws = new WebSocket(`${base}${path}`, { headers: { authorization: `Bearer ${token}`, ...cookie } });
     this.ws.on('message', (data) => {
       const m = JSON.parse(String(data)) as Msg;
       if (m.method === undefined && m.id !== undefined) this.waiting.get(m.id)?.(m);
@@ -101,6 +103,7 @@ async function live(cli: string): Promise<void> {
   const created = await app.request('session/new', { cwd, mcpServers: [] });
   if (created.error) throw new Error(`${cli} session/new: ${created.error.message}`);
   const id = created.result.sessionId as string;
+  if (created.result._meta?.agentHome) console.log(`${cli}: the runner picked ${created.result._meta.agentHome.cli}`);
   const options = (created.result.configOptions ?? []).map((o: any) => o.id ?? o.name);
   const modes = (created.result.modes?.availableModes ?? []).map((m: any) => m.id);
   const turn1 = await app.request('session/prompt', {

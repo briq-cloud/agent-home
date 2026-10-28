@@ -51,6 +51,7 @@ const call = async (method, path, body) => {
 const signIns = {};
 let messages = {};
 let usage = {};
+let limited = {};
 const today = () => new Date().toISOString().slice(0, 10);
 const num = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
 /** A CLI's word on its plan's limits, as it gave it: a status, and when it resets. */
@@ -64,13 +65,14 @@ function limitsLine(l) {
 
 function card(c) {
   const life = c.life;
-  const state = c.signedIn === true ? (life && life.endsSoon ? ['ends soon', 'warn'] : ['signed in', 'ok'])
+  const state = limited[c.name] ? ['at its limit', 'warn'] : c.signedIn === true ? (life && life.endsSoon ? ['ends soon', 'warn'] : ['signed in', 'ok'])
     : c.signedIn === false ? ['signed out', 'off'] : ['unknown', 'off'];
   const box = $('div', { class: 'card' },
     $('div', { class: 'row' }, $('span', { class: 'name' }, c.name), $('span', { class: 'tag ' + state[1] }, state[0])));
   if (life && life.endsAt) box.append($('span', { class: 'muted' }, (life.renews ? 'Until ' : 'Ends ') + day(life.endsAt) + (life.renews ? ', renewed by use' : ', then sign in again')));
   const u = usage[c.name], d = u && u.days[today()];
   if (d) box.append($('span', { class: 'muted' }, 'Today ' + d.turns + (d.turns === 1 ? ' turn' : ' turns') + (d.tokens.total ? ', ' + num(d.tokens.total) + ' tokens' : '') + (d.cost ? ', ' + d.cost.amount.toFixed(2) + ' ' + d.cost.currency + ' at API prices' : '')));
+  if (limited[c.name]) box.append($('span', { class: 'muted' }, 'New sessions go to another CLI until ' + new Date(limited[c.name]).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })));
   const limits = u && limitsLine(u.limits);
   if (limits) box.append($('span', { class: 'muted' }, limits));
   const s = signIns[c.name];
@@ -102,6 +104,7 @@ async function load() {
   const r = await call('GET', '/status');
   if (!r.ok) { document.getElementById('clis').replaceChildren($('p', { class: 'muted' }, 'This page needs the home\\'s link with its key.')); return; }
   last = r.body.clis;
+  limited = r.body.limited || {};
   for (const c of last) if (signIns[c.name] && (c.signIn === 'done' || c.signIn === 'failed')) {
     messages[c.name] = c.signIn === 'done' ? 'Signed in' : 'Sign-in failed';
     delete signIns[c.name];
