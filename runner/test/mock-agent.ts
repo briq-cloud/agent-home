@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 type Msg = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: any; result?: any; error?: any };
 
 const sessions = new Map<string, Msg[]>();
+const counts = new Map<string, number>();
 const waiting = new Map<number | string, (m: Msg) => void>();
 let next = 1;
 
@@ -60,7 +61,25 @@ async function handle(m: Msg): Promise<unknown> {
         });
         update(sessionId, `outcome: ${r.result?.outcome?.optionId ?? r.result?.outcome?.outcome}`);
       } else update(sessionId, 'hi');
-      return { stopReason: 'end_turn' };
+      // As Claude reports it: context use, the session's cost so far, its plan's limits; then the
+      // session's token totals with the answer.
+      const turns = (counts.get(sessionId) ?? 0) + 1;
+      counts.set(sessionId, turns);
+      send({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId,
+          update: {
+            sessionUpdate: 'usage_update',
+            used: 1000 * turns,
+            size: 200000,
+            cost: { amount: 0.05 * turns, currency: 'USD' },
+            _meta: { '_mock/rateLimit': { status: 'allowed', resetsAt: 1800000000 } },
+          },
+        },
+      });
+      return { stopReason: 'end_turn', usage: { inputTokens: 100 * turns, outputTokens: 10 * turns, totalTokens: 110 * turns } };
     }
     default:
       throw Object.assign(new Error(`no method ${m.method}`), { code: -32601 });

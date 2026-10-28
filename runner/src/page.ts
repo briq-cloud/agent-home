@@ -50,6 +50,17 @@ const call = async (method, path, body) => {
 };
 const signIns = {};
 let messages = {};
+let usage = {};
+const today = () => new Date().toISOString().slice(0, 10);
+const num = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+/** A CLI's word on its plan's limits, as it gave it: a status, and when it resets. */
+function limitsLine(l) {
+  if (!l || typeof l.value !== 'object') return null;
+  const v = l.value, at = v.resetsAt ?? v.resets_at;
+  const when = typeof at === 'number' ? new Date(at < 1e12 ? at * 1000 : at) : null;
+  const parts = [v.status ? 'plan ' + String(v.status).replace(/_/g, ' ') : null, when ? 'resets ' + when.toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : null].filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
 
 function card(c) {
   const life = c.life;
@@ -58,6 +69,10 @@ function card(c) {
   const box = $('div', { class: 'card' },
     $('div', { class: 'row' }, $('span', { class: 'name' }, c.name), $('span', { class: 'tag ' + state[1] }, state[0])));
   if (life && life.endsAt) box.append($('span', { class: 'muted' }, (life.renews ? 'Until ' : 'Ends ') + day(life.endsAt) + (life.renews ? ', renewed by use' : ', then sign in again')));
+  const u = usage[c.name], d = u && u.days[today()];
+  if (d) box.append($('span', { class: 'muted' }, 'Today ' + d.turns + (d.turns === 1 ? ' turn' : ' turns') + (d.tokens.total ? ', ' + num(d.tokens.total) + ' tokens' : '') + (d.cost ? ', ' + d.cost.amount.toFixed(2) + ' ' + d.cost.currency + ' at API prices' : '')));
+  const limits = u && limitsLine(u.limits);
+  if (limits) box.append($('span', { class: 'muted' }, limits));
   const s = signIns[c.name];
   if (s && s.state === 'waiting') {
     const steps = $('div', { class: 'steps' });
@@ -106,8 +121,14 @@ async function refresh(name) {
   messages[name] = r.ok ? (r.body.moved ? 'Refreshed' : 'Nothing to refresh yet' + (r.body.life && r.body.life.refreshableAt ? ' (from ' + day(r.body.life.refreshableAt) + ')' : '')) : (r.body.error || 'Refresh failed');
   await load();
 }
+async function loadUsage() {
+  const r = await call('GET', '/usage');
+  if (r.ok) { usage = Object.fromEntries(r.body.clis.map((c) => [c.name, c])); render(); }
+}
 load();
+loadUsage();
 setInterval(load, 5000);
+setInterval(loadUsage, 30000);
 </script>
 </body>
 </html>
