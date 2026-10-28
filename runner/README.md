@@ -80,7 +80,9 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 prompts, stdio MCP servers, `session/load`), and starts nothing. A `session/new` goes to:
 1. the CLI it asks for: `_meta: { agentHome: { cli: "codex" } }`;
 2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,copilot,grok,vibe`,
-   the earlier first), leaving out one signed out and one at its plan's limit.
+   the earlier first), leaving out one signed out and one at its plan's limit, and putting last
+   one whose plan is nearly used up (a window at 90% or more in its last report: Claude's
+   `unifiedWindows`).
 
 A CLI is at its limit when a turn fails on it (a rate or usage limit in the error), or when it
 says so (Claude's `_claude/rateLimit` with status `rejected`): until its reset, 15 minutes when it
@@ -116,7 +118,7 @@ Read from the session logs, so it survives restarts. What each CLI reports throu
 
 | | Tokens (`usage` in the `session/prompt` answer, unstable ACP) | Cost (`usage_update.cost`) | Context (`usage_update.used`/`size`) | Plan limits |
 | --- | --- | --- | --- | --- |
-| Claude | yes | yes, at API prices: notional on a subscription | yes | `_meta["_claude/rateLimit"]` on a `usage_update`, when Claude Code reports one |
+| Claude | yes | yes, at API prices: notional on a subscription | yes | `_meta["_claude/rateLimit"]` on a `usage_update`: a status (`allowed`, `allowed_warning`, `rejected`) and how much of each window is used (`unifiedWindows.five_hour`, `seven_day`: `utilization`, `resetsAt`) |
 | Codex | yes | no | yes | no: its adapter keeps them and shows them only as the text of `/status` |
 
 Both are a session's running totals; a turn's share, counted on the day it ended, is the

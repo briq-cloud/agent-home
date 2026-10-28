@@ -348,6 +348,21 @@ test('/acp routes each session: the CLI asked for, else the first fit, skipping 
   back.close();
 });
 
+test('/acp gives a plan nearly used up a session last, until it says otherwise', async () => {
+  const app = await connect('/acp', 'agent-home');
+  const first = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.equal(first.result._meta.agentHome.cli, 'mock');
+  // The mock says a window of its plan is 95% used: the next session goes to another CLI.
+  await app.request('session/prompt', say(first.result.sessionId, 'hot'));
+  const next = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.equal(next.result._meta.agentHome.cli, 'second');
+  // Its next report has no full window: first again.
+  await app.request('session/prompt', say(first.result.sessionId, 'hello'));
+  const again = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.equal(again.result._meta.agentHome.cli, 'mock');
+  app.close();
+});
+
 test('/acp leaves out a CLI that hit its plan limit, until its reset', async () => {
   const app = await connect('/acp', 'agent-home');
   const first = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });

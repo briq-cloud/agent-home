@@ -77,7 +77,12 @@ async function handle(m: Msg): Promise<unknown> {
             used: 1000 * turns,
             size: 200000,
             cost: { amount: 0.05 * turns, currency: 'USD' },
-            _meta: { '_mock/rateLimit': { status: 'allowed', resetsAt: 1800000000 } },
+            _meta: {
+              '_mock/rateLimit':
+                text === 'hot'
+                  ? { status: 'allowed_warning', unifiedWindows: { five_hour: { utilization: 0.95, resetsAt: 1800000000 } } }
+                  : { status: 'allowed', resetsAt: 1800000000 },
+            },
           },
         },
       });
