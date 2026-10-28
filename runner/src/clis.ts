@@ -13,7 +13,8 @@ export interface Cli {
   status?: string[];
   /**
    * Its processes share one sign-in whose refresh token works once: two that refresh at the same
-   * moment sign the person out. The runner lets one prompt at a time make its first model call.
+   * moment sign the person out. The runner starts its sessions one at a time, and lets one prompt
+   * at a time make its first model call.
    */
   oneRefresher?: boolean;
 }

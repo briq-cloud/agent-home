@@ -62,9 +62,10 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 - **`_runner/turn`**, a notification: `{ sessionId, state: "queued", position }`, `"running"`,
   `"idle"` with the `stopReason`. In the log too, so an app that comes back knows where the turn
   is (the response to `session/prompt` goes only to the connection that sent it).
-- **One first model call at a time** for Claude and Codex: their refresh tokens work once, and
-  two processes refreshing together sign the person out. A prompt waits until the one before has
-  had its first answer from the model, 30 s at most.
+- **One at a time** for Claude and Codex: their refresh tokens work once, and two processes
+  refreshing together sign the person out. Sessions start one after the other (a start is a new
+  process, which may refresh first), and a prompt waits until the one before has had its first
+  answer from the model, 30 s at most.
 
 **What a CLI does not get**: the client's file system or terminal (each uses its own tools, in
 the home), or the runner's environment. It sees an allow-list (`src/clis.ts`): the CLI homes, the
@@ -134,4 +135,5 @@ sequenceDiagram
 | A turn that writes a file and runs a command, one permission | 7 s | 14 s |
 | The app leaves mid-turn and loads the session again | replayed, then live | replayed, then live |
 | Two sessions at once | 11 s and 14 s, 0.66 GB used | |
+| Two sessions started at once, the access token expired | both done (19 s, 14 s), refreshed once, still signed in | |
 | Processes | one adapter, one `claude` per session | one adapter, one `codex app-server` |
