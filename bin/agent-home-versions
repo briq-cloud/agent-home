@@ -24,6 +24,10 @@ row "Copilot CLI (\`copilot\`)" "$(ver copilot --version)" "\`COPILOT_HOME\`"
 row "Cursor (\`agent\`)" "$(cat /opt/cursor-agent/VERSION)" "\`XDG_CONFIG_HOME\`/cursor"
 row "Grok Build (\`grok\`)" "$(ver grok --version)" "\`GROK_HOME\`"
 row "Mistral Vibe (\`vibe\`)" "$(ver vibe --version)" "\`VIBE_HOME\`"
+row "OpenCode (\`opencode\`)" "$(ver opencode --version)" "\`XDG_DATA_HOME\`/opencode"
+row "Gemini CLI (\`gemini\`), API key only" "$(ver gemini --version)" "\`GEMINI_CLI_HOME\`/.gemini"
+row "Qwen Code (\`qwen\`), API key only" "$(ver qwen --version)" "\`QWEN_HOME\`"
+row "Cline (\`cline\`)" "$(ver cline --version)" "\`CLINE_DIR\`"
 echo
 echo "## Terminal"
 echo

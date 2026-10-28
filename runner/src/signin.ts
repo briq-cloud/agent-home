@@ -44,7 +44,7 @@ export class SignIn {
     this.current = { state: 'starting' };
     this.seen = '';
     this.answeredPlaintext = false;
-    const command = this.cli.login.map(shq).join(' ');
+    const command = (this.cli.login ?? []).map(shq).join(' ');
     // util-linux in the home. BSD's, on a Mac for tests, refuses a socket as its input: none there.
     const mac = process.platform === 'darwin';
     const args = mac ? ['-q', '/dev/null', 'sh', '-c', command] : ['-qfec', command, '/dev/null'];
