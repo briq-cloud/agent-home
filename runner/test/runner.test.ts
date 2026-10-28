@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -12,9 +12,16 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const TOKEN = 'test-token';
 const PORT = 40_000 + Math.floor(Math.random() * 20_000);
 let runner: ChildProcess;
+/** Codex's way: 30 days from the last refresh. */
+const REFRESHED = '2026-10-20T10:00:00Z';
+/** Claude's way: a fixed end, three days away. */
+const ENDS = Date.now() + 3 * 86_400_000;
 
 before(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
+  writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }));
+  writeFileSync(join(dir, 'fixed.json'), JSON.stringify({ oauth: { refreshToken: 'secret', refreshTokenExpiresAt: ENDS } }));
+  const mock = [process.execPath, join(here, 'mock-agent.ts')];
   runner = spawn(process.execPath, [join(here, '../src/main.ts')], {
     env: {
       PATH: process.env.PATH,
@@ -24,13 +31,16 @@ before(async () => {
       RUNNER_CWD: dir,
       RUNNER_STATE: join(dir, 'state'),
       RUNNER_MAX_TURNS: '1',
+      MOCK_HOME: dir,
       RUNNER_CLIS: JSON.stringify([
         {
           name: 'mock',
-          acp: [process.execPath, join(here, 'mock-agent.ts')],
+          acp: mock,
           login: ['sh', '-c', 'echo "Open https://example.test/device and enter ABCD-EFGH"; sleep 2'],
           status: ['true'],
+          signIn: { file: '$MOCK_HOME/auth.json', refreshedAt: 'last_refresh', days: 30, refreshAfterDays: 8 },
         },
+        { name: 'fixed', acp: mock, login: ['true'], signIn: { file: '$MOCK_HOME/fixed.json', endsAt: 'refreshTokenExpiresAt' } },
       ]),
     },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -129,9 +139,20 @@ const turnEnded = (sessionId: string) => (m: Msg) =>
 test('refuses a caller without the key, and says what it runs', async () => {
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/status`)).status, 401);
   const status = await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } });
-  assert.deepEqual((await status.json()).clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]), [
+  const clis = (await status.json()).clis;
+  assert.deepEqual(clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]), [
     ['mock', true],
+    ['fixed', null],
   ]);
+  // The dates of each sign-in, never its tokens.
+  assert.deepEqual(clis[0].life, {
+    endsAt: '2026-11-19T10:00:00.000Z',
+    renews: true,
+    endsSoon: Date.parse('2026-11-19T10:00:00Z') - Date.now() < 7 * 86_400_000,
+    refreshableAt: '2026-10-28T10:00:00.000Z',
+  });
+  assert.deepEqual(clis[1].life, { endsAt: new Date(ENDS).toISOString(), renews: false, endsSoon: true });
+  assert.doesNotMatch(JSON.stringify(clis), /secret/);
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/acp/mock`);
   await assert.rejects(new Promise((_, reject) => ws.once('error', reject)));
 });
@@ -215,4 +236,16 @@ test('starts the vendor sign-in and gives its page and code', async () => {
     headers: { authorization: `Bearer ${TOKEN}` },
   });
   assert.deepEqual(await res.json(), { state: 'waiting', url: 'https://example.test/device', code: 'ABCD-EFGH' });
+});
+
+test('refreshes a sign-in that a refresh renews, and says why not for one that only a sign-in does', async () => {
+  const post = (cli: string) =>
+    fetch(`http://127.0.0.1:${PORT}/refresh/${cli}`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  const ok = await post('mock');
+  assert.equal(ok.status, 200);
+  // The mock's file does not change: the end did not move.
+  assert.deepEqual(await ok.json(), { name: 'mock', moved: false, life: (await (await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).clis[0].life });
+  const no = await post('fixed');
+  assert.equal(no.status, 409);
+  assert.match((await no.json()).error, /sign in again/);
 });

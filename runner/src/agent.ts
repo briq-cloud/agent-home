@@ -88,6 +88,20 @@ export class Agent {
     this.child?.kill('SIGTERM');
   }
 
+  /** Stops the process and waits for it to exit: nothing holds the CLI's sign-in in memory after. */
+  stopAndWait(): Promise<void> {
+    const child = this.child;
+    if (!child) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+      child.once('exit', () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.kill('SIGTERM');
+    });
+  }
+
   private async start(): Promise<unknown> {
     const [cmd, ...args] = this.cli.acp;
     const child = spawn(cmd as string, args, {

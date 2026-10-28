@@ -43,7 +43,8 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | | |
 | --- | --- |
 | `/acp/<cli>` | ACP, as an agent: WebSocket, or Streamable HTTP (`@agentclientprotocol/sdk`'s server transport). One connection is to one CLI and carries any number of sessions |
-| `GET /status` | Each CLI: its ACP process running, signed in (`true`, `false`, or `null` when it has no status command), its sign-in's state |
+| `GET /status` | Each CLI: its ACP process running, signed in (`true`, `false`, or `null` when it has no status command), its sign-in's state, and its `life` (below) |
+| `POST /refresh/<cli>` | Has the CLI refresh its sign-in now: `{ moved, life }`. 409 while a turn of it runs, or when a refresh cannot move its end |
 | `POST /connect/<cli>` | Starts its sign-in: `{ state: "waiting", url, code? }` |
 | `GET /connect/<cli>` | Where it is: `idle`, `starting`, `waiting`, `done`, `failed` |
 | `POST /connect/<cli>/input` | `{ text }` typed into it: Claude's code |
@@ -74,6 +75,24 @@ credential gateway's proxy and CA, a vendor's API-key placeholder when the home 
 **Choosing from the app**: the CLI is the endpoint; its modes and config options (model,
 effort…) come in the `session/new` answer, set with `session/set_mode` and
 `session/set_config_option`; MCP servers go in `session/new`'s `mcpServers`.
+
+## How long a sign-in lasts
+
+`life` in `/status`, read from the dates of the CLI's sign-in file (never its tokens):
+
+| | `endsAt` | `renews` | |
+| --- | --- | --- | --- |
+| Claude | about 29 days after the sign-in, used or not | `false`: only a new sign-in moves it | `accessEndsAt`: 8 hours, refreshed on the next use |
+| Codex | 30 days after the last refresh | `true` | `refreshableAt`: 8 days after the last refresh, Codex refreshes on a use |
+| The others | not read yet | | |
+
+`endsSoon` is a week before `endsAt`: show the person a sign-in or call `/refresh`.
+
+`POST /refresh/<cli>` stops the CLI's process (none then holds the old token in memory; its
+sessions load again on their next use) and runs one short turn in a session no app sees, which
+refreshes the sign-in as any use does. It costs that turn's tokens. Before `refreshableAt`, the
+CLI does not refresh and `moved` is `false`. A home asleep refreshes nothing: the app calls
+`/refresh` (which wakes it) when `refreshableAt` has passed and `endsAt` comes near.
 
 ## Sign-in
 

@@ -17,6 +17,23 @@ export interface Cli {
    * at a time make its first model call.
    */
   oneRefresher?: boolean;
+  /** Where its sign-in says when it ends: read for its dates only, never its tokens. */
+  signIn?: SignInDates;
+}
+
+/**
+ * A sign-in file's dates. `$NAME` in `file` is the variable's value. A field is a number of
+ * milliseconds or an ISO date. A sign-in either ends at a fixed time (`endsAt`, a new sign-in
+ * moves it) or a set number of days after its last refresh (`refreshedAt` and `days`).
+ */
+export interface SignInDates {
+  file: string;
+  endsAt?: string;
+  accessEndsAt?: string;
+  refreshedAt?: string;
+  days?: number;
+  /** Days after its last refresh before a use refreshes it again: earlier, a refresh moves nothing. */
+  refreshAfterDays?: number;
 }
 
 /** The adapters this package pins, for the two CLIs that have no ACP mode of their own. */
@@ -29,6 +46,8 @@ export const CLIS: Cli[] = [
     login: ['claude', 'auth', 'login'],
     status: ['claude', 'auth', 'status'],
     oneRefresher: true,
+    // About 29 days from the sign-in, used or not; the access token lasts 8 hours (measured).
+    signIn: { file: '$CLAUDE_CONFIG_DIR/.credentials.json', endsAt: 'refreshTokenExpiresAt', accessEndsAt: 'expiresAt' },
   },
   {
     name: 'codex',
@@ -36,6 +55,9 @@ export const CLIS: Cli[] = [
     login: ['codex', 'login', '--device-auth'],
     status: ['codex', 'login', 'status'],
     oneRefresher: true,
+    // 30 days from the last refresh, each one a new 30 (OpenAI's token reference); Codex refreshes
+    // on a use 8 days after the last (TOKEN_REFRESH_INTERVAL, codex-rs/login).
+    signIn: { file: '$CODEX_HOME/auth.json', refreshedAt: 'last_refresh', days: 30, refreshAfterDays: 8 },
   },
   {
     name: 'copilot',

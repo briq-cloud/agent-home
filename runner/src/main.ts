@@ -6,6 +6,7 @@ import { AcpServer } from '@agentclientprotocol/sdk/experimental/server';
 import { WebSocketServer } from 'ws';
 import { ClientConn } from './client.ts';
 import { type Cli, cliEnv, clis } from './clis.ts';
+import { signInLife } from './dates.ts';
 import { Hub } from './hub.ts';
 import { log } from './log.ts';
 import { SignIn } from './signin.ts';
@@ -111,9 +112,24 @@ const server = createServer(async (req, res) => {
           running: hub.running(c.name),
           signedIn: await signedIn(c),
           signIn: signIns.get(c.name)?.status.state,
+          ...(c.signIn ? { life: signInLife(c.signIn, env) ?? null } : {}),
         })),
       );
       return json(res, 200, { clis: out });
+    }
+    if (parts[0] === 'refresh' && parts[1] && hub.has(parts[1]) && req.method === 'POST') {
+      const c = table.find((t) => t.name === parts[1]) as Cli;
+      const life = c.signIn ? signInLife(c.signIn, env) : undefined;
+      if (life && !life.renews)
+        return json(res, 409, { error: `a refresh does not move ${c.name}'s sign-in: it ends ${life.endsAt}, sign in again (POST /connect/${c.name})`, life });
+      if (hub.busy(c.name)) return json(res, 409, { error: `a turn of ${c.name} is running: try again when it ends` });
+      await hub.refresh(c.name, env.RUNNER_REFRESH_CWD ?? '/tmp');
+      const after = c.signIn ? signInLife(c.signIn, env) : undefined;
+      // `moved`: the end is later than before. A CLI that refreshes only after some days moves nothing earlier.
+      return json(res, 200, {
+        name: c.name,
+        ...(c.signIn ? { moved: Boolean(life?.endsAt && after?.endsAt && after.endsAt > life.endsAt), life: after ?? null } : {}),
+      });
     }
     if (parts[0] === 'connect' && parts[1] && signIns.has(parts[1])) {
       const s = signIns.get(parts[1]) as SignIn;
