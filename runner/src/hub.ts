@@ -14,7 +14,7 @@ export interface Peer {
 
 /** Where a session's turn is, told to every client as `_runner/turn` and kept in its log. */
 export type Turn =
-  | { state: 'idle'; stopReason?: string }
+  | { state: 'idle'; stopReason?: string; usage?: unknown }
   | { state: 'queued'; position: number }
   | { state: 'running' };
 
@@ -71,9 +71,14 @@ class Session {
       .map((l) => JSON.parse(l) as Rpc);
   }
 
+  /** Told to every client and kept with its time: `/usage` counts turns by day from the log. */
   setTurn(turn: Turn): void {
     this.turn = turn;
-    this.record({ jsonrpc: '2.0', method: '_runner/turn', params: { sessionId: this.id, ...turn } });
+    this.record({
+      jsonrpc: '2.0',
+      method: '_runner/turn',
+      params: { sessionId: this.id, ...turn, at: new Date().toISOString() },
+    });
   }
 
   /** A request from the CLI, answered by the first client that answers; held while none is there. */
@@ -299,8 +304,13 @@ export class Hub {
     try {
       if (e.agent.cli.oneRefresher) s.firstCall = await e.firstCall.enter();
       s.setTurn({ state: 'running' });
-      const r = (await e.agent.request('session/prompt', params)) as { stopReason?: string };
-      s.setTurn({ state: 'idle', ...(r?.stopReason ? { stopReason: r.stopReason } : {}) });
+      const r = (await e.agent.request('session/prompt', params)) as { stopReason?: string; usage?: unknown };
+      // The session's token totals, when the CLI gives them (ACP's `usage`, unstable).
+      s.setTurn({
+        state: 'idle',
+        ...(r?.stopReason ? { stopReason: r.stopReason } : {}),
+        ...(r?.usage ? { usage: r.usage } : {}),
+      });
       return r;
     } catch (err) {
       s.setTurn({ state: 'idle', stopReason: 'error' });

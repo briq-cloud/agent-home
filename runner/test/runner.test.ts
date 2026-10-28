@@ -299,3 +299,22 @@ test('puts the terminal behind the same door, its WebSocket too, without the run
   assert.equal(reply, 'echo hi');
   ws.close();
 });
+
+test('counts what the sessions used, from the logs, per session, per CLI and per day', async () => {
+  const app = await connect();
+  const id = (await app.request('session/new', { cwd: '/tmp', mcpServers: [] })).result.sessionId;
+  await app.request('session/prompt', say(id, 'hello'));
+  await app.request('session/prompt', say(id, 'hello'));
+  app.close();
+  const usage = await (await fetch(`http://127.0.0.1:${PORT}/usage`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  const mine = usage.sessions.find((s: { id: string }) => s.id === id);
+  assert.equal(mine.turns, 2);
+  assert.equal(mine.tokens.total, 220);
+  assert.deepEqual(mine.cost, { amount: 0.1, currency: 'USD' });
+  assert.deepEqual(mine.context, { used: 2000, size: 200000 });
+  const mock = usage.clis.find((c: { name: string }) => c.name === 'mock');
+  const today = mock.days[new Date().toISOString().slice(0, 10)];
+  assert.ok(today.turns >= 2 && today.tokens.total >= 220);
+  assert.deepEqual(mock.limits.value, { status: 'allowed', resetsAt: 1800000000 });
+  assert.equal(mock.limits.key, '_mock/rateLimit');
+});

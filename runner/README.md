@@ -47,6 +47,7 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | --- | --- |
 | `/acp/<cli>` | ACP, as an agent: WebSocket, or Streamable HTTP (`@agentclientprotocol/sdk`'s server transport). One connection is to one CLI and carries any number of sessions |
 | `GET /status` | Each CLI: its ACP process running, signed in (`true`, `false`, or `null` when it has no status command), its sign-in's state, and its `life` (below) |
+| `GET /usage` | What the sessions used, from the logs: per CLI (sessions, turns, tokens, cost, by UTC day, and its last word on its plan's limits) and per session (turns, tokens, cost, context). Below |
 | `POST /refresh/<cli>` | Has the CLI refresh its sign-in now: `{ moved, life }`. 409 while a turn of it runs, or when a refresh cannot move its end |
 | `POST /connect/<cli>` | Starts its sign-in: `{ state: "waiting", url, code? }` |
 | `GET /connect/<cli>` | Where it is: `idle`, `starting`, `waiting`, `done`, `failed` |
@@ -80,6 +81,22 @@ credential gateway's proxy and CA, a vendor's API-key placeholder when the home 
 **Choosing from the app**: the CLI is the endpoint; its modes and config options (model,
 effort…) come in the `session/new` answer, set with `session/set_mode` and
 `session/set_config_option`; MCP servers go in `session/new`'s `mcpServers`.
+
+## Usage
+
+Read from the session logs, so it survives restarts. What each CLI reports through ACP:
+
+| | Tokens (`usage` in the `session/prompt` answer, unstable ACP) | Cost (`usage_update.cost`) | Context (`usage_update.used`/`size`) | Plan limits |
+| --- | --- | --- | --- | --- |
+| Claude | yes | yes, at API prices: notional on a subscription | yes | `_meta["_claude/rateLimit"]` on a `usage_update`, when Claude Code reports one |
+| Codex | yes | no | yes | no: its adapter keeps them and shows them only as the text of `/status` |
+
+Both are a session's running totals; a turn's share, counted on the day it ended, is the
+difference with the turn before. A plan's limits are passed on as the CLI gave them (`limits`:
+the `_meta` key and its value), for the app to read.
+
+Measured on a `small` home (2026-10-28): a Claude turn that writes a file and runs a command, 24.7k
+tokens (24.5k of them cached reads), 0.05 USD at API prices; the same with Codex, 15.1k tokens.
 
 ## How long a sign-in lasts
 

@@ -12,6 +12,7 @@ import { log } from './log.ts';
 import { PAGE } from './page.ts';
 import { RUNNER_COOKIE, terminalProxy } from './proxy.ts';
 import { SignIn } from './signin.ts';
+import { usageReport } from './usage.ts';
 
 /**
  * The agent home runner (ADR 0021 in github.com/up-lab/briq; this folder's README): an ACP agent
@@ -29,11 +30,12 @@ if (!token) {
 const port = Number(env.RUNNER_PORT ?? 8090);
 const table = clis(env);
 const childEnv = cliEnv(env);
+const stateDir = env.RUNNER_STATE ?? '/work/.runner';
 const hub = new Hub({
   clis: table,
   env: childEnv,
   cwd: env.RUNNER_CWD ?? '/work',
-  stateDir: env.RUNNER_STATE ?? '/work/.runner',
+  stateDir,
   maxTurns: Number(env.RUNNER_MAX_TURNS ?? 2),
 });
 const signIns = new Map(table.map((c) => [c.name, new SignIn(c)]));
@@ -145,6 +147,7 @@ const server = createServer(async (req, res) => {
       );
       return json(res, 200, { clis: out });
     }
+    if (url.pathname === '/usage' && req.method === 'GET') return json(res, 200, usageReport(stateDir, table.map((c) => c.name)));
     if (parts[0] === 'refresh' && parts[1] && hub.has(parts[1]) && req.method === 'POST') {
       const c = table.find((t) => t.name === parts[1]) as Cli;
       const life = c.signIn ? signInLife(c.signIn, env) : undefined;
