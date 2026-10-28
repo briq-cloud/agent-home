@@ -12,6 +12,8 @@ type Msg = { jsonrpc: '2.0'; id?: string | number; method?: string; params?: any
 const base = process.env.RUNNER_URL ?? 'ws://127.0.0.1:8090';
 const token = process.env.RUNNER_TOKEN ?? '';
 const cwd = process.env.LIVE_CWD ?? '/work/runner-live';
+/** The router's own token, when the runner is reached through a home's private URL: as its cookie. */
+const cookie = process.env.LIVE_BRIQ_TOKEN ? { cookie: `briq_token=${process.env.LIVE_BRIQ_TOKEN}` } : {};
 
 class App {
   readonly got: Msg[] = [];
@@ -21,7 +23,7 @@ class App {
   private readonly watchers = new Set<() => void>();
 
   constructor(cli: string) {
-    this.ws = new WebSocket(`${base}/acp/${cli}`, { headers: { authorization: `Bearer ${token}` } });
+    this.ws = new WebSocket(`${base}/acp/${cli}`, { headers: { authorization: `Bearer ${token}`, ...cookie } });
     this.ws.on('message', (data) => {
       const m = JSON.parse(String(data)) as Msg;
       if (m.method === undefined && m.id !== undefined) this.waiting.get(m.id)?.(m);

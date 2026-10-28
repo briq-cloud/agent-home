@@ -5,13 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import WebSocket from 'ws';
+import { createServer } from 'node:http';
+import WebSocket, { WebSocketServer } from 'ws';
 
 /** The runner against the mock agent, over WebSocket as an app would reach it. */
 const here = fileURLToPath(new URL('.', import.meta.url));
 const TOKEN = 'test-token';
 const PORT = 40_000 + Math.floor(Math.random() * 20_000);
 let runner: ChildProcess;
+const TERMINAL_PORT = PORT + 1;
+/** What the fake terminal saw of the last request's cookie: the runner's own must not reach it. */
+let terminalCookie: string | undefined;
+let stopTerminal = () => {};
 /** Codex's way: 30 days from the last refresh. */
 const REFRESHED = '2026-10-20T10:00:00Z';
 /** Claude's way: a fixed end, three days away. */
@@ -22,6 +27,19 @@ before(async () => {
   writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }));
   writeFileSync(join(dir, 'fixed.json'), JSON.stringify({ oauth: { refreshToken: 'secret', refreshTokenExpiresAt: ENDS } }));
   const mock = [process.execPath, join(here, 'mock-agent.ts')];
+  // A stand-in for ttyd: a page under /terminal/, and a WebSocket that echoes.
+  const fake = createServer((req, res) => {
+    terminalCookie = req.headers.cookie;
+    res.end(`ttyd at ${req.url}`);
+  });
+  const echo = new WebSocketServer({ server: fake });
+  echo.on('connection', (ws) => ws.on('message', (m) => ws.send(`echo ${m}`)));
+  await new Promise<void>((r) => fake.listen(TERMINAL_PORT, '127.0.0.1', () => r()));
+  stopTerminal = () => {
+    echo.close();
+    fake.closeAllConnections();
+    fake.close();
+  };
   runner = spawn(process.execPath, [join(here, '../src/main.ts')], {
     env: {
       PATH: process.env.PATH,
@@ -31,6 +49,7 @@ before(async () => {
       RUNNER_CWD: dir,
       RUNNER_STATE: join(dir, 'state'),
       RUNNER_MAX_TURNS: '1',
+      RUNNER_TERMINAL: `http://127.0.0.1:${TERMINAL_PORT}`,
       MOCK_HOME: dir,
       RUNNER_CLIS: JSON.stringify([
         {
@@ -56,6 +75,7 @@ before(async () => {
 
 after(() => {
   runner.kill();
+  stopTerminal();
 });
 
 type Msg = { jsonrpc: '2.0'; id?: string | number; method?: string; params?: any; result?: any; error?: any };
@@ -248,4 +268,34 @@ test('refreshes a sign-in that a refresh renews, and says why not for one that o
   const no = await post('fixed');
   assert.equal(no.status, 409);
   assert.match((await no.json()).error, /sign in again/);
+});
+
+test('serves the page through its link once, then by cookie', async () => {
+  const base = `http://127.0.0.1:${PORT}`;
+  assert.equal((await fetch(`${base}/`)).status, 401);
+  const link = await fetch(`${base}/?token=${TOKEN}`, { redirect: 'manual' });
+  assert.equal(link.status, 303);
+  assert.equal(link.headers.get('location'), '/');
+  const cookie = (link.headers.get('set-cookie') ?? '').split(';')[0] as string;
+  assert.match(link.headers.get('set-cookie') ?? '', /HttpOnly; Secure; SameSite=Strict/);
+  const page = await fetch(`${base}/`, { headers: { cookie } });
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<title>Agent home<\/title>/);
+  assert.equal((await fetch(`${base}/status`, { headers: { cookie } })).status, 200);
+  assert.equal((await fetch(`${base}/`, { headers: { cookie: 'agent_home_runner=wrong' } })).status, 401);
+});
+
+test('puts the terminal behind the same door, its WebSocket too, without the runner cookie', async () => {
+  const base = `http://127.0.0.1:${PORT}`;
+  const cookie = `agent_home_runner=${TOKEN}; briq_token=b`;
+  assert.equal((await fetch(`${base}/terminal/`)).status, 401);
+  const page = await fetch(`${base}/terminal/`, { headers: { cookie } });
+  assert.equal(await page.text(), 'ttyd at /terminal/');
+  assert.equal(terminalCookie, 'briq_token=b');
+  const ws = new WebSocket(`ws://127.0.0.1:${PORT}/terminal/ws`, { headers: { cookie } });
+  await new Promise((r) => ws.once('open', r));
+  ws.send('hi');
+  const reply = await new Promise<string>((r) => ws.once('message', (data) => r(String(data))));
+  assert.equal(reply, 'echo hi');
+  ws.close();
 });

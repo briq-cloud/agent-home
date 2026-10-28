@@ -1,0 +1,114 @@
+/**
+ * The home's page, for its person: each CLI, signed in or not and until when, its sign-in, its
+ * refresh, and the terminal. Plain HTML over the runner's JSON API, on the same origin.
+ */
+export const PAGE = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent home</title>
+<style>
+:root { --bg: #fafaf9; --card: #fff; --text: #1c1917; --muted: #78716c; --line: #e7e5e4; --ok: #15803d; --warn: #b45309; --off: #a8a29e; --accent: #c2410c; }
+@media (prefers-color-scheme: dark) { :root { --bg: #1c1917; --card: #292524; --text: #f5f5f4; --muted: #a8a29e; --line: #44403c; --ok: #4ade80; --warn: #fbbf24; --off: #78716c; --accent: #fb923c; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; font-weight: 600; }
+a { color: var(--accent); }
+.grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.name { font-weight: 600; }
+.tag { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .off { color: var(--off); }
+.muted { color: var(--muted); font-size: 13px; }
+button { font: inherit; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.code { font: 600 18px ui-monospace, monospace; letter-spacing: 1px; }
+input { font: inherit; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; }
+.steps { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Agent home</h1><a href="/terminal/">Terminal</a></header>
+  <div class="grid" id="clis"><p class="muted">Loading…</p></div>
+</main>
+<script>
+const $ = (tag, attrs = {}, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === 'class' ? (el.className = v) : k.startsWith('on') ? (el[k] = v) : el.setAttribute(k, v);
+  for (const kid of kids) if (kid != null) el.append(kid);
+  return el;
+};
+const day = (iso) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+const call = async (method, path, body) => {
+  const r = await fetch(path, { method, headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+  return { ok: r.ok, body: await r.json().catch(() => ({})) };
+};
+const signIns = {};
+let messages = {};
+
+function card(c) {
+  const life = c.life;
+  const state = c.signedIn === true ? (life && life.endsSoon ? ['ends soon', 'warn'] : ['signed in', 'ok'])
+    : c.signedIn === false ? ['signed out', 'off'] : ['unknown', 'off'];
+  const box = $('div', { class: 'card' },
+    $('div', { class: 'row' }, $('span', { class: 'name' }, c.name), $('span', { class: 'tag ' + state[1] }, state[0])));
+  if (life && life.endsAt) box.append($('span', { class: 'muted' }, (life.renews ? 'Until ' : 'Ends ') + day(life.endsAt) + (life.renews ? ', renewed by use' : ', then sign in again')));
+  const s = signIns[c.name];
+  if (s && s.state === 'waiting') {
+    const steps = $('div', { class: 'steps' });
+    steps.append($('a', { href: s.url, target: '_blank', rel: 'noopener' }, 'Open the sign-in page'));
+    if (s.code) steps.append($('span', { class: 'code' }, s.code));
+    const input = $('input', { placeholder: 'Code from the page, if it shows one' });
+    steps.append(input, $('div', { class: 'row' },
+      $('button', { onclick: async () => { await call('POST', '/connect/' + c.name + '/input', { text: input.value.trim() }); input.value = ''; } }, 'Send code'),
+      $('button', { onclick: async () => { await call('DELETE', '/connect/' + c.name); delete signIns[c.name]; render(); } }, 'Cancel')));
+    box.append(steps);
+  } else {
+    const actions = $('div', { class: 'row' });
+    actions.append($('button', { onclick: () => connect(c.name) }, c.signedIn ? 'Sign in again' : 'Sign in'));
+    if (life && life.renews && c.signedIn) actions.append($('button', { onclick: () => refresh(c.name) }, 'Refresh'));
+    box.append(actions);
+  }
+  if (messages[c.name]) box.append($('span', { class: 'muted' }, messages[c.name]));
+  return box;
+}
+
+let last = [];
+function render() {
+  const grid = document.getElementById('clis');
+  grid.replaceChildren(...last.map(card));
+}
+async function load() {
+  const r = await call('GET', '/status');
+  if (!r.ok) { document.getElementById('clis').replaceChildren($('p', { class: 'muted' }, 'This page needs the home\\'s link with its key.')); return; }
+  last = r.body.clis;
+  for (const c of last) if (signIns[c.name] && (c.signIn === 'done' || c.signIn === 'failed')) {
+    messages[c.name] = c.signIn === 'done' ? 'Signed in' : 'Sign-in failed';
+    delete signIns[c.name];
+  }
+  render();
+}
+async function connect(name) {
+  messages[name] = 'Starting…'; render();
+  const r = await call('POST', '/connect/' + name);
+  messages[name] = r.body.state === 'waiting' ? '' : 'Sign-in ' + (r.body.state || 'failed');
+  if (r.body.state === 'waiting') signIns[name] = r.body;
+  render();
+}
+async function refresh(name) {
+  messages[name] = 'Refreshing…'; render();
+  const r = await call('POST', '/refresh/' + name);
+  messages[name] = r.ok ? (r.body.moved ? 'Refreshed' : 'Nothing to refresh yet' + (r.body.life && r.body.life.refreshableAt ? ' (from ' + day(r.body.life.refreshableAt) + ')' : '')) : (r.body.error || 'Refresh failed');
+  await load();
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
+`;
