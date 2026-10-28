@@ -36,7 +36,8 @@ async function handle(m: Msg): Promise<unknown> {
     case 'session/new': {
       const sessionId = randomUUID();
       sessions.set(sessionId, []);
-      return { sessionId, modes: { currentModeId: 'default', availableModes: [] } };
+      // The folder it was given, for a test to check.
+      return { sessionId, modes: { currentModeId: 'default', availableModes: [] }, _meta: { cwd: m.params.cwd } };
     }
     case 'session/load': {
       const history = sessions.get(m.params.sessionId) ?? [];

@@ -360,3 +360,34 @@ test('/acp leaves out a CLI that hit its plan limit, until its reset', async () 
   assert.ok(status.limited.mock);
   app.close();
 });
+
+test('the bridge makes the home a local ACP agent, the folder of the client mapped to one on the home', async () => {
+  const bridge = spawn(process.execPath, [join(here, '../bin/agent-home-acp.ts'), `ws://127.0.0.1:${PORT}/acp/mock`], {
+    env: { PATH: process.env.PATH, AGENT_HOME_TOKEN: TOKEN },
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  const answers = new Map<number, Msg>();
+  const updates: Msg[] = [];
+  let buffer = '';
+  bridge.stdout?.on('data', (b: Buffer) => {
+    buffer += b.toString();
+    for (let i = buffer.indexOf('\n'); i >= 0; i = buffer.indexOf('\n')) {
+      const m = JSON.parse(buffer.slice(0, i)) as Msg;
+      buffer = buffer.slice(i + 1);
+      if (m.method === undefined && typeof m.id === 'number') answers.set(m.id, m);
+      else updates.push(m);
+    }
+  });
+  const ask = async (id: number, method: string, params: unknown) => {
+    bridge.stdin?.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+    for (let i = 0; i < 100 && !answers.has(id); i++) await new Promise((r) => setTimeout(r, 50));
+    return answers.get(id) as Msg;
+  };
+  assert.equal((await ask(1, 'initialize', { protocolVersion: 1, clientCapabilities: {} })).result.agentInfo.name, 'mock');
+  const created = await ask(2, 'session/new', { cwd: '/Users/ana/shop', mcpServers: [] });
+  assert.equal(created.result._meta.cwd, '/work/shop');
+  const done = await ask(3, 'session/prompt', say(created.result.sessionId, 'hello'));
+  assert.equal(done.result.stopReason, 'end_turn');
+  assert.ok(updates.some((m) => m.params?.update?.content?.text === 'hi'));
+  bridge.kill();
+});
