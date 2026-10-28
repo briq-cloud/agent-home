@@ -312,6 +312,31 @@ export class Hub {
     }
   }
 
+  /** Whether a turn of the CLI runs or waits. */
+  busy(cli: string): boolean {
+    for (const s of this.engine(cli).sessions.values()) if (s.turn.state !== 'idle') return true;
+    return false;
+  }
+
+  /**
+   * Has the CLI refresh its sign-in now: its process stopped first (nothing then holds the old
+   * token in memory; its sessions load again on their next use), then one short turn in a session
+   * no client sees, which refreshes the sign-in the way any use does. Costs that turn's tokens.
+   */
+  async refresh(cli: string, cwd: string): Promise<void> {
+    const e = this.engine(cli);
+    if (this.busy(cli)) throw new RpcFailure({ code: -32002, message: `a turn of ${cli} is running` });
+    await this.alone(e, async () => {
+      await e.agent.stopAndWait();
+      const created = (await e.agent.request('session/new', { cwd, mcpServers: [] })) as { sessionId: string };
+      await e.agent.request('session/prompt', {
+        sessionId: created.sessionId,
+        prompt: [{ type: 'text', text: 'Reply with the single word ok.' }],
+      });
+    });
+    log.info('sign-in refreshed', { cli });
+  }
+
   /** Any other request: the CLI's, as it is. */
   forward(cli: string, method: string, params: unknown): Promise<unknown> {
     return this.engine(cli).agent.request(method, params);
