@@ -235,7 +235,7 @@ export class Hub {
 
   async newSession(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {
     const e = this.engine(cli);
-    const r = (await e.agent.request('session/new', params)) as Record<string, unknown>;
+    const r = (await this.alone(e, () => e.agent.request('session/new', params))) as Record<string, unknown>;
     const s = this.open(e, cli, r.sessionId as string);
     s.loaded = without(r, 'sessionId');
     s.peers.add(peer);
@@ -258,7 +258,10 @@ export class Hub {
     if (!e.agent.known.has(id)) {
       s.replaying = logged.length > 0;
       try {
-        s.loaded = without((await e.agent.request('session/load', params)) as Record<string, unknown>, 'sessionId');
+        s.loaded = without(
+          (await this.alone(e, () => e.agent.request('session/load', params))) as Record<string, unknown>,
+          'sessionId',
+        );
       } finally {
         s.replaying = false;
       }
@@ -337,6 +340,20 @@ export class Hub {
       s.firstCall = undefined;
     }
     s.record(msg);
+  }
+
+  /**
+   * A session's start, one at a time for a CLI whose refresh tokens work once: starting one starts
+   * a process of the CLI, which may refresh its sign-in before any prompt.
+   */
+  private async alone<T>(e: Engine, start: () => Promise<T>): Promise<T> {
+    if (!e.agent.cli.oneRefresher) return start();
+    const done = await e.firstCall.enter();
+    try {
+      return await start();
+    } finally {
+      done();
+    }
   }
 
   private engine(cli: string): Engine {
