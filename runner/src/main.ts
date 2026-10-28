@@ -9,12 +9,16 @@ import { type Cli, cliEnv, clis } from './clis.ts';
 import { signInLife } from './dates.ts';
 import { Hub } from './hub.ts';
 import { log } from './log.ts';
+import { PAGE } from './page.ts';
+import { RUNNER_COOKIE, terminalProxy } from './proxy.ts';
 import { SignIn } from './signin.ts';
 
 /**
  * The agent home runner (ADR 0021 in github.com/up-lab/briq; this folder's README): an ACP agent
  * toward apps, at `/acp/<cli>` over WebSocket or Streamable HTTP, and an ACP client toward each
- * CLI. Beside it, `/connect/<cli>` (the vendor's own sign-in) and `/status`.
+ * CLI. Beside it, `/connect/<cli>` (the vendor's own sign-in), `/status`, `/refresh/<cli>`, and
+ * for the home's person a page at `/` and the terminal at `/terminal/`: the runner is the home's
+ * front door.
  */
 const env = process.env;
 const token = env.RUNNER_TOKEN ?? '';
@@ -33,6 +37,8 @@ const hub = new Hub({
   maxTurns: Number(env.RUNNER_MAX_TURNS ?? 2),
 });
 const signIns = new Map(table.map((c) => [c.name, new SignIn(c)]));
+/** ttyd on localhost, started with `--base-path /terminal`. */
+const terminal = terminalProxy(new URL(env.RUNNER_TERMINAL ?? 'http://127.0.0.1:7681'));
 
 /** One ACP endpoint per CLI: a connection is to one agent, as ACP has it. */
 const acp = new Map(
@@ -53,14 +59,22 @@ const acp = new Map(
   }),
 );
 
-/** The app's key, in constant time: `Authorization: Bearer`, or `?token=` for a browser's WebSocket. */
+/**
+ * The key, in constant time: `Authorization: Bearer` (an app), `?token=` (a browser's WebSocket,
+ * or the page's link), or the cookie the page's link sets (the person's browser).
+ */
 function authorized(req: IncomingMessage): boolean {
   const header = req.headers.authorization ?? '';
+  const cookie = new RegExp(`(?:^|;\\s*)${RUNNER_COOKIE}=([^;]+)`).exec(req.headers.cookie ?? '')?.[1];
   const given = header.startsWith('Bearer ')
     ? header.slice(7)
-    : (new URL(req.url ?? '/', 'http://x').searchParams.get('token') ?? '');
+    : (new URL(req.url ?? '/', 'http://x').searchParams.get('token') ?? cookie ?? '');
+  return same(given, token);
+}
+
+function same(given: string, expected: string): boolean {
   const a = createHash('sha256').update(given).digest();
-  const b = createHash('sha256').update(token).digest();
+  const b = createHash('sha256').update(expected).digest();
   return timingSafeEqual(a, b) && given.length > 0;
 }
 
@@ -104,6 +118,20 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/healthz') return json(res, 200, { ok: true });
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
+    // The page's link carries the key once: kept as a cookie for this origin, then dropped from
+    // the address. SameSite=Strict: no other site's page sends it.
+    if (url.searchParams.has('token') && req.method === 'GET' && !parts.length) {
+      res.writeHead(303, {
+        'set-cookie': `${RUNNER_COOKIE}=${url.searchParams.get('token')}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+        location: '/',
+      });
+      return res.end();
+    }
+    if (!parts.length && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      return res.end(PAGE);
+    }
+    if (parts[0] === 'terminal') return terminal.http(req, res);
     if (parts[0] === 'acp' && parts[1] && acp.has(parts[1])) return acp.get(parts[1])?.http(req, res);
     if (url.pathname === '/status' && req.method === 'GET') {
       const out = await Promise.all(
@@ -154,7 +182,7 @@ const server = createServer(async (req, res) => {
 
 server.on('upgrade', (req, socket, head) => {
   const parts = new URL(req.url ?? '/', 'http://x').pathname.split('/').filter(Boolean);
-  const target = parts[0] === 'acp' && parts[1] ? acp.get(parts[1]) : undefined;
+  const target = parts[0] === 'acp' && parts[1] ? acp.get(parts[1]) : parts[0] === 'terminal' ? terminal : undefined;
   if (!target || !authorized(req)) {
     socket.end(`HTTP/1.1 ${target ? '401 Unauthorized' : '404 Not Found'}\r\n\r\n`);
     return;

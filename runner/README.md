@@ -18,7 +18,9 @@ app ──ACP over WebSocket or HTTP──▶ runner ──ACP over stdio──�
 | `grok` | `grok agent stdio` | `grok login --device-auth` |
 | `vibe` | `vibe-acp` | `vibe --setup` |
 
-The decision and its research: ADR 0021 in briq's repository.
+The runner is the home's front door: one URL for the person (`/`, the sign-in page, and
+`/terminal/`) and for apps (`/acp/<cli>`). The decision and its research: ADR 0021 in briq's
+repository.
 
 ## Run it
 
@@ -34,6 +36,7 @@ RUNNER_TOKEN=… node src/main.ts
 | `RUNNER_STATE` | `/work/.runner` | Session logs, `sessions/<cli>/<id>.jsonl`, mode 0600 |
 | `RUNNER_MAX_TURNS` | `2` | Turns at once for the whole home; the rest wait in order |
 | `RUNNER_CLIS` | the table above | A JSON array in its place (`src/clis.ts`, `Cli`) |
+| `RUNNER_TERMINAL` | `http://127.0.0.1:7681` | ttyd, started with `--base-path /terminal`, served at `/terminal/` |
 
 Node 22.18 or newer runs the TypeScript as it is. `npm test` runs the runner against a mock
 agent; `node test/live.ts claude codex` against a running runner and real CLIs.
@@ -49,6 +52,8 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | `GET /connect/<cli>` | Where it is: `idle`, `starting`, `waiting`, `done`, `failed` |
 | `POST /connect/<cli>/input` | `{ text }` typed into it: Claude's code |
 | `DELETE /connect/<cli>` | Stops it |
+| `GET /` | The home's page, for its person: each CLI signed in or not and until when, its sign-in, its refresh, a link to the terminal. Opened once with `?token=`, which it keeps as a cookie (HttpOnly, SameSite=Strict) and drops from the address |
+| `/terminal/` | ttyd, on localhost behind the runner: the page and its WebSocket. The runner's key and cookie never reach it |
 | `GET /healthz` | No key |
 
 **What the runner adds to ACP**, all of it standard ACP otherwise:
