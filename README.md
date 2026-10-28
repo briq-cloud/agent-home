@@ -20,7 +20,8 @@ usual tools) plus:
 | Grok Build | `grok` | `grok login --device-auth` |
 | Mistral Vibe | `vibe` | `vibe --setup` |
 
-and `ttyd` for a terminal page. Every version, as the last build left them:
+and `ttyd` for a terminal page, and `agent-home-runner`: it drives the CLIs over ACP for apps and
+keeps their sessions while nobody is connected ([runner/README.md](runner/README.md)). Every version, as the last build left them:
 **[REFERENCE.md](REFERENCE.md)**. Inside a home, `agent-home-versions` prints the same.
 
 ## How it is built

@@ -112,6 +112,17 @@ RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/re
   && printf 'ttyd\t%s\tits SHA256SUMS\n' "$H" >> /etc/agent-home/downloads \
   && chmod 755 /usr/local/bin/ttyd
 
+# The runner: drives the CLIs over ACP for apps, and keeps their sessions (runner/README.md). Its
+# two adapters are pinned in its lockfile, installed without the copies of the CLIs they bring:
+# they run the binaries above.
+COPY runner /opt/agent-home-runner
+RUN cd /opt/agent-home-runner \
+  && npm ci --omit=optional --omit=dev --no-fund --no-audit \
+  && npm cache clean --force \
+  && printf '#!/bin/sh\nexec node /opt/agent-home-runner/src/main.ts "$@"\n' > /usr/local/bin/agent-home-runner \
+  && chmod 755 /usr/local/bin/agent-home-runner \
+  && node --input-type=module -e "await import('/opt/agent-home-runner/src/clis.ts')"
+
 # A link a CLI opens (a sign-in page) shows in the terminal instead: `show-url`, as BROWSER and as
 # xdg-open (Vibe, Copilot and Cursor call it).
 COPY bin/show-url /usr/local/bin/show-url
