@@ -1,0 +1,12 @@
+#!/bin/sh
+# An npm package's tarball at an exact version, checked against the registry's integrity (the
+# build passes it, resolved with the version; a local build asks the registry): prints its path.
+# `npm-verified <package> <version> [integrity]`
+set -eu
+pkg=$1 v=$2 want=${3:-}
+[ -n "$want" ] || want="$(npm view "$pkg@$v" dist.integrity)"
+cd /tmp
+f="$(npm pack "$pkg@$v" --silent)"
+got="sha512-$(node -e 'process.stdout.write(require("crypto").createHash("sha512").update(require("fs").readFileSync(process.argv[1])).digest("base64"))' "$f")"
+[ "$got" = "$want" ] || { echo "npm-verified: $pkg@$v is $got, the registry says $want" >&2; exit 1; }
+echo "/tmp/$f"

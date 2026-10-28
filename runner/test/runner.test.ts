@@ -64,7 +64,12 @@ before(async () => {
         // For /acp: one never signed in, one more to route to.
         { name: 'off', acp: mock, login: ['true'], status: ['false'] },
         { name: 'second', acp: mock, login: ['true'], status: ['true'] },
+        // A sign-in in the terminal, and API keys: one set, one not.
+        { name: 'term', acp: mock, terminalLogin: 'term auth login' },
+        { name: 'keyed', acp: mock, apiKeys: ['QWENCLOUD_API_KEY'] },
+        { name: 'keyless', acp: mock, apiKeys: ['GEMINI_API_KEY'] },
       ]),
+      QWENCLOUD_API_KEY: 'placeholder',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -169,7 +174,17 @@ test('refuses a caller without the key, and says what it runs', async () => {
     ['fixed', null],
     ['off', false],
     ['second', true],
+    ['term', null],
+    ['keyed', true],
+    ['keyless', false],
   ]);
+  const by = Object.fromEntries(clis.map((c: { name: string }) => [c.name, c]));
+  assert.equal(by.mock.signInWith, 'page');
+  assert.deepEqual([by.term.signInWith, by.term.command], ['terminal', 'term auth login']);
+  assert.deepEqual([by.keyless.signInWith, by.keyless.apiKeys], ['api-key', ['GEMINI_API_KEY']]);
+  const term = await fetch(`http://127.0.0.1:${PORT}/connect/term`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  assert.equal(term.status, 409);
+  assert.match((await term.json()).error, /signs in in the terminal: term auth login/);
   // The dates of each sign-in, never its tokens.
   assert.deepEqual(clis[0].life, {
     endsAt: '2026-11-19T10:00:00.000Z',

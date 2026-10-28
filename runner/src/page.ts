@@ -29,6 +29,7 @@ button:disabled { opacity: .5; cursor: default; }
 .code { font: 600 18px ui-monospace, monospace; letter-spacing: 1px; }
 input { font: inherit; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); width: 100%; }
 .steps { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--line); padding-top: 8px; }
+code { font: 12px ui-monospace, monospace; background: var(--bg); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -76,8 +77,10 @@ function limitsLine(l) {
 
 function card(c) {
   const life = c.life;
-  const state = limited[c.name] ? ['at its limit', 'warn'] : c.signedIn === true ? (life && life.endsSoon ? ['ends soon', 'warn'] : ['signed in', 'ok'])
-    : c.signedIn === false ? ['signed out', 'off'] : ['unknown', 'off'];
+  const signedLabel = c.signInWith === 'api-key' ? 'key set' : 'signed in';
+  const outLabel = c.signInWith === 'api-key' ? 'no key' : 'signed out';
+  const state = limited[c.name] ? ['at its limit', 'warn'] : c.signedIn === true ? (life && life.endsSoon ? ['ends soon', 'warn'] : [signedLabel, 'ok'])
+    : c.signedIn === false ? [outLabel, 'off'] : ['unknown', 'off'];
   const box = $('div', { class: 'card' },
     $('div', { class: 'row' }, $('span', { class: 'name' }, c.name), $('span', { class: 'tag ' + state[1] }, state[0])));
   if (life && life.endsAt) box.append($('span', { class: 'muted' }, (life.renews ? 'Until ' : 'Ends ') + day(life.endsAt) + (life.renews ? ', renewed by use' : ', then sign in again')));
@@ -96,6 +99,10 @@ function card(c) {
       $('button', { onclick: async () => { await call('POST', '/connect/' + c.name + '/input', { text: input.value.trim() }); input.value = ''; } }, 'Send code'),
       $('button', { onclick: async () => { await call('DELETE', '/connect/' + c.name); delete signIns[c.name]; render(); } }, 'Cancel')));
     box.append(steps);
+  } else if (c.signInWith === 'terminal') {
+    box.append($('span', { class: 'muted' }, 'Sign in from the ', $('a', { href: '/terminal/' }, 'terminal'), ': ', $('code', {}, c.command)));
+  } else if (c.signInWith === 'api-key') {
+    box.append($('span', { class: 'muted' }, 'Takes an API key, as a team secret: ', $('code', {}, c.apiKeys[0])));
   } else {
     const actions = $('div', { class: 'row' });
     actions.append($('button', { onclick: () => connect(c.name) }, c.signedIn ? 'Sign in again' : 'Sign in'));

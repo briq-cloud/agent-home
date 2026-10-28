@@ -37,7 +37,7 @@ const hub = new Hub({
   cwd: env.RUNNER_CWD ?? '/work',
   stateDir,
   maxTurns: Number(env.RUNNER_MAX_TURNS ?? 2),
-  route: (env.RUNNER_ROUTE ?? 'claude,codex,cursor,copilot,grok,vibe').split(',').map((n) => n.trim()).filter(Boolean),
+  route: (env.RUNNER_ROUTE ?? 'claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe').split(',').map((n) => n.trim()).filter(Boolean),
   signedIn: (name) => signedInCached(name),
 });
 const signIns = new Map(table.map((c) => [c.name, new SignIn(c)]));
@@ -110,8 +110,13 @@ function signedInCached(name: string): Promise<boolean | null> {
   return value;
 }
 
-/** Exit 0 or `"loggedIn": true`: signed in. Without a status command: unknown. */
+/**
+ * Exit 0 or `"loggedIn": true`: signed in. A CLI that only takes API keys: one of them is set.
+ * Without either: unknown.
+ */
 function signedIn(cli: Cli): Promise<boolean | null> {
+  if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
+    return Promise.resolve(cli.apiKeys.some((k) => Boolean(childEnv[k])));
   if (!cli.status) return Promise.resolve(null);
   return new Promise((resolve) => {
     const [cmd, ...args] = cli.status as string[];
@@ -159,6 +164,10 @@ const server = createServer(async (req, res) => {
           running: hub.running(c.name),
           signedIn: await signedIn(c),
           signIn: signIns.get(c.name)?.status.state,
+          // How its person signs in: on the page, with a command in the terminal, or by an API key.
+          signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
+          ...(c.terminalLogin ? { command: c.terminalLogin } : {}),
+          ...(c.apiKeys ? { apiKeys: c.apiKeys } : {}),
           ...(c.signIn ? { life: signInLife(c.signIn, env) ?? null } : {}),
         })),
       );
@@ -181,6 +190,13 @@ const server = createServer(async (req, res) => {
     }
     if (parts[0] === 'connect' && parts[1] && signIns.has(parts[1])) {
       const s = signIns.get(parts[1]) as SignIn;
+      const c = table.find((t) => t.name === parts[1]) as Cli;
+      if (!c.login && req.method === 'POST' && parts.length === 2)
+        return json(res, 409, {
+          error: c.terminalLogin
+            ? `${c.name} signs in in the terminal: ${c.terminalLogin}`
+            : `${c.name} takes an API key: ${(c.apiKeys ?? []).join(' or ')}, as a team secret`,
+        });
       if (parts.length === 2 && req.method === 'POST') return json(res, 200, await s.start(childEnv));
       if (parts.length === 2 && req.method === 'GET') return json(res, 200, s.status);
       if (parts.length === 2 && req.method === 'DELETE') {

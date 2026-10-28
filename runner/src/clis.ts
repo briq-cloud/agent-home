@@ -7,8 +7,15 @@ export interface Cli {
   name: string;
   /** Its ACP agent, speaking JSON-RPC on stdin and stdout. */
   acp: string[];
-  /** The vendor's own sign-in, run in a terminal. */
-  login: string[];
+  /** The vendor's own sign-in, which the runner runs and reads the page's address and code from. */
+  login?: string[];
+  /** A sign-in that asks questions first (a provider to pick): the command to run in the terminal. */
+  terminalLogin?: string;
+  /**
+   * API-key mode: the variables it reads a key from, as the home's team secrets give them. A CLI
+   * whose only sign-in this is counts as signed in when one is set.
+   */
+  apiKeys?: string[];
   /** Asks whether its person is signed in: exit 0, or `"loggedIn": true` in what it prints. */
   status?: string[];
   /**
@@ -73,6 +80,27 @@ export const CLIS: Cli[] = [
   },
   { name: 'grok', acp: ['grok', 'agent', 'stdio'], login: ['grok', 'login', '--device-auth'] },
   { name: 'vibe', acp: ['vibe-acp'], login: ['vibe', '--setup'] },
+  {
+    // Its own Zen and Go keys, Copilot and xAI by device code, ChatGPT by a headless code: a
+    // provider to pick first.
+    name: 'opencode',
+    acp: ['opencode', 'acp'],
+    terminalLogin: 'opencode auth login',
+  },
+  {
+    // A Cline account by device code, or a provider's key: picked in its wizard.
+    name: 'cline',
+    acp: ['cline', '--acp'],
+    terminalLogin: 'cline auth',
+  },
+  // API keys only: Google's consumer plans are not for a computer hosted for someone else, and Qwen
+  // ended its free sign-in (2026-04). The image's system settings enforce it for Gemini.
+  { name: 'gemini', acp: ['gemini', '--acp'], apiKeys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] },
+  {
+    name: 'qwen',
+    acp: ['qwen', '--acp'],
+    apiKeys: ['QWENCLOUD_API_KEY', 'QWENCLOUD_TOKEN_PLAN_API_KEY', 'BAILIAN_CODING_PLAN_API_KEY', 'BAILIAN_TOKEN_PLAN_API_KEY'],
+  },
 ];
 
 /** The CLIs, or `RUNNER_CLIS` (a JSON array of `Cli`) in their place: another CLI, or a test's. */
@@ -102,6 +130,10 @@ const KEEP = [
   'GROK_HOME',
   'VIBE_HOME',
   'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'GEMINI_CLI_HOME',
+  'QWEN_HOME',
+  'CLINE_DIR',
   // The credential gateway, and the CA it signs with.
   'HTTP_PROXY',
   'HTTPS_PROXY',
@@ -119,6 +151,8 @@ const KEEP = [
   'DISABLE_UPDATES',
   'COPILOT_AUTO_UPDATE',
   'GROK_DISABLE_AUTOUPDATER',
+  'OPENCODE_DISABLE_AUTOUPDATE',
+  'CLINE_NO_AUTO_UPDATE',
   'BROWSER',
   // API-key mode, as placeholders.
   'ANTHROPIC_API_KEY',
@@ -128,6 +162,13 @@ const KEEP = [
   'CURSOR_API_KEY',
   'XAI_API_KEY',
   'MISTRAL_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_API_KEY',
+  'QWENCLOUD_API_KEY',
+  'QWENCLOUD_TOKEN_PLAN_API_KEY',
+  'BAILIAN_CODING_PLAN_API_KEY',
+  'BAILIAN_TOKEN_PLAN_API_KEY',
+  'CLINE_API_KEY',
 ];
 
 export function cliEnv(env: NodeJS.ProcessEnv): Record<string, string> {

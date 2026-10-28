@@ -17,6 +17,14 @@ app ──ACP over WebSocket or HTTP──▶ runner ──ACP over stdio──�
 | `cursor` | `agent acp` | `agent login` |
 | `grok` | `grok agent stdio` | `grok login --device-auth` |
 | `vibe` | `vibe-acp` | `vibe --setup` |
+| `opencode` | `opencode acp` | in the terminal: `opencode auth login` (a provider to pick first) |
+| `cline` | `cline --acp` | in the terminal: `cline auth` (a Cline account by device code, or a key) |
+| `gemini` | `gemini --acp` | API key only: `GEMINI_API_KEY` or `GOOGLE_API_KEY`, as a team secret |
+| `qwen` | `qwen --acp` | API key only: `QWENCLOUD_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`… |
+
+Three ways to sign in, said by `/status` (`signInWith`): `page` (the runner runs the vendor's
+command and shows its link and code), `terminal` (the command asks questions first: the page
+names it), `api-key` (the CLI counts as signed in when one of its variables is set).
 
 The runner is the home's front door: one URL for the person (`/`, the sign-in page, and
 `/terminal/`) and for apps (`/acp/<cli>`). The decision and its research: ADR 0021 in briq's
@@ -35,7 +43,7 @@ RUNNER_TOKEN=… node src/main.ts
 | `RUNNER_CWD` | `/work` | Where the CLIs start |
 | `RUNNER_STATE` | `/work/.runner` | Session logs, `sessions/<cli>/<id>.jsonl`, mode 0600 |
 | `RUNNER_MAX_TURNS` | `2` | Turns at once for the whole home; the rest wait in order |
-| `RUNNER_ROUTE` | `claude,codex,cursor,copilot,grok,vibe` | The CLIs `/acp` may pick, in order of preference |
+| `RUNNER_ROUTE` | `claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe` | The CLIs `/acp` may pick, in order of preference |
 | `RUNNER_CLIS` | the table above | A JSON array in its place (`src/clis.ts`, `Cli`) |
 | `RUNNER_TERMINAL` | `http://127.0.0.1:7681` | ttyd, started with `--base-path /terminal`, served at `/terminal/` |
 
@@ -79,7 +87,7 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 **`/acp`, one agent for every CLI.** `initialize` announces what every CLI supports (text
 prompts, stdio MCP servers, `session/load`), and starts nothing. A `session/new` goes to:
 1. the CLI it asks for: `_meta: { agentHome: { cli: "codex" } }`;
-2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,copilot,grok,vibe`,
+2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe`,
    the earlier first), leaving out one signed out and one at its plan's limit, and putting last
    one whose plan is nearly used up (a window at 90% or more in its last report: Claude's
    `unifiedWindows`).
