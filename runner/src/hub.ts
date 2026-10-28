@@ -198,20 +198,44 @@ export interface HubOptions {
   /** Where the runner keeps its session logs. */
   stateDir: string;
   maxTurns: number;
+  /** The order `/acp` picks CLIs in for a new session: `RUNNER_ROUTE`. */
+  route?: string[];
+  /** Whether a CLI's person is signed in: `false` keeps `/acp` from picking it. */
+  signedIn?: (cli: string) => Promise<boolean | null>;
 }
+
+/** How long a CLI that hit its plan's limit is left out of `/acp`'s picks, when it gives no reset. */
+const LIMITED_MS = 15 * 60_000;
+/** What a turn that failed on its plan's limit says. */
+const LIMIT_RE = /rate.?limit|usage limit|limit reached|quota|too many requests|out of (credits|usage)/i;
+
+/** What `/acp` announces for every CLI it may pick: what each one supports. */
+export const GLOBAL_CAPABILITIES = {
+  loadSession: true,
+  promptCapabilities: { image: false, audio: false, embeddedContext: false },
+  mcpCapabilities: { http: false, sse: false },
+};
 
 export class Hub {
   private readonly engines = new Map<string, Engine>();
   private readonly slots: Slots;
+  private readonly route: string[];
+  private readonly signedIn: (cli: string) => Promise<boolean | null>;
+  private readonly stateDir: string;
+  /** CLIs at their plan's limit, until when: `/acp` picks another. */
+  private readonly limited = new Map<string, number>();
 
   constructor(opts: HubOptions) {
     this.slots = new Slots(opts.maxTurns);
+    this.stateDir = opts.stateDir;
+    this.route = (opts.route?.length ? opts.route : opts.clis.map((c) => c.name)).filter((n) => opts.clis.some((c) => c.name === n));
+    this.signedIn = opts.signedIn ?? (async () => null);
     for (const cli of opts.clis) {
       const dir = join(opts.stateDir, 'sessions', cli.name);
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       const sessions = new Map<string, Session>();
       const agent = new Agent(cli, opts.env, opts.cwd, {
-        notification: (msg) => this.fromAgent(sessions, msg),
+        notification: (msg) => this.fromAgent(cli.name, sessions, msg),
         request: (msg) => {
           const s = sessions.get(msg.params?.sessionId);
           if (!s) return Promise.reject(new RpcFailure({ code: -32602, message: 'unknown session' }));
@@ -314,6 +338,7 @@ export class Hub {
       return r;
     } catch (err) {
       s.setTurn({ state: 'idle', stopReason: 'error' });
+      if (err instanceof Error && LIMIT_RE.test(err.message)) this.limit(cli);
       throw err;
     } finally {
       s.firstCall?.();
@@ -367,9 +392,61 @@ export class Hub {
     for (const e of this.engines.values()) e.agent.stop();
   }
 
-  private fromAgent(sessions: Map<string, Session>, msg: Rpc): void {
+  /** The CLI `/acp` gives a new session: the one asked for, else the first fit in the route. */
+  async pick(asked: unknown): Promise<string> {
+    if (typeof asked === 'string') {
+      if (!this.engines.has(asked)) throw new RpcFailure({ code: -32602, message: `no CLI named ${asked}` });
+      return asked;
+    }
+    const now = Date.now();
+    const fit: Array<{ cli: string; rank: number; busy: number }> = [];
+    for (const [rank, cli] of this.route.entries()) {
+      if ((this.limited.get(cli) ?? 0) > now) continue;
+      if ((await this.signedIn(cli)) === false) continue;
+      let busy = 0;
+      for (const s of this.engine(cli).sessions.values()) if (s.turn.state !== 'idle') busy++;
+      fit.push({ cli, rank, busy });
+    }
+    // The least busy, then the earliest in the route: a second session goes to the next CLI
+    // while the first is busy, rather than queue behind it.
+    fit.sort((a, b) => a.busy - b.busy || a.rank - b.rank);
+    const first = fit[0];
+    if (!first) throw new RpcFailure({ code: -32002, message: 'no CLI to give a session to: all are signed out or at their limit' });
+    return first.cli;
+  }
+
+  /** The CLI that holds a session, from the runner's sessions and then its logs. */
+  cliOf(sessionId: unknown): string {
+    if (typeof sessionId !== 'string') throw new RpcFailure({ code: -32602, message: 'sessionId missing' });
+    for (const [cli, e] of this.engines) if (e.sessions.has(sessionId)) return cli;
+    for (const [cli, e] of this.engines) if (existsSync(join(e.dir, `${safeName(sessionId)}.jsonl`))) return cli;
+    throw new RpcFailure({ code: -32602, message: 'unknown session' });
+  }
+
+  /** A CLI's capabilities, from its own `initialize`. */
+  async capabilitiesOf(cli: string): Promise<unknown> {
+    return ((await this.initialize(cli)) as { agentCapabilities?: unknown } | undefined)?.agentCapabilities ?? null;
+  }
+
+  /** The CLIs at their limit now, and until when. */
+  limits(): Record<string, string> {
+    const now = Date.now();
+    return Object.fromEntries([...this.limited].filter(([, t]) => t > now).map(([cli, t]) => [cli, new Date(t).toISOString()]));
+  }
+
+  private limit(cli: string, until = Date.now() + LIMITED_MS): void {
+    this.limited.set(cli, until);
+    log.info('cli at its limit', { cli, until: new Date(until).toISOString() });
+  }
+
+  private fromAgent(cli: string, sessions: Map<string, Session>, msg: Rpc): void {
     const s = sessions.get(msg.params?.sessionId);
     if (!s || s.replaying) return;
+    // A CLI that says it is at its plan's limit (Claude: `_claude/rateLimit`, status "rejected").
+    const meta = msg.params?.update?._meta as Record<string, { status?: string; resetsAt?: number }> | undefined;
+    for (const [key, value] of Object.entries(meta ?? {}))
+      if (/rate.?limit/i.test(key) && value?.status === 'rejected')
+        this.limit(cli, typeof value.resetsAt === 'number' ? (value.resetsAt < 1e12 ? value.resetsAt * 1000 : value.resetsAt) : undefined);
     if (msg.method === 'session/update' && MODEL_UPDATES.has(msg.params?.update?.sessionUpdate)) {
       s.firstCall?.();
       s.firstCall = undefined;

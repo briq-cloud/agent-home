@@ -35,6 +35,7 @@ RUNNER_TOKEN=… node src/main.ts
 | `RUNNER_CWD` | `/work` | Where the CLIs start |
 | `RUNNER_STATE` | `/work/.runner` | Session logs, `sessions/<cli>/<id>.jsonl`, mode 0600 |
 | `RUNNER_MAX_TURNS` | `2` | Turns at once for the whole home; the rest wait in order |
+| `RUNNER_ROUTE` | `claude,codex,cursor,copilot,grok,vibe` | The CLIs `/acp` may pick, in order of preference |
 | `RUNNER_CLIS` | the table above | A JSON array in its place (`src/clis.ts`, `Cli`) |
 | `RUNNER_TERMINAL` | `http://127.0.0.1:7681` | ttyd, started with `--base-path /terminal`, served at `/terminal/` |
 
@@ -46,6 +47,7 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | | |
 | --- | --- |
 | `/acp/<cli>` | ACP, as an agent: WebSocket, or Streamable HTTP (`@agentclientprotocol/sdk`'s server transport). One connection is to one CLI and carries any number of sessions |
+| `/acp` | ACP, with the runner as one agent (`agent-home`) for every CLI: each `session/new` goes to a CLI (below), every later call to the CLI that holds the session |
 | `GET /status` | Each CLI: its ACP process running, signed in (`true`, `false`, or `null` when it has no status command), its sign-in's state, and its `life` (below) |
 | `GET /usage` | What the sessions used, from the logs: per CLI (sessions, turns, tokens, cost, by UTC day, and its last word on its plan's limits) and per session (turns, tokens, cost, context). Below |
 | `POST /refresh/<cli>` | Has the CLI refresh its sign-in now: `{ moved, life }`. 409 while a turn of it runs, or when a refresh cannot move its end |
@@ -73,6 +75,18 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
   refreshing together sign the person out. Sessions start one after the other (a start is a new
   process, which may refresh first), and a prompt waits until the one before has had its first
   answer from the model, 30 s at most.
+
+**`/acp`, one agent for every CLI.** `initialize` announces what every CLI supports (text
+prompts, stdio MCP servers, `session/load`), and starts nothing. A `session/new` goes to:
+1. the CLI it asks for: `_meta: { agentHome: { cli: "codex" } }`;
+2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,copilot,grok,vibe`,
+   the earlier first), leaving out one signed out and one at its plan's limit.
+
+A CLI is at its limit when a turn fails on it (a rate or usage limit in the error), or when it
+says so (Claude's `_claude/rateLimit` with status `rejected`): until its reset, 15 minutes when it
+gives none. `/status` lists them (`limited`). The answer is the CLI's own `session/new` answer,
+with `_meta.agentHome`: the CLI's name and its own capabilities (images, HTTP MCP servers…). A
+session stays on its CLI: one at its limit fails its turns, and the app opens a new session.
 
 **What a CLI does not get**: the client's file system or terminal (each uses its own tools, in
 the home), or the runner's environment. It sees an allow-list (`src/clis.ts`): the CLI homes, the
