@@ -44,6 +44,10 @@ jobs:
           npm ci --omit=optional --no-fund --no-audit
           npm run typecheck
           npm test
+          cd ../benchmarks
+          npm ci --no-fund --no-audit
+          npm test
+          npm run mock
 
       - uses: docker/setup-buildx-action@v3
 
