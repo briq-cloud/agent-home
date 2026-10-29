@@ -12,6 +12,25 @@ export async function plan(dir) {
   const load = async (name) => JSON.parse(await readFile(`${dir}/${name}.json`, "utf8"));
   const inventory = await load("inventory"),
     catalog = await refresh(`${dir}/catalog.json`);
+  if (process.env.RUNNER_TOKEN_FILE) {
+    const origin = new URL(process.env.ROUTING_RUNNER_URL ?? "http://127.0.0.1:8090");
+    if (origin.hostname !== "127.0.0.1" || origin.protocol !== "http:")
+      throw Error("runner inventory must use loopback");
+    const token = (await readFile(process.env.RUNNER_TOKEN_FILE, "utf8")).trim();
+    const get = async (path) => {
+      const r = await fetch(new URL(path, origin), {
+        headers: { authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!r.ok) throw Error("runner inventory unavailable");
+      return r.json();
+    };
+    const [status, keys] = await Promise.all([get("/status"), get("/keys")]);
+    inventory.clis = status.clis.map(({ name, signedIn }) => ({ name, signedIn }));
+    inventory.keyProviders = keys.providers.filter((p) => p.set).map((p) => p.id);
+    inventory.checkedAt = new Date().toISOString();
+    await writeFile(`${dir}/inventory.json`, JSON.stringify(inventory, null, 2), { mode: 0o600 });
+  }
   let evidence = [],
     history = [];
   try {

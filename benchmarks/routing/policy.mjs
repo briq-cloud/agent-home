@@ -224,7 +224,13 @@ export async function decide({ sdk, task, portfolios, chooser = "cloudflare/clef
     route = response.answers?.route?.choice;
   if (!valid(response.usage?.cost)) throw Error("decision cost unknown; stop paid routing");
   if (type === "abstain" || route === "abstain")
-    return { type: "abstain", route: "abstain", costUsd: response.usage.cost };
+    return {
+      type: "abstain",
+      route: "abstain",
+      costUsd: response.usage.cost,
+      answers: response.answers,
+      decisionModel: response.model,
+    };
   const candidate = portfolios.find((p) => p.type === type)?.candidates.find((c) => c.id === route);
   if (!candidate)
     return {
@@ -240,6 +246,7 @@ export async function decide({ sdk, task, portfolios, chooser = "cloudflare/clef
     cli: candidate.cli,
     costUsd: response.usage.cost,
     decisionModel: response.model,
+    answers: response.answers,
     dispatch: "new isolated ACP session; no in-session model swap",
   };
 }
