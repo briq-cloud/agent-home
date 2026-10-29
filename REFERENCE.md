@@ -41,4 +41,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-10-29.7`, 1435 MB compressed, digest `sha256:a02ed37663e314f8547d5e481dc3572b6a741bbc9ec5edbe7c5307be44d3ce3d`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29.7 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-10-29.8`, 1435 MB compressed, digest `sha256:a02ed37663e314f8547d5e481dc3572b6a741bbc9ec5edbe7c5307be44d3ce3d`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29.8 --repo briq-cloud/agent-home`.
