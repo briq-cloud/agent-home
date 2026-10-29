@@ -34,7 +34,16 @@ with `BENCH_PAID=1` and `BENCH_KEYS_FILE`, the planner fetches OpenRouter's auth
 metadata once per day using the existing key. It joins Artificial Analysis scores by exact canonical
 model version, preserving source date, citation, missing fields and configuration label. This metadata
 request performs no inference. The feed does not expose its intelligence-index version or speed;
-those stay unknown. No new account is needed for this path.
+the index version stays unknown. No new account is needed for this path.
+
+The authenticated per-model endpoints API supplies speed: latency percentiles in milliseconds
+(time to first token), throughput percentiles in tokens/second, uptime, quantization and per-provider
+prices. Refresh only the candidate models, at most 20, every five minutes. Unauthenticated calls
+return null speed fields. A binding's optional `endpointTag` selects that endpoint's metrics. Without
+a pin, show the unweighted median of active provider medians, explicitly labelled; it is neither a
+traffic-weighted average nor the performance of OpenRouter's eventual selected provider. Retain all
+endpoint distributions in `performance.json`. Do not combine one provider's cheap price with another's
+fastest speed as a fictional route. Catalog request-price estimates remain separate from speed priors.
 
 For richer speed and index-version metadata,
 set `ARTIFICIAL_ANALYSIS_API_KEY` and provide `aliases.json` mapping an exact AA slug to
@@ -59,6 +68,14 @@ decision selects task type and an eligible route; choices outside that portfolio
 No key or general chat model is used for catalog filtering. Unknown decision cost stops paid routing.
 Explicit route selection and existing sessions should bypass classification and remain pinned.
 
+For an actual routed fixture execution, use `ROUTE_TASK_ID=config-precedence` when planning, then
+`BENCH_PAID=1 BENCH_KEYS_FILE=... RUNNER_TOKEN_FILE=... node routing/execute.mjs results/routing config-precedence`.
+The executor rechecks the loopback runner's sign-ins/keys, rejects changed or unavailable routes,
+and starts a fresh isolated Claude ACP session with `BENCH_MODEL` set to the selected model. It
+uses the existing relay and $0.25 target, 180-second task deadline and external acceptance checks.
+Only the three trusted medium fixtures are supported. No fallback execution or automatic retry.
+Keep these integration runs separate from the frozen comparison matrix.
+
 ## Subagents
 
 Claude definitions support `model` (alias, full ID or inherit); Agent calls accept aliases. Mapping
@@ -80,6 +97,15 @@ ACP is the child transport, not a standard native-subagent interception hook. We
 replace every vendor's hidden delegation from ACP logs. Start with explicit runner delegation;
 native hooks require a separate adapter and tests.
 
+Claude now also documents a mods `agent.spawn` hook that can replace the subagent model. That is a
+possible native interception point to investigate against our pinned CLI/adapter, rather than
+patching the vendor binary. It does not itself supply a different provider credential per child.
+
+OpenRouter's existing Pareto Code Router already selects coding models by a minimum coding percentile
+and cost (or throughput with Nitro). Use it as a comparison baseline for API-key traffic; do not
+reimplement its provider load balancer. It cannot enumerate the person's subscription CLI routes.
+Keep model selection at session/task boundaries so tool conversations and caches remain coherent.
+
 Sources checked 2026-10-30:
 
 - [Claude subagents](https://code.claude.com/docs/en/sub-agents)
@@ -89,5 +115,8 @@ Sources checked 2026-10-30:
 - [Codex subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents)
 - [OpenRouter catalog](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
 - [OpenRouter benchmarks](https://openrouter.ai/docs/api/api-reference/benchmarks/list-benchmarks)
+- [OpenRouter endpoint performance](https://openrouter.ai/docs/api/api-reference/endpoints/list-all-endpoints-for-a-model)
+- [OpenRouter Pareto Router](https://openrouter.ai/docs/guides/routing/routers/pareto-router)
+- [Claude mods hooks](https://code.claude.com/docs/en/plugins/mods/reference)
 - [Artificial Analysis API](https://artificialanalysis.ai/data-api/docs/reference)
 - [Intelligence index methodology](https://artificialanalysis.ai/methodology/intelligence-benchmarking)

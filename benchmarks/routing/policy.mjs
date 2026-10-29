@@ -59,6 +59,7 @@ export function shortlist({
   catalog,
   inventory,
   evidence = [],
+  performance = [],
   history = [],
   type,
   now = Date.now(),
@@ -124,6 +125,12 @@ export function shortlist({
       (e) => e.model === m.id && e.canonical === m.canonical && fresh(e.observedAt, now, 7 * DAY),
     );
     const proven = h?.attempts >= minSamples;
+    const speed = performance.find(
+      (p) =>
+        p.model === m.id &&
+        p.endpointTag === (route.endpointTag ?? null) &&
+        fresh(p.checkedAt, now, 300000),
+    );
     const quality = e?.scores?.[type] ?? null;
     // Missing intelligence never becomes an invented zero. Trials remain visibly sparse.
     rows.push({
@@ -145,6 +152,7 @@ export function shortlist({
       observedMeanTaskSeconds: h?.attempts ? h.totalSeconds / h.attempts : null,
       priorTokensPerSecond: e?.tokensPerSecond ?? null,
       priorFirstTokenSeconds: e?.firstTokenSeconds ?? null,
+      providerPerformance: speed ?? null,
       confidence: proven ? "measured" : h ? "sparse" : "unmeasured",
     });
   }
@@ -158,14 +166,16 @@ export function shortlist({
       slots[slot] = sorted[0].id;
       if (!chosen.includes(sorted[0])) chosen.push(sorted[0]);
     }
+    return sorted.length > 0;
   };
   // A diverse portfolio, not a weighted scalar that hides quality/cost tradeoffs.
   pick("taskQuality", (r) => r.taskQualityPrior, -1);
   pick("intelligence", (r) => r.intelligence, -1);
   pick("includedPlan", (r) => (r.billing === "subscription" ? 0 : null));
   pick("cheapest", (r) => r.estimatedRequestUsd);
-  pick("fastestObserved", (r) => (r.proven ? r.observedMeanTaskSeconds : null));
-  pick("fastestPrior", (r) => r.priorTokensPerSecond, -1);
+  if (!pick("fastestObserved", (r) => (r.proven ? r.observedMeanTaskSeconds : null)))
+    if (!pick("fastestProvider", (r) => r.providerPerformance?.tokensPerSecond ?? null, -1))
+      pick("fastestPrior", (r) => r.priorTokensPerSecond, -1);
   for (const r of [...rows].sort(
     (a, b) => (b.intelligence ?? -1) - (a.intelligence ?? -1) || a.id.localeCompare(b.id),
   ))

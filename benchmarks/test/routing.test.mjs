@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shortlist, DAY, decide } from "../routing/policy.mjs";
 import { refresh } from "../routing/refresh.mjs";
 import { importAnalysis, importOpenRouterBenchmarks } from "../routing/evidence.mjs";
+import { executeRoute } from "../routing/execute.mjs";
+import { endpointPerformance, performancePrior } from "../routing/performance.mjs";
 const now = Date.parse("2026-10-30T00:00:00Z"),
   date = new Date(now).toISOString();
 function setup() {
@@ -184,4 +186,88 @@ test("OpenRouter benchmark joins preserve source date, missing values and exact 
   assert.equal(e.scores.change, null);
   body.data[0].model_permaslug = "smart-v2";
   assert.deepEqual(importOpenRouterBenchmarks(body, a.catalog), []);
+});
+test("dispatch uses selected execution model and rejects a removed key before spawning", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "dispatch-")),
+    prior = { ...process.env };
+  try {
+    const a = setup();
+    a.catalog.fetchedAt = new Date().toISOString();
+    for (const [file, value] of Object.entries({
+      catalog: a.catalog,
+      inventory: a.inventory,
+      decision: { route: "cheap", model: "cheap", type: "change", taskId: "config-precedence" },
+    }))
+      await writeFile(join(dir, file + ".json"), JSON.stringify(value));
+    const tokenFile = join(dir, "token");
+    await writeFile(tokenFile, "fake-local-token");
+    process.env.BENCH_PAID = "1";
+    process.env.RUNNER_TOKEN_FILE = tokenFile;
+    let keySet = true,
+      calls = 0;
+    const fetcher = async (url) => ({
+      ok: true,
+      json: async () =>
+        url.pathname === "/status"
+          ? { clis: a.inventory.clis }
+          : { providers: [{ id: "openrouter", set: keySet }] },
+    });
+    const run = async (_node, _args, opts) => {
+      calls++;
+      assert.equal(opts.env.BENCH_MODEL, "cheap");
+      assert.equal(opts.env.BENCH_TASK_IDS, "config-precedence");
+      await mkdir(opts.env.BENCH_RESULTS, { recursive: true });
+      await writeFile(
+        join(opts.env.BENCH_RESULTS, "results.json"),
+        JSON.stringify({ records: [{ grade: { pass: true }, costUsd: 0.01, error: null }] }),
+      );
+    };
+    await executeRoute({ dir, taskId: "config-precedence", fetcher, run });
+    assert.equal(calls, 1);
+    keySet = false;
+    await assert.rejects(
+      executeRoute({ dir, taskId: "config-precedence", fetcher, run }),
+      /no longer eligible/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    for (const key of Object.keys(process.env)) if (!(key in prior)) delete process.env[key];
+    Object.assign(process.env, prior);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+test("provider speed preserves endpoint percentiles, units, pins and freshness", () => {
+  const s = endpointPerformance(
+    {
+      data: {
+        id: "fast",
+        endpoints: [
+          {
+            tag: "a",
+            status: 0,
+            latency_last_30m: { p50: 500, p90: 2000 },
+            throughput_last_30m: { p50: 100 },
+            uptime_last_1d: 99,
+          },
+          {
+            tag: "b",
+            status: 0,
+            latency_last_30m: { p50: 1000, p90: 4000 },
+            throughput_last_30m: { p50: 200 },
+            uptime_last_1d: 100,
+          },
+          { tag: "offline", status: 1, throughput_last_30m: { p50: 999 } },
+        ],
+      },
+    },
+    "fast",
+    date,
+  );
+  assert.equal(performancePrior(s, null, now).tokensPerSecond, 150);
+  assert.equal(performancePrior(s, "a", now).firstTokenMs, 500);
+  assert.equal(performancePrior(s, "a", now).tailFirstTokenP90Ms, 2000);
+  assert.equal(performancePrior(s, null, now + 300001), null);
+  const a = setup();
+  a.performance = [{ model: "fast", ...performancePrior(s, null, now) }];
+  assert.equal(shortlist(a).slots.fastestProvider, "fast");
 });
