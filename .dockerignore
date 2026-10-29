@@ -2,3 +2,5 @@
 .github
 *.md
 runner/node_modules
+
+benchmarks
