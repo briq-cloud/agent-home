@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -13,6 +13,7 @@ const here = fileURLToPath(new URL('.', import.meta.url));
 const TOKEN = 'test-token';
 const PORT = 40_000 + Math.floor(Math.random() * 20_000);
 let runner: ChildProcess;
+let home = '';
 const TERMINAL_PORT = PORT + 1;
 /** What the fake terminal saw of the last request's cookie: the runner's own must not reach it. */
 let terminalCookie: string | undefined;
@@ -24,6 +25,7 @@ const ENDS = Date.now() + 3 * 86_400_000;
 
 before(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
+  home = dir;
   writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }));
   writeFileSync(join(dir, 'fixed.json'), JSON.stringify({ oauth: { refreshToken: 'secret', refreshTokenExpiresAt: ENDS } }));
   const mock = [process.execPath, join(here, 'mock-agent.ts')];
@@ -48,6 +50,7 @@ before(async () => {
       RUNNER_HOST: '127.0.0.1',
       RUNNER_CWD: dir,
       RUNNER_STATE: join(dir, 'state'),
+      RUNNER_LOGINS: join(dir, 'logins'),
       RUNNER_MAX_TURNS: '1',
       RUNNER_TERMINAL: `http://127.0.0.1:${TERMINAL_PORT}`,
       RUNNER_ROUTE: 'off,mock,second',
@@ -66,10 +69,13 @@ before(async () => {
         { name: 'second', acp: mock, login: ['true'], status: ['true'] },
         // A sign-in in the terminal, and API keys: one set, one not.
         { name: 'term', acp: mock, terminalLogin: 'term auth login' },
-        { name: 'keyed', acp: mock, apiKeys: ['QWENCLOUD_API_KEY'] },
-        { name: 'keyless', acp: mock, apiKeys: ['GEMINI_API_KEY'], blockedAuth: ['personal'] },
+        { name: 'keyed', acp: mock, apiKeys: ['GOOGLE_API_KEY'] },
+        { name: 'keyless', acp: mock, apiKeys: ['GEMINI_API_KEY'], keyFrom: 'google', blockedAuth: ['personal'] },
+        // The harnesses a profile runs: the image's own claude and codex.
+        { name: 'claude', acp: mock, login: ['true'], status: ['true'] },
+        { name: 'codex', acp: mock, login: ['true'], status: ['true'] },
       ]),
-      QWENCLOUD_API_KEY: 'placeholder',
+      GOOGLE_API_KEY: 'placeholder',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -177,6 +183,8 @@ test('refuses a caller without the key, and says what it runs', async () => {
     ['term', null],
     ['keyed', true],
     ['keyless', false],
+    ['claude', true],
+    ['codex', true],
   ]);
   const by = Object.fromEntries(clis.map((c: { name: string }) => [c.name, c]));
   assert.equal(by.mock.signInWith, 'page');
@@ -432,4 +440,81 @@ test('never offers a sign-in method the home blocks, and refuses it', async () =
   const allowed = await app.request('authenticate', { methodId: 'api-key' });
   assert.ok(!allowed.error);
   app.close();
+});
+
+const api = (method: string, path: string, body?: unknown) =>
+  fetch(`http://127.0.0.1:${PORT}${path}`, {
+    method,
+    headers: { authorization: `Bearer ${TOKEN}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+/** A turn that says `env`: what the CLI behind a path was started with. */
+async function envOf(path: string): Promise<Record<string, string | undefined>> {
+  const app = await connect(path);
+  const s = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  await app.request('session/prompt', say(s.result.sessionId, 'env'));
+  const out = JSON.parse(app.texts().at(-1) as string);
+  app.close();
+  return out;
+}
+
+test('keeps a key on the home, never gives it back, and runs a provider with Claude Code', async () => {
+  assert.equal((await api('POST', '/profiles', { provider: 'zai', harness: 'claude' })).status, 409);
+  assert.equal((await api('PUT', '/keys/zai', { key: 'zai-secret-key' })).status, 200);
+  const listed = await (await api('GET', '/keys')).json();
+  assert.equal(listed.providers.find((p: { id: string }) => p.id === 'zai').set, true);
+  assert.doesNotMatch(JSON.stringify(listed), /zai-secret-key/);
+  assert.equal(statSync(join(home, 'logins', 'keys.json')).mode & 0o777, 0o600);
+  const made = await (await api('POST', '/profiles', { provider: 'zai', harness: 'claude' })).json();
+  assert.deepEqual(made, { name: 'zai-claude', provider: 'zai', harness: 'claude', acp: '/acp/zai-claude' });
+  const status = await (await api('GET', '/status')).json();
+  const profile = status.clis.find((c: { name: string }) => c.name === 'zai-claude');
+  assert.deepEqual([profile.signedIn, profile.signInWith, profile.profile], [true, 'api-key', { provider: 'zai', harness: 'claude' }]);
+  assert.doesNotMatch(JSON.stringify(status), /zai-secret-key/);
+  // Its own settings folder, never the person's Claude sign-in; the provider maps Claude's model names.
+  assert.deepEqual(await envOf('/acp/zai-claude'), {
+    base: 'https://api.z.ai/api/anthropic',
+    token: 'zai-secret-key',
+    config: join(home, 'logins', 'profiles', 'zai-claude'),
+  });
+  // `/acp` never picks a profile it was not told to: a key may be billed by use.
+  const app = await connect('/acp', 'agent-home');
+  const picked = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
+  assert.notEqual(picked.result._meta.agentHome.cli, 'zai-claude');
+  const named = await app.request('session/new', { cwd: '/tmp', mcpServers: [], _meta: { agentHome: { cli: 'zai-claude' } } });
+  assert.equal(named.result._meta.agentHome.cli, 'zai-claude');
+  app.close();
+});
+
+test('a provider that names its model, with Claude Code or Codex; a new key restarts its profiles', async () => {
+  assert.equal((await api('PUT', '/keys/openrouter', { key: 'or-first-key' })).status, 200);
+  const noModel = await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex' });
+  assert.equal(noModel.status, 400);
+  assert.match((await noModel.json()).error, /needs a model/);
+  assert.equal((await api('POST', '/profiles', { provider: 'zai', harness: 'codex' })).status, 400);
+  assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex', model: 'vendor/some-model' })).status, 200);
+  assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'claude', model: 'vendor/some-model' })).status, 200);
+  const codex = await envOf('/acp/openrouter-codex');
+  assert.deepEqual(codex, { codexHome: join(home, 'logins', 'profiles', 'openrouter-codex'), codexKey: 'or-first-key' });
+  const config = readFileSync(join(codex.codexHome as string, 'config.toml'), 'utf8');
+  assert.match(config, /model = "vendor\/some-model"/);
+  assert.match(config, /base_url = "https:\/\/openrouter.ai\/api\/v1"/);
+  assert.match(config, /wire_api = "responses"/);
+  assert.doesNotMatch(config, /or-first-key/);
+  assert.equal((await envOf('/acp/openrouter-claude')).model, 'vendor/some-model');
+  assert.equal((await api('PUT', '/keys/openrouter', { key: 'or-second-key' })).status, 200);
+  assert.equal((await envOf('/acp/openrouter-codex')).codexKey, 'or-second-key');
+  assert.equal((await api('DELETE', '/profiles/openrouter-codex')).status, 200);
+  assert.equal((await api('POST', '/acp/openrouter-codex')).status, 404);
+});
+
+test('a CLI of the image that takes a key gets the one added on the page', async () => {
+  assert.equal((await api('POST', '/profiles', { provider: 'google', harness: 'claude' })).status, 400);
+  assert.equal((await api('PUT', '/keys/google', { key: 'gemini-key-1234' })).status, 200);
+  const status = await (await api('GET', '/status')).json();
+  assert.equal(status.clis.find((c: { name: string }) => c.name === 'keyless').signedIn, true);
+  assert.equal((await envOf('/acp/keyless')).gemini, 'gemini-key-1234');
+  assert.equal((await api('DELETE', '/keys/google')).status, 200);
+  assert.equal((await api('PUT', '/keys/google', { key: 'has spaces in it' })).status, 400);
 });

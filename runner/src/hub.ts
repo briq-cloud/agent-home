@@ -198,7 +198,7 @@ export interface HubOptions {
   /** Where the runner keeps its session logs. */
   stateDir: string;
   maxTurns: number;
-  /** The order `/acp` picks CLIs in for a new session: `RUNNER_ROUTE`. */
+  /** The order `/acp` picks CLIs in for a new session: `RUNNER_ROUTE`. A profile is picked only when named there. */
   route?: string[];
   /** Whether a CLI's person is signed in: `false` keeps `/acp` from picking it. */
   signedIn?: (cli: string) => Promise<boolean | null>;
@@ -229,28 +229,44 @@ export class Hub {
   /** How much of its plan each CLI last said it used, its fullest window (0 to 1). */
   private readonly used = new Map<string, number>();
 
+  private readonly env: Record<string, string>;
+  private readonly cwd: string;
+
   constructor(opts: HubOptions) {
     this.slots = new Slots(opts.maxTurns);
     this.stateDir = opts.stateDir;
-    this.route = (opts.route?.length ? opts.route : opts.clis.map((c) => c.name)).filter((n) => opts.clis.some((c) => c.name === n));
+    this.env = opts.env;
+    this.cwd = opts.cwd;
+    this.route = opts.route?.length ? opts.route : opts.clis.map((c) => c.name);
     this.signedIn = opts.signedIn ?? (async () => null);
-    for (const cli of opts.clis) {
-      const dir = join(opts.stateDir, 'sessions', cli.name);
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const sessions = new Map<string, Session>();
-      const agent = new Agent(cli, opts.env, opts.cwd, {
-        notification: (msg) => this.fromAgent(cli.name, sessions, msg),
-        request: (msg) => {
-          const s = sessions.get(msg.params?.sessionId);
-          if (!s) return Promise.reject(new RpcFailure({ code: -32602, message: 'unknown session' }));
-          return s.hold(msg.method as string, msg.params);
-        },
-        exited: () => {
-          for (const s of sessions.values()) s.dropHeld(`${cli.name} exited`);
-        },
-      });
-      this.engines.set(cli.name, { agent, sessions, firstCall: new FirstCall(), dir });
-    }
+    for (const cli of opts.clis) this.add(cli);
+  }
+
+  /** A CLI to drive, from now on: a profile the person just made. Its sessions' logs stay where they were. */
+  add(cli: Cli): void {
+    const dir = join(this.stateDir, 'sessions', cli.name);
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const sessions = new Map<string, Session>();
+    const agent = new Agent(cli, this.env, this.cwd, {
+      notification: (msg) => this.fromAgent(cli.name, sessions, msg),
+      request: (msg) => {
+        const s = sessions.get(msg.params?.sessionId);
+        if (!s) return Promise.reject(new RpcFailure({ code: -32602, message: 'unknown session' }));
+        return s.hold(msg.method as string, msg.params);
+      },
+      exited: () => {
+        for (const s of sessions.values()) s.dropHeld(`${cli.name} exited`);
+      },
+    });
+    this.engines.set(cli.name, { agent, sessions, firstCall: new FirstCall(), dir });
+  }
+
+  /** A CLI no more: its process stopped, its turns ended with it. Its logs stay. */
+  async remove(cli: string): Promise<void> {
+    const e = this.engines.get(cli);
+    if (!e) return;
+    this.engines.delete(cli);
+    await e.agent.stopAndWait();
   }
 
   has(cli: string): boolean {
@@ -413,7 +429,7 @@ export class Hub {
     const now = Date.now();
     const fit: Array<{ cli: string; rank: number; busy: number; nearLimit: boolean }> = [];
     for (const [rank, cli] of this.route.entries()) {
-      if ((this.limited.get(cli) ?? 0) > now) continue;
+      if (!this.engines.has(cli) || (this.limited.get(cli) ?? 0) > now) continue;
       if ((await this.signedIn(cli)) === false) continue;
       let busy = 0;
       for (const s of this.engine(cli).sessions.values()) if (s.turn.state !== 'idle') busy++;

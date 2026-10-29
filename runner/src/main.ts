@@ -10,6 +10,7 @@ import { signInLife } from './dates.ts';
 import { Hub } from './hub.ts';
 import { log } from './log.ts';
 import { PAGE } from './page.ts';
+import { Keys, PROVIDERS, profileFor } from './providers.ts';
 import { RUNNER_COOKIE, terminalProxy } from './proxy.ts';
 import { SignIn } from './signin.ts';
 import { usageReport } from './usage.ts';
@@ -17,7 +18,8 @@ import { usageReport } from './usage.ts';
 /**
  * The agent home runner (ADR 0021 in github.com/up-lab/briq; this folder's README): an ACP agent
  * toward apps, at `/acp/<cli>` over WebSocket or Streamable HTTP, and an ACP client toward each
- * CLI. Beside it, `/connect/<cli>` (the vendor's own sign-in), `/status`, `/refresh/<cli>`, and
+ * CLI. Beside it, `/connect/<cli>` (the vendor's own sign-in), `/status`, `/refresh/<cli>`,
+ * `/keys` and `/profiles` (a provider's key, run by Claude Code or Codex), and
  * for the home's person a page at `/` and the terminal at `/terminal/`: the runner is the home's
  * front door.
  */
@@ -28,26 +30,63 @@ if (!token) {
   process.exit(1);
 }
 const port = Number(env.RUNNER_PORT ?? 8090);
-const table = clis(env);
+const base = clis(env);
 const childEnv = cliEnv(env);
 const stateDir = env.RUNNER_STATE ?? '/work/.runner';
+const logins = env.RUNNER_LOGINS ?? '/work/.logins';
+const keys = new Keys({
+  keysFile: env.RUNNER_KEYS ?? `${logins}/keys.json`,
+  profilesFile: `${stateDir}/profiles.json`,
+  logins,
+});
+
+/** A CLI of the image with the key its person added on the page, if it takes one. */
+function withKey(c: Cli): Cli {
+  const key = c.keyFrom ? keys.key(c.keyFrom) : undefined;
+  return key && c.apiKeys?.[0] ? { ...c, env: { ...c.env, [c.apiKeys[0]]: key } } : c;
+}
+
+/** The person's profiles as CLIs: each one's harness is the image's own CLI of that name. */
+function profileClis(): Cli[] {
+  return keys.profiles().flatMap((p) => {
+    const harness = base.find((c) => c.name === p.harness);
+    return harness ? [keys.cliOf(p, harness)] : [];
+  });
+}
+
+/** Every CLI the runner drives now: the image's, then the person's profiles. */
+let table: Cli[] = [...base.map(withKey), ...profileClis()];
 const hub = new Hub({
   clis: table,
   env: childEnv,
   cwd: env.RUNNER_CWD ?? '/work',
   stateDir,
   maxTurns: Number(env.RUNNER_MAX_TURNS ?? 2),
-  route: (env.RUNNER_ROUTE ?? 'claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe').split(',').map((n) => n.trim()).filter(Boolean),
+  route: (env.RUNNER_ROUTE ?? 'claude,codex,cursor,copilot,grok,gemini,vibe').split(',').map((n) => n.trim()).filter(Boolean),
   signedIn: (name) => signedInCached(name),
 });
-const signIns = new Map(table.map((c) => [c.name, new SignIn(c)]));
+
+/**
+ * The table again after a key or a profile changed: each CLI whose definition moved is stopped and
+ * started anew with it on its next use (a running turn ends), the others keep their process.
+ */
+async function reload(): Promise<void> {
+  const next = [...base.map(withKey), ...profileClis()];
+  const same = (a: Cli, b: Cli | undefined) => b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  for (const c of table) if (!same(c, next.find((n) => n.name === c.name))) await hub.remove(c.name);
+  for (const c of next) if (!same(c, table.find((t) => t.name === c.name))) hub.add(c);
+  table = next;
+  known.clear();
+}
+const signIns = new Map(base.map((c) => [c.name, new SignIn(c)]));
 /** ttyd on localhost, started with `--base-path /terminal`. */
 const terminal = terminalProxy(new URL(env.RUNNER_TERMINAL ?? 'http://127.0.0.1:7681'));
 
-/** One ACP endpoint per CLI: a connection is to one agent, as ACP has it. */
 /** One ACP endpoint per CLI (`/acp/<cli>`), and `/acp` (`''` here), which routes each session. */
-const acp = new Map(
-  [...table.map((c) => c.name), ''].map((name) => {
+const acp = new Map<string, { http: ReturnType<typeof createNodeHttpHandler>; upgrade: ReturnType<typeof createNodeWebSocketUpgradeHandler> }>();
+function endpoint(name: string) {
+  let e = acp.get(name);
+  if (!e) {
     const server = new AcpServer({
       createAgent: () => ({
         connect: (stream) => {
@@ -57,14 +96,14 @@ const acp = new Map(
       }),
     });
     const wss = new WebSocketServer({ noServer: true });
-    return [
-      name,
-      { http: createNodeHttpHandler(server), upgrade: createNodeWebSocketUpgradeHandler(server, wss as never) },
-    ] as const;
-  }),
-);
-/** The endpoint of a path: `/acp/<cli>`, or `/acp` itself. */
-const acpOf = (parts: string[]) => (parts[0] === 'acp' && parts.length <= 2 ? acp.get(parts[1] ?? '') : undefined);
+    e = { http: createNodeHttpHandler(server), upgrade: createNodeWebSocketUpgradeHandler(server, wss as never) };
+    acp.set(name, e);
+  }
+  return e;
+}
+/** The endpoint of a path: `/acp/<cli>` for a CLI the runner drives now, or `/acp` itself. */
+const acpOf = (parts: string[]) =>
+  parts[0] === 'acp' && parts.length <= 2 && (!parts[1] || hub.has(parts[1])) ? endpoint(parts[1] ?? '') : undefined;
 
 /**
  * The key, in constant time: `Authorization: Bearer` (an app), `?token=` (a browser's WebSocket,
@@ -115,8 +154,9 @@ function signedInCached(name: string): Promise<boolean | null> {
  * Without either: unknown.
  */
 function signedIn(cli: Cli): Promise<boolean | null> {
+  if (cli.profile) return Promise.resolve(Boolean(keys.key(cli.profile.provider)));
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
-    return Promise.resolve(cli.apiKeys.some((k) => Boolean(childEnv[k])));
+    return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
   if (!cli.status) return Promise.resolve(null);
   return new Promise((resolve) => {
     const [cmd, ...args] = cli.status as string[];
@@ -168,13 +208,59 @@ const server = createServer(async (req, res) => {
           signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
           ...(c.terminalLogin ? { command: c.terminalLogin } : {}),
           ...(c.apiKeys ? { apiKeys: c.apiKeys } : {}),
+          ...(c.keyFrom ? { keyFrom: c.keyFrom } : {}),
+          ...(c.profile ? { profile: c.profile } : {}),
           ...(c.signIn ? { life: signInLife(c.signIn, env) ?? null } : {}),
         })),
       );
       return json(res, 200, { clis: out, limited: hub.limits() });
     }
-    if (url.pathname === '/usage' && req.method === 'GET') return json(res, 200, usageReport(stateDir, table.map((c) => c.name)));
-    if (parts[0] === 'refresh' && parts[1] && hub.has(parts[1]) && req.method === 'POST') {
+    if (url.pathname === '/usage' && req.method === 'GET')
+      return json(res, 200, usageReport(stateDir, table.map((c) => c.name), new Set(table.filter((c) => c.profile).map((c) => c.name))));
+    // The providers and their keys (whether one is set, never the key), and the profiles.
+    if (url.pathname === '/keys' && req.method === 'GET')
+      return json(res, 200, {
+        providers: PROVIDERS.map((p) => ({
+          id: p.id,
+          name: p.name,
+          billing: p.billing,
+          set: Boolean(keys.key(p.id)),
+          harnesses: [...(p.claude ? ['claude'] : []), ...(p.codex ? ['codex'] : [])],
+          ...(p.claude ? { claudeNeedsModel: p.claude.needsModel } : {}),
+          ...(p.cli ? { cli: p.cli.name } : {}),
+          ...(p.example ? { example: p.example } : {}),
+        })),
+        profiles: keys.profiles(),
+      });
+    if (parts[0] === 'keys' && parts.length === 2 && (req.method === 'PUT' || req.method === 'DELETE')) {
+      if (!PROVIDERS.some((p) => p.id === parts[1])) return json(res, 404, { error: `no provider named ${parts[1]}` });
+      let key: string | undefined;
+      if (req.method === 'PUT') {
+        const k = (await body(req)).key;
+        if (typeof k !== 'string' || !/^\S{8,1024}$/.test(k)) return json(res, 400, { error: 'key is the provider\'s key, without spaces' });
+        key = k;
+      }
+      keys.putKey(parts[1] as string, key);
+      await reload();
+      return json(res, 200, { provider: parts[1], set: Boolean(key) });
+    }
+    if (url.pathname === '/profiles' && req.method === 'POST') {
+      const b = await body(req);
+      const p = profileFor(b.provider, b.harness, b.model);
+      if (typeof p === 'string') return json(res, 400, { error: p });
+      if (!keys.key(p.provider)) return json(res, 409, { error: `add ${p.provider}'s key first: PUT /keys/${p.provider}` });
+      if (!base.some((c) => c.name === p.harness)) return json(res, 409, { error: `this home has no ${p.harness}` });
+      keys.putProfile(p);
+      await reload();
+      return json(res, 200, { ...p, acp: `/acp/${p.name}` });
+    }
+    if (parts[0] === 'profiles' && parts.length === 2 && req.method === 'DELETE') {
+      if (!keys.profiles().some((p) => p.name === parts[1])) return json(res, 404, { error: `no profile named ${parts[1]}` });
+      keys.dropProfile(parts[1] as string);
+      await reload();
+      return json(res, 200, { name: parts[1], removed: true });
+    }
+    if (parts[0] === 'refresh' && parts[1] && signIns.has(parts[1]) && req.method === 'POST') {
       const c = table.find((t) => t.name === parts[1]) as Cli;
       const life = c.signIn ? signInLife(c.signIn, env) : undefined;
       if (life && !life.renews)
@@ -195,7 +281,7 @@ const server = createServer(async (req, res) => {
         return json(res, 409, {
           error: c.terminalLogin
             ? `${c.name} signs in in the terminal: ${c.terminalLogin}`
-            : `${c.name} takes an API key: ${(c.apiKeys ?? []).join(' or ')}, as a team secret`,
+            : `${c.name} takes an API key: ${c.keyFrom ? `add ${c.keyFrom}'s on the page (PUT /keys/${c.keyFrom}), or ` : ''}${(c.apiKeys ?? []).join(' or ')} in its environment`,
         });
       if (parts.length === 2 && req.method === 'POST') return json(res, 200, await s.start(childEnv));
       if (parts.length === 2 && req.method === 'GET') return json(res, 200, s.status);

@@ -1,6 +1,7 @@
 /**
  * The home's page, for its person: each CLI, signed in or not and until when, its sign-in, its
- * refresh, and the terminal. Plain HTML over the runner's JSON API, on the same origin.
+ * refresh; the providers' keys and the profiles that run them; the terminal. Plain HTML over the
+ * runner's JSON API, on the same origin.
  */
 export const PAGE = `<!doctype html>
 <html lang="en">
@@ -16,12 +17,15 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 syst
 main { max-width: 760px; margin: 0 auto; padding: 24px 16px; }
 header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 h1 { font-size: 20px; margin: 0; font-weight: 600; }
+h2 { font-size: 16px; margin: 28px 0 12px; font-weight: 600; }
+.tags { display: flex; gap: 6px; flex-shrink: 0; }
+select { font: inherit; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
 a { color: var(--accent); }
 .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .name { font-weight: 600; }
-.tag { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; }
+.tag { font-size: 12px; padding: 1px 8px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
 .ok { color: var(--ok); } .warn { color: var(--warn); } .off { color: var(--off); }
 .muted { color: var(--muted); font-size: 13px; }
 button { font: inherit; padding: 5px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); cursor: pointer; }
@@ -36,6 +40,8 @@ code { font: 12px ui-monospace, monospace; background: var(--bg); padding: 1px 5
 <main>
   <header><h1>Agent home</h1><a href="/terminal/">Terminal</a></header>
   <div class="grid" id="clis"><p class="muted">Loading…</p></div>
+  <h2>Keys</h2>
+  <div class="grid" id="keys"></div>
 </main>
 <script>
 const $ = (tag, attrs = {}, ...kids) => {
@@ -101,8 +107,14 @@ function card(c) {
     box.append(steps);
   } else if (c.signInWith === 'terminal') {
     box.append($('span', { class: 'muted' }, 'Sign in from the ', $('a', { href: '/terminal/' }, 'terminal'), ': ', $('code', {}, c.command)));
+  } else if (c.profile) {
+    const p = providers[c.profile.provider];
+    box.append($('span', { class: 'muted' }, (p ? p.name : c.profile.provider) + ' on ' + HARNESS[c.profile.harness] + (c.profile.model ? ', ' + c.profile.model : '')));
+    box.append($('div', { class: 'row' }, $('button', { onclick: () => dropProfile(c.name) }, 'Remove')));
   } else if (c.signInWith === 'api-key') {
-    box.append($('span', { class: 'muted' }, 'Takes an API key, as a team secret: ', $('code', {}, c.apiKeys[0])));
+    box.append(c.keyFrom
+      ? $('span', { class: 'muted' }, 'Takes a key: ' + (providers[c.keyFrom] ? providers[c.keyFrom].name : c.keyFrom) + ', under Keys')
+      : $('span', { class: 'muted' }, 'Takes an API key in its environment: ', $('code', {}, c.apiKeys[0])));
   } else {
     const actions = $('div', { class: 'row' });
     actions.append($('button', { onclick: () => connect(c.name) }, c.signedIn ? 'Sign in again' : 'Sign in'));
@@ -113,10 +125,63 @@ function card(c) {
   return box;
 }
 
+const HARNESS = { claude: 'Claude Code', codex: 'Codex' };
+let providers = {};
+let profiles = [];
+/** A provider: its key (set or not, never shown), and a profile per harness that can run it. */
+function keyCard(p) {
+  const box = $('div', { class: 'card' },
+    $('div', { class: 'row' }, $('span', { class: 'name' }, p.name),
+      $('span', { class: 'tags' },
+        $('span', { class: 'tag off' }, p.billing === 'plan' ? 'plan' : 'by use'),
+        $('span', { class: 'tag ' + (p.set ? 'ok' : 'off') }, p.set ? 'key set' : 'no key'))));
+  if (!p.set) {
+    const input = $('input', { type: 'password', placeholder: 'Key', autocomplete: 'off' });
+    box.append(input, $('div', { class: 'row' }, $('button', { onclick: () => putKey(p.id, input.value.trim()) }, 'Save')));
+  } else {
+    if (p.cli) box.append($('span', { class: 'muted' }, 'Used by ' + p.cli));
+    for (const h of p.harnesses) {
+      const name = p.id + '-' + h;
+      if (profiles.some((q) => q.name === name)) { box.append($('span', { class: 'muted' }, HARNESS[h] + ': ', $('code', {}, '/acp/' + name))); continue; }
+      const needs = h === 'codex' || p.claudeNeedsModel;
+      const model = $('input', { placeholder: (needs ? 'Model' : 'Model (optional)') + (p.example ? ', e.g. ' + p.example : '') });
+      box.append($('div', { class: 'steps' }, model, $('button', { onclick: () => addProfile(p.id, h, model.value.trim()) }, 'Run with ' + HARNESS[h])));
+    }
+    box.append($('div', { class: 'row' }, $('button', { onclick: () => putKey(p.id, '') }, 'Remove key')));
+  }
+  if (messages['key:' + p.id]) box.append($('span', { class: 'muted' }, messages['key:' + p.id]));
+  return box;
+}
+
 let last = [];
 function render() {
   const grid = document.getElementById('clis');
   grid.replaceChildren(...last.map(card));
+  document.getElementById('keys').replaceChildren(...Object.values(providers).map(keyCard));
+}
+async function loadKeys() {
+  const r = await call('GET', '/keys');
+  if (!r.ok) return;
+  providers = Object.fromEntries(r.body.providers.map((p) => [p.id, p]));
+  profiles = r.body.profiles;
+  render();
+}
+async function putKey(id, key) {
+  const r = key ? await call('PUT', '/keys/' + id, { key }) : await call('DELETE', '/keys/' + id);
+  messages['key:' + id] = r.ok ? '' : (r.body.error || 'Failed');
+  await loadKeys();
+  await load();
+}
+async function addProfile(provider, harness, model) {
+  const r = await call('POST', '/profiles', { provider, harness, ...(model ? { model } : {}) });
+  messages['key:' + provider] = r.ok ? '' : (r.body.error || 'Failed');
+  await loadKeys();
+  await load();
+}
+async function dropProfile(name) {
+  await call('DELETE', '/profiles/' + name);
+  await loadKeys();
+  await load();
 }
 async function load() {
   const r = await call('GET', '/status');
@@ -147,6 +212,7 @@ async function loadUsage() {
   if (r.ok) { usage = Object.fromEntries(r.body.clis.map((c) => [c.name, c])); render(); }
 }
 load();
+loadKeys();
 loadUsage();
 setInterval(load, 5000);
 setInterval(loadUsage, 30000);

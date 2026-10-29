@@ -23,10 +23,7 @@ ARG COPILOT_VERSION=
 ARG CURSOR_VERSION=
 ARG GROK_VERSION=
 ARG VIBE_VERSION=
-ARG OPENCODE_VERSION=
 ARG GEMINI_VERSION=
-ARG QWEN_VERSION=
-ARG CLINE_VERSION=
 ARG TTYD_VERSION=
 
 # One line per download: what, its sha256, how it was checked.
@@ -39,8 +36,6 @@ ENV DISABLE_AUTOUPDATER=1 \
     DISABLE_UPDATES=1 \
     COPILOT_AUTO_UPDATE=false \
     GROK_DISABLE_AUTOUPDATER=1 \
-    OPENCODE_DISABLE_AUTOUPDATE=1 \
-    CLINE_NO_AUTO_UPDATE=1 \
     BROWSER=/usr/local/bin/show-url
 
 # Claude Code: the native binary and its checksum, from the bucket its installer reads.
@@ -114,23 +109,8 @@ RUN V="${VIBE_VERSION:-$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq
 # it is installed: `npm-verified <package> <version> <integrity>` prints the tarball's path.
 COPY bin/npm-verified /usr/local/bin/npm-verified
 
-# OpenCode: its binary from the GitHub release. Updates off in its system-wide config, which it
-# merges over the person's own.
-ARG OPENCODE_SHA256=
-RUN V="${OPENCODE_VERSION:-$(curl -fsSL https://api.github.com/repos/anomalyco/opencode/releases/latest | jq -r .tag_name | sed 's/^v//')}" \
-  && A=opencode-linux-x64.tar.gz \
-  && H="${OPENCODE_SHA256:-$(gh-digest anomalyco/opencode "v${V}" "$A")}" \
-  && curl -fsSL "https://github.com/anomalyco/opencode/releases/download/v${V}/$A" -o "/tmp/$A" \
-  && echo "$H  /tmp/$A" | sha256sum -c - \
-  && printf 'OpenCode\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
-  && mkdir -p /tmp/opencode && tar -xzf "/tmp/$A" -C /tmp/opencode \
-  && install -m 755 "$(find /tmp/opencode -type f -name opencode | head -n 1)" /usr/local/bin/opencode \
-  && rm -rf "/tmp/$A" /tmp/opencode \
-  && mkdir -p /etc/opencode && echo '{"autoupdate":false}' > /etc/opencode/opencode.json
-
-# Gemini CLI: from npm. API keys only (Google's consumer plans are not for a computer hosted for
-# someone else), updates and usage statistics off, in its system settings, which win over the
-# person's own.
+# Gemini CLI: from npm. API keys only (it serves no consumer plan since 2026-06-18), updates and
+# usage statistics off, in its system settings, which win over the person's own.
 ARG GEMINI_INTEGRITY=
 RUN V="${GEMINI_VERSION:-$(npm view @google/gemini-cli version)}" \
   && F="$(npm-verified @google/gemini-cli "$V" "$GEMINI_INTEGRITY")" \
@@ -138,32 +118,6 @@ RUN V="${GEMINI_VERSION:-$(npm view @google/gemini-cli version)}" \
   && npm install -g --no-fund --no-audit "$F" && rm "$F" \
   && mkdir -p /etc/gemini-cli \
   && echo '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}},"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false},"privacy":{"usageStatisticsEnabled":false}}' > /etc/gemini-cli/settings.json
-
-# Qwen Code: its standalone package from the GitHub release (with its own Node), under /opt. Its
-# launcher finds that Node from its own path, so it is called through a script, never a link.
-# API keys only since its free sign-in ended (2026-04); updates and usage statistics off.
-ARG QWEN_SHA256=
-RUN V="${QWEN_VERSION:-$(npm view @qwen-code/qwen-code version)}" \
-  && A=qwen-code-linux-x64.tar.gz \
-  && H="${QWEN_SHA256:-$(gh-digest QwenLM/qwen-code "v${V}" "$A")}" \
-  && curl -fsSL "https://github.com/QwenLM/qwen-code/releases/download/v${V}/$A" -o "/tmp/$A" \
-  && echo "$H  /tmp/$A" | sha256sum -c - \
-  && printf 'Qwen Code\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
-  && mkdir -p /opt/qwen-code && tar -xzf "/tmp/$A" -C /opt/qwen-code && rm "/tmp/$A" \
-  && Q="$(find /opt/qwen-code -path '*/bin/qwen' -type f | head -n 1)" && test -n "$Q" \
-  && printf '#!/bin/sh\nexec %s "$@"\n' "$Q" > /usr/local/bin/qwen && chmod 755 /usr/local/bin/qwen \
-  && qwen --version \
-  && mkdir -p /etc/qwen-code \
-  && echo '{"general":{"enableAutoUpdate":false},"privacy":{"usageStatisticsEnabled":false}}' > /etc/qwen-code/settings.json
-
-# Cline: from npm, with its native binary (@cline/cli-linux-x64, which npm checks against the
-# registry). Its updates are off by CLINE_NO_AUTO_UPDATE; its telemetry setting lives only in the
-# person's own settings, which the briq recipe writes at boot.
-ARG CLINE_INTEGRITY=
-RUN V="${CLINE_VERSION:-$(npm view cline version)}" \
-  && F="$(npm-verified cline "$V" "$CLINE_INTEGRITY")" \
-  && printf 'Cline\t%s\tthe npm registry integrity\n' "$(sha256sum "$F" | cut -d' ' -f1)" >> /etc/agent-home/downloads \
-  && npm install -g --no-fund --no-audit "$F" && rm "$F"
 
 # The terminal page: ttyd, one static binary.
 RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/releases/latest | jq -r .tag_name)}" \

@@ -106,7 +106,7 @@ export class Agent {
     const [cmd, ...args] = this.cli.acp;
     const child = spawn(cmd as string, args, {
       cwd: this.cwd,
-      env: this.env,
+      env: withEnv(this.env, this.cli.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;
@@ -191,4 +191,14 @@ export class Agent {
       this.events.notification(msg);
     }
   }
+}
+
+/** The runner's variables for its CLIs, with a CLI's own over them: `null` removes one. */
+export function withEnv(env: Record<string, string>, own: Record<string, string | null> | undefined): Record<string, string> {
+  const out = { ...env };
+  for (const [k, v] of Object.entries(own ?? {})) {
+    if (v === null) delete out[k];
+    else out[k] = v;
+  }
+  return out;
 }

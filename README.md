@@ -19,10 +19,10 @@ usual tools) plus:
 | Cursor | `agent` | `NO_OPEN_BROWSER=1 agent login` |
 | Grok Build | `grok` | `grok login --device-auth` |
 | Mistral Vibe | `vibe` | `vibe --setup` |
-| OpenCode | `opencode` | `opencode auth login` (its Zen and Go keys, Copilot, xAI, ChatGPT) |
-| Cline | `cline` | `cline auth` (a Cline account by device code, or a provider's key) |
-| Gemini CLI | `gemini` | API key only (`GEMINI_API_KEY`), enforced by its system settings |
-| Qwen Code | `qwen` | API key only (`QWENCLOUD_API_KEY`…): its free sign-in ended in April 2026 |
+| Gemini CLI | `gemini` | a key only (`GEMINI_API_KEY`), enforced by its system settings: it serves no consumer plan since June 2026 |
+
+Other providers' keys (the GLM, Kimi, MiniMax and Alibaba coding plans, DeepSeek, OpenRouter) run
+on Claude Code or Codex as profiles, added on the runner's page.
 
 and `ttyd` for a terminal page, and `agent-home-runner`: it drives the CLIs over ACP for apps and
 keeps their sessions while nobody is connected ([runner/README.md](runner/README.md)). Every version, as the last build left them:
@@ -36,10 +36,8 @@ keeps their sessions while nobody is connected ([runner/README.md](runner/README
   here, for `linux/amd64`.
 - **Self-update off.** `DISABLE_AUTOUPDATER` and `DISABLE_UPDATES` (Claude Code),
   `/etc/codex/config.toml`, `COPILOT_AUTO_UPDATE=false`, `GROK_DISABLE_AUTOUPDATER` and
-  `/etc/grok/managed_config.toml`, `OPENCODE_DISABLE_AUTOUPDATE` and `/etc/opencode/opencode.json`,
-  `/etc/gemini-cli/settings.json`, `/etc/qwen-code/settings.json`, `CLINE_NO_AUTO_UPDATE`. Cursor
-  and Vibe read theirs from the user's own config, and Cline its telemetry setting, which the briq
-  recipe writes at boot. Gemini's and Qwen's usage statistics are off in their system settings.
+  `/etc/grok/managed_config.toml`, `/etc/gemini-cli/settings.json`. Cursor and Vibe read theirs
+  from the user's own config. Gemini's usage statistics are off in its system settings.
 - **Checked downloads.** Each one against its publisher's checksum (Claude Code's manifest, the
   GitHub release digests, ttyd's `SHA256SUMS`, PyPI's); Cursor and Grok publish none, so their
   hashes are recorded. Every sha256 and the base image's digest are in REFERENCE.md.
