@@ -17,14 +17,13 @@ app ──ACP over WebSocket or HTTP──▶ runner ──ACP over stdio──�
 | `cursor` | `agent acp` | `agent login` |
 | `grok` | `grok agent stdio` | `grok login --device-auth` |
 | `vibe` | `vibe-acp` | `vibe --setup` |
-| `opencode` | `opencode acp` | in the terminal: `opencode auth login` (a provider to pick first) |
-| `cline` | `cline --acp` | in the terminal: `cline auth` (a Cline account by device code, or a key) |
-| `gemini` | `gemini --acp` | API key only: `GEMINI_API_KEY` or `GOOGLE_API_KEY`, as a team secret |
-| `qwen` | `qwen --acp` | API key only: `QWENCLOUD_API_KEY`, `BAILIAN_CODING_PLAN_API_KEY`… |
+| `gemini` | `gemini --acp` | a key only: Google's, added on the page, or `GEMINI_API_KEY` in the environment |
+
+and a **profile** for each provider key the person adds (below): `zai-claude`, `openrouter-codex`…
 
 Three ways to sign in, said by `/status` (`signInWith`): `page` (the runner runs the vendor's
 command and shows its link and code), `terminal` (the command asks questions first: the page
-names it), `api-key` (the CLI counts as signed in when one of its variables is set).
+names it), `api-key` (the CLI counts as signed in when its key is set).
 
 A CLI may offer an ACP sign-in method the home never allows (`blockedAuth`): the runner leaves it
 out of the CLI's `initialize` answer and refuses an `authenticate` with it. Gemini's
@@ -48,7 +47,8 @@ RUNNER_TOKEN=… node src/main.ts
 | `RUNNER_CWD` | `/work` | Where the CLIs start |
 | `RUNNER_STATE` | `/work/.runner` | Session logs, `sessions/<cli>/<id>.jsonl`, mode 0600 |
 | `RUNNER_MAX_TURNS` | `2` | Turns at once for the whole home; the rest wait in order |
-| `RUNNER_ROUTE` | `claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe` | The CLIs `/acp` may pick, in order of preference |
+| `RUNNER_ROUTE` | `claude,codex,cursor,copilot,grok,gemini,vibe` | The CLIs `/acp` may pick, in order of preference; a profile only when named here |
+| `RUNNER_LOGINS` | `/work/.logins` | Where the keys (`keys.json`, mode 0600) and each profile's settings folder (`profiles/<name>/`) live |
 | `RUNNER_CLIS` | the table above | A JSON array in its place (`src/clis.ts`, `Cli`) |
 | `RUNNER_TERMINAL` | `http://127.0.0.1:7681` | ttyd, started with `--base-path /terminal`, served at `/terminal/` |
 
@@ -70,6 +70,11 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | `DELETE /connect/<cli>` | Stops it |
 | `GET /` | The home's page, for its person: each CLI signed in or not and until when, its sign-in, its refresh, a link to the terminal. Opened once with `?token=`, which it keeps as a cookie (HttpOnly, SameSite=Strict) and drops from the address |
 | `/terminal/` | ttyd, on localhost behind the runner: the page and its WebSocket. The runner's key and cookie never reach it |
+| `GET /keys` | Each provider: whether its key is set (never the key), its billing (`plan` or `use`), the harnesses that can run it; and the profiles |
+| `PUT /keys/<provider>` | `{ key }`: kept on the home. Its profiles and the CLI that takes it start again with it on their next use |
+| `DELETE /keys/<provider>` | Forgets it |
+| `POST /profiles` | `{ provider, harness, model? }`: a CLI of its own, `/acp/<provider>-<harness>` |
+| `DELETE /profiles/<name>` | Removes one; its session logs stay |
 | `GET /healthz` | No key |
 
 **What the runner adds to ACP**, all of it standard ACP otherwise:
@@ -92,7 +97,7 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 **`/acp`, one agent for every CLI.** `initialize` announces what every CLI supports (text
 prompts, stdio MCP servers, `session/load`), and starts nothing. A `session/new` goes to:
 1. the CLI it asks for: `_meta: { agentHome: { cli: "codex" } }`;
-2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,opencode,cline,copilot,grok,gemini,qwen,vibe`,
+2. else the least busy of the CLIs in `RUNNER_ROUTE` (default `claude,codex,cursor,copilot,grok,gemini,vibe`,
    the earlier first), leaving out one signed out and one at its plan's limit, and putting last
    one whose plan is nearly used up (a window at 90% or more in its last report: Claude's
    `unifiedWindows`).
@@ -124,6 +129,39 @@ For an ACP client that only starts agents on its own machine (Zed, JetBrains, VS
 its cookie). The client's folder does not exist on the home: a session's `cwd` becomes
 `AGENT_HOME_CWD`, or `/work/<the folder's name>`. The agent works on the home's files, not the
 laptop's. Measured on the staging home: `acpx` through it, Codex in 11 s, `/acp` (Claude) in 6 s.
+
+## Keys and profiles
+
+A provider the person brings a key for runs on a harness of the image: Claude Code on an
+Anthropic-compatible endpoint, Codex on one that serves OpenAI's Responses API (the only API Codex
+speaks since 2026-02). The table is `src/providers.ts`:
+
+| Provider | Billing | Claude Code | Codex |
+| --- | --- | --- | --- |
+| `zai`, GLM Coding Plan | plan | `api.z.ai/api/anthropic`, model optional | |
+| `kimi`, Kimi Code | plan | `api.kimi.com/coding/`, a model | |
+| `minimax`, MiniMax Token Plan | plan | `api.minimax.io/anthropic`, a model | |
+| `alibaba`, Alibaba Coding Plan | plan | `coding-intl.dashscope.aliyuncs.com/apps/anthropic`, a model | |
+| `deepseek` | use | `api.deepseek.com/anthropic`, model optional | |
+| `openrouter` | use | `openrouter.ai/api`, a model | `openrouter.ai/api/v1`, a model |
+| `google`, Gemini API | use | the `gemini` CLI takes it | |
+
+A profile is `<provider>-<harness>`, a CLI of its own: the harness's adapter, with the provider's
+endpoint and key and the model (all of Claude Code's model names set to it), in a settings
+folder of its own under `RUNNER_LOGINS/profiles/`. Never the person's own Claude or Codex folder:
+the harness would send their subscription's token to another vendor. Claude Code's non-essential
+traffic is off (nothing to Anthropic with another vendor's key). A Codex profile's provider is in
+its `config.toml`, its key in a variable that file names.
+
+Keys live on the home, in one file only the runner's user reads; the API never sends one back.
+They are as safe as the sign-ins beside them: any process on the home can read both (ADR 0021,
+plan). `/acp` never picks a profile unless `RUNNER_ROUTE` names it: a key may be billed by use.
+`/usage` leaves out a profile's cost, which Claude Code reckons at Anthropic's prices.
+
+Measured with the real harnesses against a fake provider on localhost (2026-10-29): Claude Code
+2.1.304 through `claude-agent-acp` 0.98.0 sent one request, `/v1/messages`, with the profile's key and model and nothing
+else; Codex 0.165.0 called `/api/v1/responses` with the key and the model, and answered (with a
+warning that it has no metadata for the model).
 
 ## Usage
 

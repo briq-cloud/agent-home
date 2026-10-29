@@ -3,7 +3,8 @@ import { createInterface } from 'node:readline';
 
 /**
  * An ACP agent on stdin and stdout for the tests, raw JSON-RPC. A prompt's text says what it
- * does: `hello` answers, `ask` asks a permission first, `slow` takes half a second, `die` exits.
+ * does: `hello` answers, `ask` asks a permission first, `slow` takes half a second, `die` exits,
+ * `env` tells what a profile set.
  */
 type Msg = { jsonrpc: '2.0'; id?: number | string; method?: string; params?: any; result?: any; error?: any };
 
@@ -58,6 +59,13 @@ async function handle(m: Msg): Promise<unknown> {
       if (text === 'die') process.exit(1);
       if (text === 'limit') throw Object.assign(new Error("You've hit your usage limit. Try again later."), { code: -32603 });
       if (text === 'slow') await new Promise((r) => setTimeout(r, 500));
+      // What a profile gives its harness, for a test to check.
+      const e = process.env;
+      if (text === 'env')
+        update(sessionId, JSON.stringify({
+          base: e.ANTHROPIC_BASE_URL, token: e.ANTHROPIC_AUTH_TOKEN, apiKey: e.ANTHROPIC_API_KEY, model: e.ANTHROPIC_MODEL,
+          config: e.CLAUDE_CONFIG_DIR, codexHome: e.CODEX_HOME, codexKey: e.AGENT_HOME_PROVIDER_KEY, gemini: e.GEMINI_API_KEY,
+        }));
       if (text === 'ask') {
         update(sessionId, 'asking');
         const r = await ask('session/request_permission', {
@@ -69,7 +77,7 @@ async function handle(m: Msg): Promise<unknown> {
           ],
         });
         update(sessionId, `outcome: ${r.result?.outcome?.optionId ?? r.result?.outcome?.outcome}`);
-      } else update(sessionId, 'hi');
+      } else if (text !== 'env') update(sessionId, 'hi');
       // As Claude reports it: context use, the session's cost so far, its plan's limits; then the
       // session's token totals with the answer.
       const turns = (counts.get(sessionId) ?? 0) + 1;

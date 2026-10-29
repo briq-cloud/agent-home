@@ -85,19 +85,9 @@ jobs:
             echo "cursor=$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)"
             echo "grok=$(curl -fsSL https://x.ai/cli/stable)"
             echo "vibe=$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)"
-            opencode="$(gh api repos/anomalyco/opencode/releases/latest --jq .tag_name | sed 's/^v//')"
-            echo "opencode=$opencode"
-            echo "opencode_sha256=$(digest anomalyco/opencode "v$opencode" opencode-linux-x64.tar.gz)"
             gemini="$(npm view @google/gemini-cli version)"
             echo "gemini=$gemini"
             echo "gemini_integrity=$(npm view "@google/gemini-cli@$gemini" dist.integrity)"
-            # Qwen Code's "latest" GitHub release is its SDK's: the CLI's version comes from npm.
-            qwen="$(npm view @qwen-code/qwen-code version)"
-            echo "qwen=$qwen"
-            echo "qwen_sha256=$(digest QwenLM/qwen-code "v$qwen" qwen-code-linux-x64.tar.gz)"
-            cline="$(npm view cline version)"
-            echo "cline=$cline"
-            echo "cline_integrity=$(npm view "cline@$cline" dist.integrity)"
             echo "ttyd=$(gh api repos/tsl0922/ttyd/releases/latest --jq .tag_name)"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -122,14 +112,8 @@ jobs:
             CURSOR_VERSION=${{ steps.v.outputs.cursor }}
             GROK_VERSION=${{ steps.v.outputs.grok }}
             VIBE_VERSION=${{ steps.v.outputs.vibe }}
-            OPENCODE_VERSION=${{ steps.v.outputs.opencode }}
-            OPENCODE_SHA256=${{ steps.v.outputs.opencode_sha256 }}
             GEMINI_VERSION=${{ steps.v.outputs.gemini }}
             GEMINI_INTEGRITY=${{ steps.v.outputs.gemini_integrity }}
-            QWEN_VERSION=${{ steps.v.outputs.qwen }}
-            QWEN_SHA256=${{ steps.v.outputs.qwen_sha256 }}
-            CLINE_VERSION=${{ steps.v.outputs.cline }}
-            CLINE_INTEGRITY=${{ steps.v.outputs.cline_integrity }}
             TTYD_VERSION=${{ steps.v.outputs.ttyd }}
           tags: |
             ${{ env.IMAGE }}:latest

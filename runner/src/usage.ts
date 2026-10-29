@@ -77,9 +77,10 @@ function addCost(a: Cost | undefined, amount: number, currency: string): Cost {
 /**
  * What the home's sessions used, read from the runner's logs: tokens and cost as the CLIs report
  * them (each a session's running total, so a turn's share is the difference with the turn
- * before), the number of turns, and the last word of each CLI on its plan's limits.
+ * before), the number of turns, and the last word of each CLI on its plan's limits. `noCost`: the
+ * CLIs whose cost is not what they report, profiles priced by Claude Code at Anthropic's prices.
  */
-export function usageReport(stateDir: string, clis: string[]): { clis: CliUsage[]; sessions: SessionUsage[] } {
+export function usageReport(stateDir: string, clis: string[], noCost = new Set<string>()): { clis: CliUsage[]; sessions: SessionUsage[] } {
   const out: CliUsage[] = [];
   const sessions: SessionUsage[] = [];
   for (const cli of clis) {
@@ -108,7 +109,7 @@ export function usageReport(stateDir: string, clis: string[]): { clis: CliUsage[
         if (m.method === 'session/update' && p.update?.sessionUpdate === 'usage_update') {
           const u = p.update;
           if (typeof u.used === 'number' && typeof u.size === 'number') s.context = { used: u.used, size: u.size };
-          if (u.cost && typeof u.cost.amount === 'number') cost = { amount: u.cost.amount, currency: u.cost.currency ?? 'USD' };
+          if (!noCost.has(cli) && u.cost && typeof u.cost.amount === 'number') cost = { amount: u.cost.amount, currency: u.cost.currency ?? 'USD' };
           for (const [key, value] of Object.entries((u._meta ?? {}) as Record<string, unknown>))
             if (/rate.?limit|quota/i.test(key) && value) total.limits = { key, value, ...(s.lastTurnAt ? { at: s.lastTurnAt } : {}) };
         } else if (m.method === '_runner/turn' && p.state === 'idle' && p.stopReason !== 'cancelled' && p.at) {
