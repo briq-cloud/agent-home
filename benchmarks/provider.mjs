@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -62,14 +63,22 @@ export default class BenchmarkProvider {
     } catch (e) {
       error = e.message === "trial-timeout" ? "timeout" : "execution-or-grader-error";
     }
+    const totalMs = performance.now() - started;
+    const accountingStarted = performance.now();
     const billing = (await this.#runtime.end?.()) ?? { costUsd: null, provenance: "unavailable" };
     const record = {
       taskId: task.id,
+      fixtureSha256: createHash("sha256")
+        .update(
+          JSON.stringify({ id: task.id, prompt: task.prompt, files: task.files, refs: task.refs }),
+        )
+        .digest("hex"),
       arm,
       grade,
       error,
       setupMs,
-      totalMs: performance.now() - started,
+      totalMs,
+      accountingWaitMs: performance.now() - accountingStarted,
       context: pack
         ? {
             cacheState: pack.cacheState,

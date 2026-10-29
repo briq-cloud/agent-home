@@ -21,7 +21,8 @@ BENCH_PAID=1 BENCH_KEYS_FILE=/work/.logins/keys.json npm run live
 
 `BENCH_RUNNER_SOURCE` can name an existing runner source folder (with its installed adapters).
 `BENCH_RESULTS` chooses a new output folder. `BENCH_MODEL` selects a fixed OpenRouter model ID.
-The default is `qwen/qwen3-coder`; the catalog's canonical identity and prices are recorded at startup.
+The default is `anthropic/claude-haiku-5.5`; the catalog's canonical identity and prices are recorded at startup.
+Anthropic models pin the Anthropic first-party backend.
 No `auto`, `latest` or moving `~` alias is accepted. Reports include the model actually billed.
 
 - Decisions: 24 human policy labels, split 12/12 into development and held-out cases. Clef Flash and
@@ -52,14 +53,17 @@ A localhost relay holds the OpenRouter key and only forwards `/v1/messages` to O
 receives a random relay credential. Each response's generation ID is reconciled through OpenRouter's
 `/generation` metadata API; cost is `total_cost`, not Claude's Anthropic-price estimate.
 
-The relay pins the model and caps output at 2048 tokens. Requests are sequential and billing is
-reconciled before another request is admitted. Unknown billing stops further paid requests. A
+The relay pins the model and caps output at 2048 tokens. Forwarded requests are sequential. Billing reconciles in the background, with a $0.20 admission
+reservation per unsettled request. Billing is joined after all task executions. Pending costs remain null in provisional records.
+Final `results.json` joins the provider ledger; exhausted reservations wait for settlement.
+Errored model attempts carry explicit zero-cost provenance from OpenRouter’s published error policy.
+Other unknown billing stops further paid requests. A
 threshold cannot guarantee a hard dollar cap: one accepted request can cross it. Cancellation
 cannot undo charges. Paid CI calls are never enabled.
 
-The raw report preserves ACP token counters without assuming cumulative semantics. Total time
-includes fixture setup, agent execution, billing lookup and external grading. Billing lookup is
-benchmark instrumentation; inspect agent and provider timings before making latency claims.
+The raw report preserves ACP token counters without assuming cumulative semantics. Task time
+includes fixture setup, agent execution and external grading. Post-turn billing wait is reported
+separately as `accountingWaitMs`, outside task time. Admission may wait near the budget limit.
 Fresh sessions do not guarantee cold provider caches. Cache counters, order and provider are recorded.
 Costs of failures remain in totals. Unknown cost stays `null`. Home compute is billed separately by
 briq and is not guessed into the API-dollar total.

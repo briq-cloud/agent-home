@@ -3,13 +3,21 @@ import { randomBytes } from "node:crypto";
 
 /** API-key-only local relay. Never points a subscription CLI at a proxy. */
 export class Meter {
-  constructor({ key, model, budgetUsd = 2, perTrialUsd = 0.15, fetcher = fetch }) {
-    Object.assign(this, { key, model, budgetUsd, perTrialUsd, fetcher });
+  constructor({
+    key,
+    model,
+    budgetUsd = 2,
+    perTrialUsd = 0.15,
+    fetcher = fetch,
+    onRecord = () => {},
+  }) {
+    Object.assign(this, { key, model, budgetUsd, perTrialUsd, fetcher, onRecord });
     this.token = randomBytes(24).toString("hex");
     this.records = [];
     this.blocked = false;
     this.active = null;
     this.tail = Promise.resolve();
+    this.pendingBilling = new Set();
   }
   get spent() {
     return this.records.reduce((n, r) => n + (r.costUsd ?? 0), 0);
@@ -20,13 +28,17 @@ export class Meter {
   }
   async end() {
     await this.tail;
+    // Capture late native helper requests without waiting for provider billing indexing.
+    await new Promise((r) => setTimeout(r, 300));
+    await this.tail;
     const records = this.records.slice(this.active?.start ?? this.records.length);
     this.active = null;
     return {
       costUsd: records.some((r) => r.costUsd === null)
         ? null
         : records.reduce((n, r) => n + r.costUsd, 0),
-      provenance: "openrouter-generation-total_cost",
+      provenance: "openrouter-generation-ledger-or-error-policy",
+      billingPending: records.some((r) => r.costUsd === null),
       generations: records,
     };
   }
@@ -42,7 +54,13 @@ export class Meter {
     await new Promise((r) => this.server.listen(0, "127.0.0.1", r));
     return `http://127.0.0.1:${this.server.address().port}`;
   }
+  async settle() {
+    await this.tail;
+    await Promise.allSettled([...this.pendingBilling]);
+  }
   async close() {
+    await this.tail;
+    await Promise.allSettled([...this.pendingBilling]);
     this.server.closeAllConnections();
     await new Promise((r) => this.server.close(r));
   }
@@ -82,10 +100,34 @@ export class Meter {
     }
     // The caller cannot switch models, enable paid provider tools, or ask for unbounded output.
     body.model = this.model;
+    if (this.model.startsWith("anthropic/"))
+      body.provider = { only: ["Anthropic"], allow_fallbacks: false };
     body.max_tokens = Math.min(Math.max(Number(body.max_tokens) || 2048, 1), 2048);
     delete body.plugins;
     delete body.web_search_options;
     delete body.thinking;
+    // Reconcile off the agent's critical path. Reserve conservatively for unsettled calls.
+    // This is an admission allowance, not a provider-price guarantee.
+    while (
+      this.spent + this.records.filter((r) => r.costUsd === null).length * 0.2 + 0.2 >
+        this.budgetUsd &&
+      this.pendingBilling.size &&
+      !this.blocked
+    ) {
+      await Promise.race(this.pendingBilling);
+    }
+    if (
+      this.blocked ||
+      this.spent + this.records.filter((r) => r.costUsd === null).length * 0.2 + 0.2 >
+        this.budgetUsd
+    ) {
+      this.blocked = true;
+      res.writeHead(429);
+      res.end(
+        '{"error":{"type":"rate_limit_error","message":"benchmark admission budget reached"}}',
+      );
+      return;
+    }
     const trialRecords = this.records.slice(this.active.start),
       trialCost = trialRecords.reduce((n, r) => n + (r.costUsd ?? 0), 0);
     if (
@@ -108,9 +150,13 @@ export class Meter {
     };
     this.records.push(record);
     const abort = new AbortController();
+    let clientClosed = false;
     const timer = setTimeout(() => abort.abort(), 90000);
     res.once("close", () => {
-      if (!res.writableEnded) abort.abort();
+      if (!res.writableEnded) {
+        clientClosed = true;
+        if (record.generationId) abort.abort();
+      }
     });
     try {
       const upstream = await this.fetcher("https://openrouter.ai/api/v1/messages", {
@@ -127,6 +173,12 @@ export class Meter {
       const headerId =
         upstream.headers.get("x-generation-id") ?? upstream.headers.get("request-id");
       if (headerId?.startsWith("gen-")) record.generationId = headerId;
+      this.onRecord({ ...record });
+      if (clientClosed) {
+        abort.abort();
+        await upstream.body?.cancel();
+        return;
+      }
       res.writeHead(upstream.status, {
         "content-type": upstream.headers.get("content-type") ?? "application/json",
       });
@@ -136,12 +188,14 @@ export class Meter {
       const inspect = (line) => {
         try {
           const j = JSON.parse(line.startsWith("data:") ? line.slice(5).trim() : line);
+          if (j.type === "error" || j.error)
+            record.upstreamErrorType = j.error?.type ?? "upstream-error";
           const id = j.message?.id ?? j.id;
           if (typeof id === "string" && id.startsWith("gen-")) record.generationId = id;
         } catch {}
       };
       for await (const chunk of upstream.body) {
-        res.write(chunk);
+        if (!clientClosed) res.write(chunk);
         const text = decoder.decode(chunk, { stream: true });
         pending += text;
         whole += text;
@@ -155,13 +209,44 @@ export class Meter {
       inspect(pending);
       if (!record.generationId) inspect(whole);
       res.end();
-      if (record.generationId) {
-        for (let attempt = 0; attempt < 6; attempt++) {
-          if (attempt) await new Promise((r) => setTimeout(r, 500));
+    } catch (e) {
+      record.transportError = clientClosed ? "client-cancelled" : e.name;
+      if (!clientClosed) {
+        if (!res.headersSent) res.writeHead(502);
+        res.end();
+      }
+    } finally {
+      clearTimeout(timer);
+      // OpenRouter does not bill errored model attempts; this relay enables no paid auxiliary tools.
+      // Preserve provenance rather than representing this as a generation-ledger observation.
+      if ((record.status !== null && record.status >= 400) || record.upstreamErrorType) {
+        record.costUsd = 0;
+        record.costSource = "openrouter-error-policy";
+        this.onRecord({ ...record });
+      } else if (record.generationId) {
+        const billing = this.reconcile(record).finally(() => {
+          this.pendingBilling.delete(billing);
+          this.onRecord({ ...record });
+          if (record.costUsd === null) this.blocked = true;
+        });
+        this.pendingBilling.add(billing);
+      } else {
+        this.blocked = true;
+        this.onRecord({ ...record });
+      }
+    }
+  }
+  async reconcile(record) {
+    const started = performance.now();
+    try {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        if (attempt) await new Promise((r) => setTimeout(r, 1500));
+        try {
           const response = await this.fetcher(
             `https://openrouter.ai/api/v1/generation?id=${encodeURIComponent(record.generationId)}`,
-            { headers: { authorization: `Bearer ${this.key}` }, signal: AbortSignal.timeout(8000) },
+            { headers: { authorization: `Bearer ${this.key}` }, signal: AbortSignal.timeout(5000) },
           );
+          record.billingStatus = response.status;
           const data = (await response.json()).data;
           if (
             response.ok &&
@@ -170,6 +255,7 @@ export class Meter {
             data.total_cost >= 0
           ) {
             record.costUsd = data.total_cost;
+            record.costSource = "openrouter-generation-total_cost";
             record.provider = data.provider_name;
             record.actualModel = data.model;
             record.providerMs = data.generation_time;
@@ -178,13 +264,15 @@ export class Meter {
               output: data.native_tokens_completion,
               cached: data.native_tokens_cached,
             };
-            break;
+            return;
           }
+          if ([401, 402, 403].includes(response.status)) return;
+        } catch (e) {
+          record.billingError = e.name;
         }
       }
     } finally {
-      clearTimeout(timer);
-      if (record.costUsd === null) this.blocked = true;
+      record.billingLookupMs = performance.now() - started;
     }
   }
 }

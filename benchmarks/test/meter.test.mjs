@@ -32,6 +32,7 @@ test("billing uses generation actual cost, pins model and bounds output", async 
   try {
     m.begin({ taskId: "test", arm: "baseline" });
     await (await request(m, url)).text();
+    await m.settle();
     const bill = await m.end();
     assert.equal(bill.costUsd, 0.02);
     assert.equal(seen.model, "fixed");
@@ -48,7 +49,7 @@ test("unreconciled request cost is unknown and blocks subsequent paid traffic", 
       model: "fixed",
       fetcher: async () => {
         calls++;
-        return Response.json({ id: "unrecognized", error: "failed" });
+        return Response.json({ id: "unrecognized", content: "OK" });
       },
     }),
     url = await m.start();
@@ -66,14 +67,16 @@ test("known spend stops the next request at the budget", async () => {
   const m = new Meter({
       key: "secret",
       model: "fixed",
-      budgetUsd: 0.01,
-      fetcher: generation(0.01),
+      budgetUsd: 0.2,
+      fetcher: generation(0.2),
     }),
     url = await m.start();
   try {
     m.begin({ taskId: "test" });
     await (await request(m, url)).text();
     await m.end();
+    await m.settle();
+    assert.equal(m.spent, 0.2);
     assert.throws(() => m.begin({ taskId: "next" }), /meter-stopped/);
   } finally {
     await m.close();
@@ -95,9 +98,66 @@ test("Anthropic message IDs differ from the billing ID in response headers", asy
   try {
     m.begin({ taskId: "header" });
     await (await request(m, url)).text();
+    await m.settle();
     const bill = await m.end();
     assert.equal(bill.costUsd, 0.0001);
     assert.equal(bill.generations[0].generationId, "gen-billing");
+    assert.equal(m.blocked, false);
+  } finally {
+    await m.close();
+  }
+});
+
+test("delayed billing stays off the agent critical path; end waits for both bills", async () => {
+  let release;
+  const ready = new Promise((r) => (release = r));
+  const m = new Meter({
+      key: "secret",
+      model: "fixed",
+      fetcher: async (url) => {
+        if (url.includes("/generation?")) {
+          await ready;
+          return Response.json({ data: { total_cost: 0.01 } });
+        }
+        return new Response('{"id":"msg-test"}', { headers: { "x-generation-id": "gen-test" } });
+      },
+    }),
+    url = await m.start();
+  try {
+    m.begin({ taskId: "async-bills" });
+    await (await request(m, url)).text();
+    const second = await Promise.race([
+      request(m, url),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(Error("billing blocked generation")), 500),
+      ),
+    ]);
+    await second.text();
+    assert.equal(m.records.length, 2);
+    release();
+    await m.end();
+    await m.settle();
+    assert.equal(m.spent, 0.02);
+  } finally {
+    release();
+    await m.close();
+  }
+});
+
+test("failed model attempts have explicit zero-cost policy provenance, not unknown billing", async () => {
+  const m = new Meter({
+      key: "x",
+      model: "fixed",
+      fetcher: async () =>
+        Response.json({ error: { type: "invalid_request_error" } }, { status: 400 }),
+    }),
+    url = await m.start();
+  try {
+    m.begin({ taskId: "error" });
+    await (await request(m, url)).text();
+    const b = await m.end();
+    assert.equal(b.costUsd, 0);
+    assert.equal(b.generations[0].costSource, "openrouter-error-policy");
     assert.equal(m.blocked, false);
   } finally {
     await m.close();

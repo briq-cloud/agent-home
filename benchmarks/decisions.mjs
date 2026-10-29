@@ -2,11 +2,17 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { OpenRouter } from "@openrouter/sdk";
 import { providerKey } from "./live.mjs";
-import { decisionCases } from "./decision-cases.mjs";
+import { decisionCases, rulesBaseline } from "./decision-cases.mjs";
 export function scoreAnswers(answers, expected) {
   for (const k of ["kind", "route"]) {
     const a = answers?.[k];
-    if (a?.type !== "choice" || typeof a.choice !== "string") return { valid: false, pass: false };
+    if (
+      a?.type !== "choice" ||
+      !{ kind: ["lookup", "change", "plan"], route: ["efficient", "capable", "abstain"] }[
+        k
+      ].includes(a.choice)
+    )
+      return { valid: false, pass: false };
   }
   return { valid: true, pass: Object.entries(expected).every(([k, v]) => answers[k].choice === v) };
 }
@@ -101,6 +107,12 @@ export async function runDecisions() {
         JSON.stringify(
           {
             dataset: "24 human-labeled policy packets; not task-quality ground truth",
+            rulesBaseline: decisionCases.map((c) => ({
+              id: c.id,
+              split: c.split,
+              prediction: rulesBaseline(c.text),
+              expected: c.expected,
+            })),
             models,
             spentUsd: spent,
             stopped,

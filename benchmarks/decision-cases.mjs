@@ -39,3 +39,13 @@ export const decisionCases = [
   text,
   expected: { kind, route },
 }));
+
+// A zero-cost control, not the product policy. Intentionally exposes easy-label ceilings.
+export function rulesBaseline(text) {
+  const kind = /^(find|which|read|trace|locate)\b/i.test(text)
+    ? "lookup"
+    : /^(plan|design)\b/i.test(text)
+      ? "plan"
+      : "change";
+  return { kind, route: kind === "plan" ? "capable" : "efficient" };
+}

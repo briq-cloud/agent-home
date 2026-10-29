@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -23,7 +24,7 @@ async function freePort() {
 }
 export async function startLive(root) {
   const key = await providerKey(),
-    model = process.env.BENCH_MODEL ?? "qwen/qwen3-coder";
+    model = process.env.BENCH_MODEL ?? "anthropic/claude-haiku-5.5";
   const catalog = await (
     await fetch("https://openrouter.ai/api/v1/models", { signal: AbortSignal.timeout(15000) })
   ).json();
@@ -43,7 +44,12 @@ export async function startLive(root) {
       2,
     ),
   );
-  const meter = new Meter({ key, model }),
+  const meter = new Meter({
+      key,
+      model,
+      onRecord: (record) =>
+        appendFileSync(join(root, "meter.jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 }),
+    }),
     baseUrl = await meter.start(),
     port = await freePort(),
     token = randomBytes(24).toString("hex");

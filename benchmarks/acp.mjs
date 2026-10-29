@@ -15,6 +15,7 @@ export async function promptAcp({
   let connection,
     sessionId,
     timer,
+    completed = false,
     firstOutputMs = null,
     output = "",
     toolCalls = 0,
@@ -95,6 +96,7 @@ export async function promptAcp({
       sessionId,
       prompt: [{ type: "text", text: prompt }],
     });
+    completed = true;
     return {
       output,
       sessionId,
@@ -115,7 +117,7 @@ export async function promptAcp({
     ]);
   } finally {
     clearTimeout(timer);
-    if (sessionId) {
+    if (sessionId && !completed) {
       try {
         await Promise.race([
           connection.agent.notify(methods.agent.session.cancel, { sessionId }),

@@ -25,13 +25,13 @@ export const tasks = [
       assert.equal(a.setting, "requestTimeoutMs");
       assert.equal(a.default, 2500);
       assert.equal(a.unit, "milliseconds");
-      assert.equal(a.source, "docs/config.md");
+      assert.match(a.source, /(?:^|\/)docs\/config\.md(?:$|[ (#:])/);
     },
   },
   {
     id: "trace-config",
     prompt:
-      "Which configuration value reaches waitRetry? Return JSON with setting and sources (the relevant source file paths). Do not edit files.",
+      "Which configuration property supplies the delay to waitRetry? Return JSON with setting (the property name, not its value or function name) and sources (relative file paths defining and passing the property). Do not edit files.",
     files: {
       "src/config.mjs": "export const config = { retryDelayMs: 125 };\n",
       "src/app.mjs":
@@ -40,8 +40,9 @@ export const tasks = [
         "export const waitRetry = delay => new Promise(r => setTimeout(r, delay));\n",
     },
     refs: ["src/config.mjs", "src/app.mjs", "src/retry.mjs"],
-    check: async (_dir, answer) => {
+    check: async (dir, answer) => {
       const a = jsonAnswer(answer);
+      a.sources = a.sources.map((s) => (s.startsWith(dir + "/") ? s.slice(dir.length + 1) : s));
       assert.equal(a.setting, "retryDelayMs");
       for (const f of ["src/config.mjs", "src/app.mjs"]) assert.ok(a.sources.includes(f));
     },
@@ -150,7 +151,7 @@ export const tasks = [
     check: async (_dir, answer) => {
       const a = jsonAnswer(answer);
       assert.equal(a.limitMb, 192);
-      assert.equal(a.source, "docs/storage.md");
+      assert.match(a.source, /(?:^|\/)docs\/storage\.md(?:$|[ (#:])/);
     },
   },
 ];
