@@ -55,26 +55,34 @@ export async function executeRoute({ dir, taskId, run = exec, fetcher = fetch })
     { mode: 0o600 },
   );
   // cli.mjs starts a fresh ACP runner with isolated settings and the selected API-key model.
-  await run(process.execPath, ["cli.mjs", "live"], {
-    cwd: fileURLToPath(new URL("..", import.meta.url)),
-    env: {
-      ...process.env,
-      BENCH_RESULTS: root,
-      BENCH_MODEL: decision.model,
-      BENCH_SUITE: "medium",
-      BENCH_TASK_IDS: taskId,
-      BENCH_ARMS: "baseline",
-      BENCH_BUDGET_USD: "0.25",
-    },
-    timeout: 400000,
-    maxBuffer: 1000000,
-  });
+  let childError = null;
+  try {
+    await run(process.execPath, ["cli.mjs", "live"], {
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+      env: {
+        ...process.env,
+        BENCH_RESULTS: root,
+        BENCH_MODEL: decision.model,
+        BENCH_SUITE: "medium",
+        BENCH_TASK_IDS: taskId,
+        BENCH_ARMS: "baseline",
+        // Billing reserves $0.20 per unsettled request. Leave room for reconciliation lag;
+        // the medium suite still enforces its separate $0.25 per-trial spend target.
+        BENCH_BUDGET_USD: "0.75",
+      },
+      timeout: 400000,
+      maxBuffer: 1000000,
+    });
+  } catch {
+    childError = "execution exited unsuccessfully; inspect preserved results";
+  }
   const result = JSON.parse(await readFile(join(root, "results.json"), "utf8"));
   console.log(
     JSON.stringify({
       taskId,
       route: decision.route,
       model: decision.model,
+      childError,
       records: result.records.map((r) => ({
         pass: r.grade.pass,
         error: r.error,

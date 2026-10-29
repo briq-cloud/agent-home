@@ -72,7 +72,9 @@ For an actual routed fixture execution, use `ROUTE_TASK_ID=config-precedence` wh
 `BENCH_PAID=1 BENCH_KEYS_FILE=... RUNNER_TOKEN_FILE=... node routing/execute.mjs results/routing config-precedence`.
 The executor rechecks the loopback runner's sign-ins/keys, rejects changed or unavailable routes,
 and starts a fresh isolated Claude ACP session with `BENCH_MODEL` set to the selected model. It
-uses the existing relay and $0.25 target, 180-second task deadline and external acceptance checks.
+uses the existing relay, $0.25 per-trial spend target, 180-second task deadline and external acceptance
+checks. The shared accounting allowance is $0.75 so $0.20 reservations for unsettled requests do not
+serialize every turn behind billing indexing. Both limits are admission targets, not guaranteed caps.
 Only the three trusted medium fixtures are supported. No fallback execution or automatic retry.
 Keep these integration runs separate from the frozen comparison matrix.
 
