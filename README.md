@@ -70,3 +70,7 @@ docker run --rm agent-home agent-home-versions
 
 MIT licensed. The briq service is operated by Uplab SAS under its
 [terms](https://briq.cloud/legal/terms).
+
+## Benchmarks
+
+[Small ACP benchmarks](benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
