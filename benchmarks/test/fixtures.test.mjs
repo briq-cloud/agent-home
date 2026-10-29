@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { tasks, prepare, grade, contextPack, mockAnswers, mockFixes } from "../fixtures.mjs";
+import {
+  smokeTasks as tasks,
+  prepare,
+  grade,
+  contextPack,
+  mockAnswers,
+  mockFixes,
+} from "../fixtures.mjs";
 for (const task of tasks)
   test(`acceptance rejects broken ${task.id} and accepts its fix`, async () => {
     const dir = await mkdtemp(join(tmpdir(), "bench-grader-"));

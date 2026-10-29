@@ -1,3 +1,4 @@
+import { mediumTasks } from "./medium.mjs";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -8,7 +9,7 @@ const retry = `export async function retry(fn, maxAttempts = 3) {
     try { return await fn(); } catch (e) { if (i === maxAttempts) throw e; }
   }
 }\n`;
-export const tasks = [
+export const smokeTasks = [
   {
     id: "lookup-config",
     prompt:
@@ -193,8 +194,11 @@ export async function grade(dir, task, answer) {
       for (const [f, text] of Object.entries(task.files))
         assert.equal(await readFile(join(dir, f), "utf8"), text);
     return { pass: true };
-  } catch {
-    return { pass: false, reason: "acceptance-check-failed" };
+  } catch (e) {
+    return {
+      pass: false,
+      reason: task.suite === "medium" ? String(e.message).slice(0, 300) : "acceptance-check-failed",
+    };
   }
 }
 export const mockAnswers = {
@@ -222,4 +226,10 @@ export const mockFixes = {
     "src/options.mjs",
     "export const readOptions = input => ({timeoutMs: input.timeoutMs ?? input.timeout ?? 1000});\n",
   ],
+};
+
+export const tasks = [...smokeTasks, ...mediumTasks];
+export const suites = {
+  smoke: { tasks: smokeTasks, timeoutMs: 90000, maxCallsPerTrial: 12 },
+  medium: { tasks: mediumTasks, timeoutMs: 180000, maxCallsPerTrial: 24, maxOutputTokens: 8192 },
 };

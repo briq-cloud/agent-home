@@ -33,6 +33,7 @@ export default class BenchmarkProvider {
     }
     const setupMs = performance.now() - started;
     await this.#runtime.begin?.({ taskId: task.id, arm });
+    let gradingStarted = false;
     let result,
       error = null,
       grade = { pass: false, reason: "not-completed" };
@@ -47,6 +48,7 @@ export default class BenchmarkProvider {
       });
       const answerFile = workspace + ".answer";
       await writeFile(answerFile, result.output, { mode: 0o600 });
+      gradingStarted = true;
       const checked = await exec(
         process.execPath,
         [
@@ -61,7 +63,19 @@ export default class BenchmarkProvider {
       if (result.stopReason !== "end_turn")
         grade = { pass: false, reason: `stop-${result.stopReason}` };
     } catch (e) {
-      error = e.message === "trial-timeout" ? "timeout" : "execution-or-grader-error";
+      result ??= e.benchmarkPartial;
+      if (gradingStarted)
+        grade = {
+          pass: false,
+          reason: e.killed ? "acceptance-check-timeout" : "acceptance-check-error",
+        };
+      else
+        error =
+          e.message === "trial-timeout"
+            ? "timeout"
+            : /exceeded.*output token|output.*maximum/i.test(result?.output ?? "")
+              ? "output-limit"
+              : "execution-or-grader-error";
     }
     const totalMs = performance.now() - started;
     const accountingStarted = performance.now();

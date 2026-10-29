@@ -48,6 +48,7 @@ jobs:
           npm ci --no-fund --no-audit
           npm test
           npm run mock
+          BENCH_SUITE=medium npm run mock
 
       - uses: docker/setup-buildx-action@v3
 

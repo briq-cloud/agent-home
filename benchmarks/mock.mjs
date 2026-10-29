@@ -29,6 +29,9 @@ export async function startMock() {
         const text = m.params.prompt[0].text,
           task = tasks.find((t) => text.includes(t.prompt));
         const cwd = sessions.get(m.params.sessionId);
+        if (task?.mockFiles)
+          for (const [f, source] of Object.entries(task.mockFiles))
+            await writeFile(join(cwd, f), source);
         if (task && mockFixes[task.id]) {
           const [f, source] = mockFixes[task.id];
           await writeFile(join(cwd, f), source);

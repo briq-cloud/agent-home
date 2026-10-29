@@ -115,6 +115,17 @@ export async function promptAcp({
         timer = setTimeout(() => reject(Error("trial-timeout")), timeoutMs);
       }),
     ]);
+  } catch (error) {
+    error.benchmarkPartial = {
+      output,
+      sessionId,
+      firstOutputMs,
+      agentMs: performance.now() - started,
+      toolCalls,
+      toolOutputBytes,
+      rawUsage,
+    };
+    throw error;
   } finally {
     clearTimeout(timer);
     if (sessionId && !completed) {
