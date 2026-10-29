@@ -109,3 +109,8 @@ in the raw records. Anthropic is pinned for Haiku; OpenRouter chooses the open-w
 
 Use `BENCH_TASK_IDS` to select task IDs and `BENCH_ARMS=baseline` for a fixed-context comparison.
 `BENCH_SUITE` defaults to `smoke`, preserving the original twelve-case before/after benchmark.
+
+The [dynamic routing experiment](routing/README.md) combines a daily model catalog, external
+intelligence priors, measured task outcomes and current home availability into task-specific
+portfolios. Clef can choose among those routes. This remains an explicit experiment; it does not
+change the home's dispatcher or native subagent configuration.

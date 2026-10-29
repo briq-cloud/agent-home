@@ -1,0 +1,23 @@
+name: model catalog
+on:
+  schedule:
+    - cron: '20 6 * * *'
+  workflow_dispatch:
+  pull_request:
+    paths: ['benchmarks/routing/**', '.github/workflows/model-catalog.yml']
+permissions:
+  contents: read
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: node benchmarks/routing/refresh.mjs /tmp/model-catalog.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: model-catalog
+          path: /tmp/model-catalog.json
+          retention-days: 14
