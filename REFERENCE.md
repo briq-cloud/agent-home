@@ -9,7 +9,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | CLI | Version | Sign-in kept under |
 | --- | --- | --- |
 | Claude Code (`claude`) | 2.1.308 | `CLAUDE_CONFIG_DIR` |
-| Codex (`codex`) | 0.165.0 | `CODEX_HOME` |
+| Codex (`codex`) | 0.166.0 | `CODEX_HOME` |
 | Copilot CLI (`copilot`) | 1.0.105 | `COPILOT_HOME` |
 | Cursor (`agent`) | 2026.10.22-27dcf5f | `XDG_CONFIG_HOME`/cursor |
 | Grok Build (`grok`) | 1.0.70 | `GROK_HOME` |
@@ -31,7 +31,7 @@ Each one checked against its publisher's checksum at build, or recorded where no
 | Download | sha256 | Checked against |
 | --- | --- | --- |
 | Claude Code | `356733f185fa988e6bf3aa9a555269fdd167982a2e2a80d3c8a78037bb92ad58` | its release manifest |
-| Codex | `e97c4463d7f146692a955d7b0e1c8cf48f97cd4d616cd45c5dcab2e8d9743316` | the GitHub release digest |
+| Codex | `1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254` | the GitHub release digest |
 | Copilot CLI | `aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2` | the GitHub release digest |
 | Cursor | `85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294` | none published: recorded |
 | Grok Build | `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9` | none published: recorded |
@@ -41,4 +41,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-10-29.6`, 1399 MB compressed, digest `sha256:e6f89e73b553695646ac8a186355db5d203b8f719fe859e8677b00654fe06418`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29.6 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-10-29.7`, 1435 MB compressed, digest `sha256:a02ed37663e314f8547d5e481dc3572b6a741bbc9ec5edbe7c5307be44d3ce3d`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29.7 --repo briq-cloud/agent-home`.
