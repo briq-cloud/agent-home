@@ -490,8 +490,8 @@ test('keeps a key on the home, never gives it back, and runs a provider with Cla
 test('a provider that names its model, with Claude Code or Codex; a new key restarts its profiles', async () => {
   assert.equal((await api('PUT', '/keys/openrouter', { key: 'or-first-key' })).status, 200);
   const noModel = await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex' });
-  assert.equal(noModel.status, 400);
-  assert.match((await noModel.json()).error, /needs a model/);
+  assert.equal(noModel.status, 200);
+  assert.equal((await noModel.json()).model, 'openrouter/auto');
   assert.equal((await api('POST', '/profiles', { provider: 'zai', harness: 'codex' })).status, 400);
   assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex', model: 'vendor/some-model' })).status, 200);
   assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'claude', model: 'vendor/some-model' })).status, 200);
@@ -517,4 +517,42 @@ test('a CLI of the image that takes a key gets the one added on the page', async
   assert.equal((await envOf('/acp/keyless')).gemini, 'gemini-key-1234');
   assert.equal((await api('DELETE', '/keys/google')).status, 200);
   assert.equal((await api('PUT', '/keys/google', { key: 'has spaces in it' })).status, 400);
+});
+
+
+test('Auto configures a provider without requiring a harness or model', async () => {
+  const saved = await api('PUT', '/keys/openrouter', { key: 'or-auto-key', auto: true });
+  assert.equal(saved.status, 200);
+  const auto = await api('POST', '/profiles', { provider: 'openrouter', harness: 'auto', model: 'auto' });
+  assert.deepEqual(await auto.json(), { name: 'openrouter-claude', provider: 'openrouter', harness: 'claude', model: 'openrouter/auto', acp: '/acp/openrouter-claude' });
+  const actual = await envOf('/acp/openrouter-claude');
+  assert.equal(actual.model, 'openrouter/auto');
+  assert.equal(actual.token, 'or-auto-key');
+  assert.notEqual(actual.config, process.env.CLAUDE_CONFIG_DIR);
+});
+
+test('copy link preserves both gates and assets require authentication', async () => {
+  assert.equal((await fetch(`http://127.0.0.1:${PORT}/link`)).status, 401);
+  const link = await fetch(`http://127.0.0.1:${PORT}/link`, { headers: { authorization: `Bearer ${TOKEN}`, cookie: 'other=1; briq_token=router-private-token' } });
+  assert.equal(link.headers.get('cache-control'), 'no-store');
+  const query = new URLSearchParams((await link.json()).query);
+  assert.equal(query.get('token'), TOKEN);
+  assert.equal(query.get('briq_token'), 'router-private-token');
+  for (const path of ['/assets/home.js', '/assets/home.css', '/assets/icons/grok.svg']) {
+    assert.equal((await api('GET', path)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${PORT}${path}`)).status, 401);
+  }
+});
+
+test('a successful sign-in without a status command is recorded, without credentials', async () => {
+  // fixed has no status command and its login exits successfully.
+  assert.equal((await api('POST', '/connect/fixed')).status, 200);
+  const status = await (await api('GET', '/status')).json();
+  const fixed = status.clis.find((c: { name: string }) => c.name === 'fixed');
+  assert.equal(fixed.signedIn, true);
+  assert.equal(fixed.statusSource, 'sign-in');
+  const record = JSON.parse(readFileSync(join(home, 'state', 'sign-ins.json'), 'utf8'));
+  assert.equal(typeof record.fixed, 'string');
+  assert.deepEqual(Object.keys(record), ['fixed']);
+  assert.equal(statSync(join(home, 'state', 'sign-ins.json')).mode & 0o777, 0o600);
 });

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Agent home</title>
+<link rel="stylesheet" href="/assets/home.css">
+<script type="module" src="/assets/home.js"></script>
+</head>
+<body>
+<main>
+  <header>
+    <a class="brand" href="/" aria-label="Agent home"><span class="brand-mark">⌘</span><span>Agent home<small id="home-name"></small></span></a>
+    <nav aria-label="Home actions">
+      <button id="copy-home" class="icon-button" title="Copy private home link" aria-label="Copy private home link"></button>
+      <a class="button" href="/terminal/" target="_blank" rel="noopener" id="terminal-link">Terminal ↗</a>
+    </nav>
+  </header>
+  <section aria-labelledby="agents-title">
+    <div class="section-title"><div><p class="eyebrow">YOUR WORKSPACE</p><h1 id="agents-title">Connected agents</h1></div><span id="connection-count" class="muted"></span></div>
+    <div class="grid" id="clis"><p class="muted">Loading agents…</p></div>
+  </section>
+  <section class="chat-shell" aria-labelledby="chat-title" id="chat">
+    <div class="chat-header"><div><p class="eyebrow">TRY YOUR CONNECTION</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="">Auto · subscriptions</option></select><button id="new-chat">New chat</button></div></div>
+    <p id="chat-status" role="status" class="muted">Choose an agent, or let your home choose.</p>
+    <div id="chat-messages" role="log" aria-label="Conversation"><div class="empty-chat"><span class="chat-spark">✳</span><h3>A quick check, a real conversation.</h3><p>Send a message through your home’s ACP connection.</p></div></div>
+    <div id="permissions" aria-live="polite"></div>
+    <form id="chat-form"><label class="sr-only" for="prompt">Message</label><textarea id="prompt" rows="2" placeholder="Ask your agent…" required></textarea><div class="composer-footer"><span class="muted">Works on this home · /work</span><div class="actions"><button type="button" id="stop-chat" hidden>Stop</button><button class="primary" id="send-chat" type="submit">Send ↑</button></div></div></form>
+  </section>
+  <section aria-labelledby="keys-title" id="keys-section">
+    <div class="section-title"><div><p class="eyebrow">BRING YOUR OWN PROVIDER</p><h2 id="keys-title">Keys &amp; models</h2></div><span class="muted">Stored on this home</span></div>
+    <div class="grid" id="keys"></div>
+  </section>
+  <footer><span>One home. Your agents. Your subscriptions.</span><span id="notice" role="status"></span></footer>
+</main>
+</body>
+</html>

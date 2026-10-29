@@ -259,3 +259,20 @@ sequenceDiagram
 | Two sessions at once | 11 s and 14 s, 0.66 GB used | |
 | Two sessions started at once, the access token expired | both done (19 s, 14 s), refreshed once, still signed in | |
 | Processes | one adapter, one `claude` per session | one adapter, one `codex app-server` |
+
+
+## The home page
+
+The page includes a same-origin ACP chat: choose a CLI or Auto, send a message, and answer any
+permission request. Stop cancels the turn; reloading can resume the last conversation from the
+runner's log. Terminal opens in a separate tab. The copy icon copies the private home link for
+another browser; vendor sign-in links have their own copy buttons.
+
+Saving a key on the page selects Auto. For OpenRouter this is `openrouter/auto` through Claude
+Code. Advanced allows a specific harness and model. API clients can request the same defaults
+with `POST /profiles` and `{ provider: "openrouter", harness: "auto", model: "auto" }`, or add
+`auto: true` to a key's `PUT` request. Existing profiles are kept when replacing a key.
+
+A CLI with no status command reports a recorded successful sign-in (`statusSource: "sign-in"`),
+not a live check. Only its completion date is stored in `.runner/sign-ins.json`; a vendor token
+is never read for this. A CLI signed out in another terminal may need a new sign-in.

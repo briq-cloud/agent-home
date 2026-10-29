@@ -210,6 +210,10 @@ export function providerOf(id: string): Provider {
 export function profileFor(provider: unknown, harness: unknown, model: unknown): Profile | string {
   const p = PROVIDERS.find((q) => q.id === provider);
   if (!p) return `no provider named ${String(provider)}: ${PROVIDERS.map((q) => q.id).join(', ')}`;
+  if (harness === undefined || harness === 'auto') harness = p.claude ? 'claude' : 'codex';
+  if (model === 'auto') model = undefined;
+  if (!model && p.id === 'openrouter') model = 'openrouter/auto';
+  if (!model && p.claude?.needsModel && p.id !== 'openrouter') model = p.example;
   if (harness !== 'claude' && harness !== 'codex')
     return `harness is claude or codex${p.cli ? `; ${p.id}'s key goes to ${p.cli.name} itself` : ''}`;
   if (!p[harness]) return `${p.name} has no endpoint ${harness === 'codex' ? 'that serves the Responses API, which Codex needs' : 'for Claude Code'}`;

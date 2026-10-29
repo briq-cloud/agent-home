@@ -9,7 +9,8 @@ import { type Cli, cliEnv, clis } from './clis.ts';
 import { signInLife } from './dates.ts';
 import { Hub } from './hub.ts';
 import { log } from './log.ts';
-import { PAGE } from './page.ts';
+import { ASSETS, PAGE } from './page.ts';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { Keys, PROVIDERS, profileFor } from './providers.ts';
 import { RUNNER_COOKIE, terminalProxy } from './proxy.ts';
 import { SignIn } from './signin.ts';
@@ -78,7 +79,18 @@ async function reload(): Promise<void> {
   table = next;
   known.clear();
 }
-const signIns = new Map(base.map((c) => [c.name, new SignIn(c)]));
+// Only completion dates: never a vendor's credentials or sign-in output.
+const signInFile = `${stateDir}/sign-ins.json`;
+let completedSignIns: Record<string, string> = {};
+try { completedSignIns = JSON.parse(readFileSync(signInFile, 'utf8')); } catch {}
+function completedSignIn(name: string): void {
+  completedSignIns[name] = new Date().toISOString();
+  mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  writeFileSync(`${signInFile}.tmp`, JSON.stringify(completedSignIns), { mode: 0o600 });
+  renameSync(`${signInFile}.tmp`, signInFile);
+  known.delete(name);
+}
+const signIns = new Map(base.map((c) => [c.name, new SignIn(c, () => completedSignIn(c.name))]));
 /** ttyd on localhost, started with `--base-path /terminal`. */
 const terminal = terminalProxy(new URL(env.RUNNER_TERMINAL ?? 'http://127.0.0.1:7681'));
 
@@ -157,7 +169,7 @@ function signedIn(cli: Cli): Promise<boolean | null> {
   if (cli.profile) return Promise.resolve(Boolean(keys.key(cli.profile.provider)));
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
     return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
-  if (!cli.status) return Promise.resolve(null);
+  if (!cli.status) return Promise.resolve(completedSignIns[cli.name] ? true : null);
   return new Promise((resolve) => {
     const [cmd, ...args] = cli.status as string[];
     const child = spawn(cmd as string, args, { env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -194,6 +206,18 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       return res.end(PAGE);
     }
+    const asset = ASSETS.get(url.pathname);
+    if (asset && req.method === 'GET') {
+      res.writeHead(200, { 'content-type': asset.type, 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff' });
+      return res.end(asset.body);
+    }
+    if (url.pathname === '/link' && req.method === 'GET') {
+      const query = new URLSearchParams({ token });
+      const router = /(?:^|;\s*)briq_token=([^;]+)/.exec(req.headers.cookie ?? '')?.[1];
+      if (router) query.set('briq_token', router);
+      res.setHeader('cache-control', 'no-store');
+      return json(res, 200, { query: `?${query}` });
+    }
     if (parts[0] === 'terminal') return terminal.http(req, res);
     const endpoint = acpOf(parts);
     if (endpoint) return endpoint.http(req, res);
@@ -204,6 +228,7 @@ const server = createServer(async (req, res) => {
           running: hub.running(c.name),
           signedIn: await signedIn(c),
           signIn: signIns.get(c.name)?.status.state,
+          statusSource: c.status ? 'command' : c.profile || c.apiKeys ? 'key' : completedSignIns[c.name] ? 'sign-in' : 'unavailable',
           // How its person signs in: on the page, with a command in the terminal, or by an API key.
           signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
           ...(c.terminalLogin ? { command: c.terminalLogin } : {}),
@@ -235,12 +260,22 @@ const server = createServer(async (req, res) => {
     if (parts[0] === 'keys' && parts.length === 2 && (req.method === 'PUT' || req.method === 'DELETE')) {
       if (!PROVIDERS.some((p) => p.id === parts[1])) return json(res, 404, { error: `no provider named ${parts[1]}` });
       let key: string | undefined;
+      let auto = false;
       if (req.method === 'PUT') {
-        const k = (await body(req)).key;
+        const input = await body(req);
+        const k = input.key;
+        auto = input.auto === true;
         if (typeof k !== 'string' || !/^\S{8,1024}$/.test(k)) return json(res, 400, { error: 'key is the provider\'s key, without spaces' });
         key = k;
       }
       keys.putKey(parts[1] as string, key);
+      if (key && auto) {
+        const provider = PROVIDERS.find((p) => p.id === parts[1]);
+        if (provider && !provider.cli) {
+          const profile = profileFor(provider.id, 'auto', 'auto');
+          if (typeof profile !== 'string' && base.some((c) => c.name === profile.harness) && !keys.profiles().some((p) => p.provider === provider.id)) keys.putProfile(profile);
+        }
+      }
       await reload();
       return json(res, 200, { provider: parts[1], set: Boolean(key) });
     }
