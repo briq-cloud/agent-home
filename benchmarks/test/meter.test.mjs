@@ -163,3 +163,36 @@ test("failed model attempts have explicit zero-cost policy provenance, not unkno
     await m.close();
   }
 });
+
+test("larger output allowance and generation-count cap are enforced on forwarded requests", async () => {
+  let posts = 0,
+    last;
+  const fake = generation(0.001),
+    m = new Meter({
+      key: "x",
+      model: "fixed",
+      maxOutputTokens: 8192,
+      maxCallsPerTrial: 2,
+      fetcher: async (url, options) => {
+        if (!url.includes("/generation?")) {
+          posts++;
+          last = JSON.parse(options.body);
+        }
+        return fake(url, options);
+      },
+    }),
+    url = await m.start();
+  try {
+    m.begin({ taskId: "limits" });
+    await (await request(m, url)).text();
+    await (await request(m, url)).text();
+    const denied = await request(m, url);
+    await denied.text();
+    assert.equal(denied.status, 429);
+    assert.equal(posts, 2);
+    assert.equal(last.max_tokens, 8192);
+    await m.settle();
+  } finally {
+    await m.close();
+  }
+});
