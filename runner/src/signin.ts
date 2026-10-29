@@ -30,7 +30,10 @@ export class SignIn {
   private seen = '';
   private answeredPlaintext = false;
 
-  constructor(cli: Cli) {
+  private readonly completed?: () => void;
+
+  constructor(cli: Cli, completed?: () => void) {
+    this.completed = completed;
     this.cli = cli;
   }
 
@@ -59,6 +62,7 @@ export class SignIn {
       if (this.child !== child) return;
       this.child = undefined;
       this.current = { ...this.current, state: code === 0 ? 'done' : 'failed' };
+      if (code === 0) this.completed?.();
       log.info('sign-in ended', { cli: this.cli.name, code });
     });
     return this.settled();
