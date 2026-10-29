@@ -106,6 +106,7 @@ export class Meter {
     delete body.plugins;
     delete body.web_search_options;
     delete body.thinking;
+    const admissionStarted = performance.now();
     // Reconcile off the agent's critical path. Reserve conservatively for unsettled calls.
     // This is an admission allowance, not a provider-price guarantee.
     while (
@@ -144,6 +145,7 @@ export class Meter {
       ...this.active,
       start: undefined,
       model: this.model,
+      admissionWaitMs: performance.now() - admissionStarted,
       costUsd: null,
       generationId: null,
       status: null,

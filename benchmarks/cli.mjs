@@ -97,7 +97,14 @@ try {
     canonical: runtime.canonical ?? null,
   });
   console.log(JSON.stringify({ root, mode, arms: summary.arms }));
-  if (records.length !== 12 || records.some((r) => r.error)) process.exitCode = 1;
+  if (
+    records.length !== 12 ||
+    records.some(
+      (r) =>
+        r.error || (mode === "mock" && !r.grade.pass) || (mode === "live" && r.costUsd === null),
+    )
+  )
+    process.exitCode = 1;
 } finally {
   await runtime.close();
 }
