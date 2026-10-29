@@ -44,6 +44,7 @@ export function importAnalysis(body, aliases, observedAt = new Date().toISOStrin
         observedAt,
         source: `https://artificialanalysis.ai/data-api/docs/reference; intelligence index v${body.intelligence_index_version}; ${m.slug}`,
         intelligence: e.artificial_analysis_intelligence_index ?? null,
+        indexVersion: body.intelligence_index_version,
         scores: {
           lookup: null,
           change: coding,
