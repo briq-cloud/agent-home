@@ -261,9 +261,13 @@ export class Hub {
     return this.engine(cli).agent.running;
   }
 
-  /** The CLI's own `initialize` answer: the runner speaks for it. */
-  initialize(cli: string): Promise<unknown> {
-    return this.engine(cli).agent.ensure();
+  /** The CLI's own `initialize` answer, without the sign-in methods the home never offers. */
+  async initialize(cli: string): Promise<unknown> {
+    const e = this.engine(cli);
+    const r = (await e.agent.ensure()) as { authMethods?: Array<{ id?: string }> } | undefined;
+    const blocked = e.agent.cli.blockedAuth;
+    if (!blocked?.length || !r?.authMethods) return r;
+    return { ...r, authMethods: r.authMethods.filter((m) => !blocked.includes(m.id ?? '')) };
   }
 
   async newSession(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {
@@ -376,9 +380,13 @@ export class Hub {
     log.info('sign-in refreshed', { cli });
   }
 
-  /** Any other request: the CLI's, as it is. */
+  /** Any other request: the CLI's, as it is; an `authenticate` with a blocked method refused. */
   forward(cli: string, method: string, params: unknown): Promise<unknown> {
-    return this.engine(cli).agent.request(method, params);
+    const e = this.engine(cli);
+    const methodId = (params as { methodId?: string } | undefined)?.methodId;
+    if (method === 'authenticate' && methodId && e.agent.cli.blockedAuth?.includes(methodId))
+      return Promise.reject(new RpcFailure({ code: -32602, message: `${cli} does not sign in with ${methodId} in an agent home` }));
+    return e.agent.request(method, params);
   }
 
   notify(cli: string, method: string, params: Rpc['params']): void {

@@ -32,7 +32,14 @@ const ask = (method: string, params: unknown) =>
 async function handle(m: Msg): Promise<unknown> {
   switch (m.method) {
     case 'initialize':
-      return { protocolVersion: 1, agentCapabilities: { loadSession: true }, authMethods: [], agentInfo: { name: 'mock', version: '1' } };
+      return {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+        authMethods: [{ id: 'personal', name: 'Personal account' }, { id: 'api-key', name: 'API key' }],
+        agentInfo: { name: 'mock', version: '1' },
+      };
+    case 'authenticate':
+      return {};
     case 'session/new': {
       const sessionId = randomUUID();
       sessions.set(sessionId, []);

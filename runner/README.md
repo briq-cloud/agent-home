@@ -26,6 +26,11 @@ Three ways to sign in, said by `/status` (`signInWith`): `page` (the runner runs
 command and shows its link and code), `terminal` (the command asks questions first: the page
 names it), `api-key` (the CLI counts as signed in when one of its variables is set).
 
+A CLI may offer an ACP sign-in method the home never allows (`blockedAuth`): the runner leaves it
+out of the CLI's `initialize` answer and refuses an `authenticate` with it. Gemini's
+`oauth-personal` (a personal Google account) is one: its ACP `authenticate` does not check the
+image's enforced API-key setting.
+
 The runner is the home's front door: one URL for the person (`/`, the sign-in page, and
 `/terminal/`) and for apps (`/acp/<cli>`). The decision and its research: ADR 0021 in briq's
 repository.
