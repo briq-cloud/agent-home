@@ -81,3 +81,31 @@ For routing, add a second execution route on four tasks and reuse the first-rout
 Replay Jev/Clef recommendations against that outcome matrix without rerunning execution agents.
 Do not train a router on these six tasks. RouteLLM and LLMRouter are comparison tools, not a proxy
 for vendor subscription traffic.
+
+## Larger tasks and execution-model comparison
+
+```sh
+BENCH_SUITE=medium npm run mock
+BENCH_PAID=1 BENCH_KEYS_FILE=/work/.logins/keys.json npm run compare
+```
+
+The medium suite covers configuration precedence/client integration, a cancellable bounded async
+queue, and tenant-cache TTL/single-flight/invalidation races. Reference implementations stay outside
+agent workspaces and are used only by the free mock. Separate acceptance checks reject the broken
+projects before any paid run.
+
+`compare` runs three tasks on Haiku 5.5, DeepSeek V4.1 Flash (1017) and GLM 5.3. It holds baseline
+context fixed and rotates model order per task. Every run has a fresh workspace/profile, 180 seconds,
+24 generation requests and 8192 output tokens per request. The $2 target is shared across all nine
+executions and six decision calls, using finalized spend from earlier runs before admitting the next.
+Unknown billing stops the matrix. Task failures are retained, not retried.
+
+Clef/Jev choices are recorded in `routing-frozen.json` before execution. They see only task and
+catalog metadata, not task outcomes. The final report replays those choices against measured results.
+This is an observed single-attempt comparison, not a trained router or an intrinsic model ranking.
+All profiles use Claude ACP; compatibility errors may matter. Tool search and prompt suggestions are
+explicitly disabled for every profile. Actual model, backend, cache usage and admission waits remain
+in the raw records. Anthropic is pinned for Haiku; OpenRouter chooses the open-weight backends.
+
+Use `BENCH_TASK_IDS` to select task IDs and `BENCH_ARMS=baseline` for a fixed-context comparison.
+`BENCH_SUITE` defaults to `smoke`, preserving the original twelve-case before/after benchmark.

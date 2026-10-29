@@ -22,7 +22,7 @@ async function freePort() {
   await new Promise((r) => server.close(r));
   return port;
 }
-export async function startLive(root) {
+export async function startLive(root, suite = {}) {
   const key = await providerKey(),
     model = process.env.BENCH_MODEL ?? "anthropic/claude-haiku-5.5";
   const catalog = await (
@@ -47,6 +47,10 @@ export async function startLive(root) {
   const meter = new Meter({
       key,
       model,
+      budgetUsd: Number(process.env.BENCH_BUDGET_USD ?? 2),
+      perTrialUsd: suite.maxCallsPerTrial > 12 ? 0.25 : 0.15,
+      maxCallsPerTrial: suite.maxCallsPerTrial ?? 12,
+      maxOutputTokens: suite.maxOutputTokens ?? 2048,
       onRecord: (record) =>
         appendFileSync(join(root, "meter.jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 }),
     }),
@@ -81,15 +85,18 @@ export async function startLive(root) {
         CLAUDE_CONFIG_DIR: configDir,
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_AUTH_TOKEN: meter.token,
-        ANTHROPIC_API_KEY: null,
+        ANTHROPIC_API_KEY: "",
+        ENABLE_TOOL_SEARCH: "false",
+        CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: "false",
         ANTHROPIC_MODEL: model,
         ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+        ANTHROPIC_DEFAULT_FABLE_MODEL: model,
         ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
         ANTHROPIC_DEFAULT_OPUS_MODEL: model,
         CLAUDE_CODE_SUBAGENT_MODEL: model,
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
-        CLAUDE_CODE_MAX_OUTPUT_TOKENS: "2048",
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(suite.maxOutputTokens ?? 2048),
         API_TIMEOUT_MS: "90000",
       },
     },

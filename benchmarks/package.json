@@ -2,12 +2,15 @@
   "name": "agent-home-benchmarks",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.22.0" },
+  "engines": {
+    "node": ">=22.22.0"
+  },
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "mock": "node cli.mjs mock",
     "decisions": "node decisions.mjs",
-    "live": "node cli.mjs live"
+    "live": "node cli.mjs live",
+    "compare": "node compare-models.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "2.1.0",

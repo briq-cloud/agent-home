@@ -8,10 +8,32 @@ export class Meter {
     model,
     budgetUsd = 2,
     perTrialUsd = 0.15,
+    maxCallsPerTrial = 12,
+    maxOutputTokens = 2048,
     fetcher = fetch,
     onRecord = () => {},
   }) {
-    Object.assign(this, { key, model, budgetUsd, perTrialUsd, fetcher, onRecord });
+    if (
+      !Number.isFinite(budgetUsd) ||
+      budgetUsd <= 0 ||
+      !Number.isFinite(perTrialUsd) ||
+      perTrialUsd <= 0 ||
+      !Number.isInteger(maxCallsPerTrial) ||
+      maxCallsPerTrial < 1 ||
+      !Number.isInteger(maxOutputTokens) ||
+      maxOutputTokens < 1
+    )
+      throw Error("invalid benchmark limits");
+    Object.assign(this, {
+      key,
+      model,
+      budgetUsd,
+      perTrialUsd,
+      maxCallsPerTrial,
+      maxOutputTokens,
+      fetcher,
+      onRecord,
+    });
     this.token = randomBytes(24).toString("hex");
     this.records = [];
     this.blocked = false;
@@ -102,7 +124,10 @@ export class Meter {
     body.model = this.model;
     if (this.model.startsWith("anthropic/"))
       body.provider = { only: ["Anthropic"], allow_fallbacks: false };
-    body.max_tokens = Math.min(Math.max(Number(body.max_tokens) || 2048, 1), 2048);
+    body.max_tokens = Math.min(
+      Math.max(Number(body.max_tokens) || this.maxOutputTokens, 1),
+      this.maxOutputTokens,
+    );
     delete body.plugins;
     delete body.web_search_options;
     delete body.thinking;
@@ -134,7 +159,7 @@ export class Meter {
     if (
       this.spent >= this.budgetUsd ||
       trialCost >= this.perTrialUsd ||
-      trialRecords.length >= 12
+      trialRecords.length >= this.maxCallsPerTrial
     ) {
       this.blocked = true;
       res.writeHead(429);
