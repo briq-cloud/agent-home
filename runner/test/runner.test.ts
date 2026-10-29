@@ -67,7 +67,7 @@ before(async () => {
         // A sign-in in the terminal, and API keys: one set, one not.
         { name: 'term', acp: mock, terminalLogin: 'term auth login' },
         { name: 'keyed', acp: mock, apiKeys: ['QWENCLOUD_API_KEY'] },
-        { name: 'keyless', acp: mock, apiKeys: ['GEMINI_API_KEY'] },
+        { name: 'keyless', acp: mock, apiKeys: ['GEMINI_API_KEY'], blockedAuth: ['personal'] },
       ]),
       QWENCLOUD_API_KEY: 'placeholder',
     },
@@ -420,4 +420,16 @@ test('the bridge makes the home a local ACP agent, the folder of the client mapp
   assert.equal(done.result.stopReason, 'end_turn');
   assert.ok(updates.some((m) => m.params?.update?.content?.text === 'hi'));
   bridge.kill();
+});
+
+test('never offers a sign-in method the home blocks, and refuses it', async () => {
+  const app = new App('/acp/keyless');
+  await app.open();
+  const init = await app.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
+  assert.deepEqual(init.result.authMethods.map((m: { id: string }) => m.id), ['api-key']);
+  const refused = await app.request('authenticate', { methodId: 'personal' });
+  assert.match(refused.error.message, /does not sign in with personal/);
+  const allowed = await app.request('authenticate', { methodId: 'api-key' });
+  assert.ok(!allowed.error);
+  app.close();
 });

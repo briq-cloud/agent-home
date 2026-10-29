@@ -16,6 +16,11 @@ export interface Cli {
    * whose only sign-in this is counts as signed in when one is set.
    */
   apiKeys?: string[];
+  /**
+   * Its ACP sign-in methods the home never offers: left out of its `initialize` answer, and an
+   * `authenticate` with one refused. Gemini's Google sign-in with a personal account.
+   */
+  blockedAuth?: string[];
   /** Asks whether its person is signed in: exit 0, or `"loggedIn": true` in what it prints. */
   status?: string[];
   /**
@@ -95,7 +100,13 @@ export const CLIS: Cli[] = [
   },
   // API keys only: Google's consumer plans are not for a computer hosted for someone else, and Qwen
   // ended its free sign-in (2026-04). The image's system settings enforce it for Gemini.
-  { name: 'gemini', acp: ['gemini', '--acp'], apiKeys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] },
+  {
+    name: 'gemini',
+    acp: ['gemini', '--acp'],
+    apiKeys: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    // ACP's authenticate does not check the image's enforced type.
+    blockedAuth: ['oauth-personal'],
+  },
   {
     name: 'qwen',
     acp: ['qwen', '--acp'],
