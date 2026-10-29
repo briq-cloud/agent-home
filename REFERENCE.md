@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-10-28. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-10-29. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -16,7 +16,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | Mistral Vibe (`vibe`) | 3.0.3 | `VIBE_HOME` |
 | OpenCode (`opencode`) | 1.19.5 | `XDG_DATA_HOME`/opencode |
 | Gemini CLI (`gemini`), API key only | 0.66.0 | `GEMINI_CLI_HOME`/.gemini |
-| Qwen Code (`qwen`), API key only |  | `QWEN_HOME` |
+| Qwen Code (`qwen`), API key only | 0.26.3 | `QWEN_HOME` |
 | Cline (`cline`) | 3.0.74 | `CLINE_DIR` |
 
 ## Terminal
@@ -47,4 +47,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-10-28.9`, 1758 MB compressed, digest `sha256:e72d560642ffc81878b2488d031bfc41779b1b5464c5098bb6335e1cd63f049a`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-28.9 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-10-29`, 1758 MB compressed, digest `sha256:80c70d58752271e0a8344b744f6c5fe97c7384640ac6613465e753a08dd2961e`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29 --repo briq-cloud/agent-home`.
