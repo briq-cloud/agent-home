@@ -63,6 +63,7 @@ before(async () => {
           status: ['true'],
           signIn: { file: '$MOCK_HOME/auth.json', refreshedAt: 'last_refresh', days: 30, refreshAfterDays: 8 },
         },
+        { name: 'flaky', acp: mock, login: ['true'], status: ['sh', '-c', 'kill -TERM $$'] },
         { name: 'fixed', acp: mock, login: ['true'], signIn: { file: '$MOCK_HOME/fixed.json', endsAt: 'refreshTokenExpiresAt' } },
         // For /acp: one never signed in, one more to route to.
         { name: 'off', acp: mock, login: ['true'], status: ['false'] },
@@ -177,6 +178,7 @@ test('refuses a caller without the key, and says what it runs', async () => {
   const clis = (await status.json()).clis;
   assert.deepEqual(clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]), [
     ['mock', true],
+    ['flaky', null],
     ['fixed', null],
     ['off', false],
     ['second', true],
@@ -200,7 +202,7 @@ test('refuses a caller without the key, and says what it runs', async () => {
     endsSoon: Date.parse('2026-11-19T10:00:00Z') - Date.now() < 7 * 86_400_000,
     refreshableAt: '2026-10-28T10:00:00.000Z',
   });
-  assert.deepEqual(clis[1].life, { endsAt: new Date(ENDS).toISOString(), renews: false, endsSoon: true });
+  assert.deepEqual(clis[2].life, { endsAt: new Date(ENDS).toISOString(), renews: false, endsSoon: true });
   assert.doesNotMatch(JSON.stringify(clis), /secret/);
   const ws = new WebSocket(`ws://127.0.0.1:${PORT}/acp/mock`);
   await assert.rejects(new Promise((_, reject) => ws.once('error', reject)));
@@ -555,4 +557,13 @@ test('a successful sign-in without a status command is recorded, without credent
   assert.equal(typeof record.fixed, 'string');
   assert.deepEqual(Object.keys(record), ['fixed']);
   assert.equal(statSync(join(home, 'state', 'sign-ins.json')).mode & 0o777, 0o600);
+});
+
+
+test('falls back to the last completed sign-in when a live check is unavailable', async () => {
+  assert.equal((await api('POST', '/connect/flaky')).status, 200);
+  const status = await (await api('GET', '/status')).json();
+  const flaky = status.clis.find((c: { name: string }) => c.name === 'flaky');
+  assert.equal(flaky.signedIn, true);
+  assert.equal(flaky.statusSource, 'sign-in');
 });

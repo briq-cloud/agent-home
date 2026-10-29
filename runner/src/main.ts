@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { createNodeHttpHandler, createNodeWebSocketUpgradeHandler } from '@agentclientprotocol/sdk/experimental/node';
@@ -14,6 +13,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { Keys, PROVIDERS, profileFor } from './providers.ts';
 import { RUNNER_COOKIE, terminalProxy } from './proxy.ts';
 import { SignIn } from './signin.ts';
+import { commandStatus } from './status.ts';
 import { usageReport } from './usage.ts';
 
 /**
@@ -152,6 +152,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 
 /** `signedIn`, kept 30 s: `/acp` asks it for each new session. */
 const known = new Map<string, { at: number; value: Promise<boolean | null> }>();
+const statusSources = new Map<string, 'command' | 'sign-in'>();
 function signedInCached(name: string): Promise<boolean | null> {
   const hit = known.get(name);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
@@ -170,20 +171,10 @@ function signedIn(cli: Cli): Promise<boolean | null> {
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
     return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
   if (!cli.status) return Promise.resolve(completedSignIns[cli.name] ? true : null);
-  return new Promise((resolve) => {
-    const [cmd, ...args] = cli.status as string[];
-    const child = spawn(cmd as string, args, { env: childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
-    let out = '';
-    child.stdout?.on('data', (b: Buffer) => {
-      out += b.toString();
-    });
-    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
-    child.on('error', () => resolve(null));
-    child.on('exit', (code) => {
-      clearTimeout(timer);
-      const m = /"loggedIn"\s*:\s*(true|false)/.exec(out);
-      resolve(m ? m[1] === 'true' : code === 0);
-    });
+  return commandStatus(cli.status, childEnv).then((value) => {
+    const recorded = value === null && Boolean(completedSignIns[cli.name]);
+    statusSources.set(cli.name, recorded ? 'sign-in' : 'command');
+    return recorded ? true : value;
   });
 }
 
@@ -226,9 +217,9 @@ const server = createServer(async (req, res) => {
         table.map(async (c) => ({
           name: c.name,
           running: hub.running(c.name),
-          signedIn: await signedIn(c),
+          signedIn: await signedInCached(c.name),
           signIn: signIns.get(c.name)?.status.state,
-          statusSource: c.status ? 'command' : c.profile || c.apiKeys ? 'key' : completedSignIns[c.name] ? 'sign-in' : 'unavailable',
+          statusSource: c.status ? statusSources.get(c.name) ?? 'command' : c.profile || c.apiKeys ? 'key' : completedSignIns[c.name] ? 'sign-in' : 'unavailable',
           // How its person signs in: on the page, with a command in the terminal, or by an API key.
           signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
           ...(c.terminalLogin ? { command: c.terminalLogin } : {}),

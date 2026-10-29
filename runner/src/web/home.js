@@ -57,7 +57,7 @@ function card(c) {
   const state = limited[c.name] ? ['At limit', 'warn'] : c.signedIn === true ? [isKey ? 'Ready' : 'Signed in', 'ok'] : c.signedIn === false ? [isKey ? 'Needs key' : 'Signed out', 'off'] : ['Not checked', 'off'];
   const box = $('article', { class: 'card', 'data-agent': c.name }, $('div', { class: 'row' }, product(c.profile?.provider || c.name, name, p ? (c.profile.model === 'openrouter/auto' ? 'Auto' : c.profile.model || 'Provider default') : isKey ? 'API key' : 'Subscription'), $('span', { class: 'tag ' + state[1] }, state[0])));
   if (c.statusSource === 'sign-in') box.append($('span', { class: 'muted' }, 'Last sign-in completed on this home'));
-  if (c.signedIn === null) box.append($('span', { class: 'muted' }, 'This CLI does not provide a sign-in check'));
+  if (c.signedIn === null) box.append($('span', { class: 'muted' }, c.statusSource === 'command' ? 'Sign-in check unavailable · try again shortly' : 'This CLI does not provide a sign-in check'));
   if (c.life?.endsAt) box.append($('span', { class: 'muted' }, 'Sign-in until ' + day(c.life.endsAt)));
   const u = usage[c.name], today = u?.days[new Date().toISOString().slice(0, 10)];
   if (today) box.append($('span', { class: 'muted' }, today.turns + (today.turns === 1 ? ' turn today' : ' turns today') + (today.tokens.total ? ' · ' + number(today.tokens.total) + ' tokens' : '')));
