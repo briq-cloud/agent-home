@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-10-29. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-10-30. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -22,7 +22,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 
 ## Runner
 
-`agent-home-runner` 0.1.0 drives the CLIs over ACP for apps ([runner/README.md](runner/README.md)), with `claude-agent-acp` 0.98.0 and `codex-acp` 2.3.0, on `@agentclientprotocol/sdk` 2.1.0.
+`agent-home-runner` 0.2.0 drives the CLIs over ACP for apps ([runner/README.md](runner/README.md)), with `claude-agent-acp` 0.98.0 and `codex-acp` 2.3.0, on `@agentclientprotocol/sdk` 2.1.0.
 
 ## Downloads
 
@@ -41,4 +41,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-10-29.8`, 1435 MB compressed, digest `sha256:a02ed37663e314f8547d5e481dc3572b6a741bbc9ec5edbe7c5307be44d3ce3d`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-29.8 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-10-30`, 1437 MB compressed, digest `sha256:c16381e18c808e735e539624b9a5c2ba4efd8502eedab80c970649f4209f7097`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-30 --repo briq-cloud/agent-home`.
