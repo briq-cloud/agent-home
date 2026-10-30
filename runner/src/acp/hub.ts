@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { Agent, type Rpc, RpcFailure } from './agent.ts';
 import type { Cli } from '../providers/catalog.ts';
 import { log } from '../telemetry/log.ts';
+import { parseAcpAuthStatus } from '../auth/status.ts';
 
 /** A client connection, as the hub sees it. */
 export interface Peer {
@@ -220,6 +221,8 @@ export const GLOBAL_CAPABILITIES = {
 
 export class Hub {
   private readonly engines = new Map<string, Engine>();
+  /** One outstanding read-only auth probe per CLI process, even when callers time out. */
+  private readonly authProbes = new WeakMap<Engine, Promise<boolean | null>>();
   private readonly slots: Slots;
   private readonly route: string[];
   private readonly signedIn: (cli: string) => Promise<boolean | null>;
@@ -284,6 +287,44 @@ export class Hub {
     const blocked = e.agent.cli.blockedAuth;
     if (!blocked?.length || !r?.authMethods) return r;
     return { ...r, authMethods: r.authMethods.filter((m) => !blocked.includes(m.id ?? '')) };
+  }
+
+  /**
+   * A provider's documented read-only ACP auth-status extension, using its existing ACP process.
+   * This does not create a conversation or call `session/prompt`; unavailable or malformed
+   * responses remain unknown. Only the boolean is surfaced to callers.
+   */
+  async authStatus(cli: string, timeoutMs = 5_000): Promise<boolean | null> {
+    const e = this.engine(cli);
+    const method = e.agent.cli.authStatusMethod;
+    if (!method) return null;
+    let probe = this.authProbes.get(e);
+    if (!probe) {
+      // Keep the underlying RPC tracked until it settles. A caller deadline only stops waiting;
+      // it must not enqueue another request or kill an agent process that may hold active work.
+      probe = e.agent.request(method, {}).then(
+        (response) => parseAcpAuthStatus(response),
+        () => null,
+      );
+      this.authProbes.set(e, probe);
+      void probe.then(() => {
+        if (this.authProbes.get(e) === probe) this.authProbes.delete(e);
+      });
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        probe,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('ACP auth status timed out')), timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async newSession(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {

@@ -631,3 +631,35 @@ test('falls back to the last completed sign-in when a live check is unavailable'
   assert.equal(flaky.signedIn, true);
   assert.equal(flaky.statusSource, 'sign-in');
 });
+
+test('connect accepts nonwaiting starts and fast observation; malformed wait flags and stopped input reject', async () => {
+  assert.equal((await api('POST', '/connect/fixed', { wait: 'false' })).status, 400);
+  const startedAt = Date.now();
+  const response = await api('POST', '/connect/fixed', { wait: false });
+  assert.equal(response.status, 200);
+  assert.ok(Date.now() - startedAt < 1000, 'GUI start must not wait for the vendor confirmation');
+  const initial = await response.json();
+  assert.ok(['starting', 'done'].includes(initial.state));
+  let observed = initial;
+  for (let attempt = 0; attempt < 100 && observed.state !== 'done'; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const pollAt = Date.now();
+    const poll = await api('GET', '/connect/fixed');
+    assert.ok(Date.now() - pollAt < 500, 'observation must not call the aggregate status checks');
+    observed = await poll.json();
+  }
+  assert.equal(observed.state, 'done');
+  assert.equal((await api('POST', '/connect/fixed/input', { text: 'not-running' })).status, 409);
+  assert.ok(Object.keys(observed).every((key) => ['state', 'url', 'code', 'reason'].includes(key)));
+});
+
+test('connect cancellation is immediately observable without exposing vendor output', async () => {
+  const started = await api('POST', '/connect/mock', { wait: false });
+  assert.equal(started.status, 200);
+  const cancelled = await api('DELETE', '/connect/mock');
+  const state = await cancelled.json();
+  assert.equal(state.state, 'failed');
+  assert.equal(state.reason, 'cancelled');
+  assert.equal((await (await api('GET', '/connect/mock')).json()).reason, 'cancelled');
+  assert.equal((await api('POST', '/connect/mock/input', { text: 'not-running' })).status, 409);
+});

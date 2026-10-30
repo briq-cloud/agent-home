@@ -61,10 +61,10 @@ agent; `node test/live.ts claude codex` against a running runner and real CLIs.
 | --- | --- |
 | `/acp/<cli>` | ACP, as an agent: WebSocket, or Streamable HTTP (`@agentclientprotocol/sdk`'s server transport). One connection is to one CLI and carries any number of sessions |
 | `/acp` | ACP, with the runner as one agent (`agent-home`) for every CLI: each `session/new` goes to a CLI (below), every later call to the CLI that holds the session |
-| `GET /status` | Each CLI: its ACP process running, signed in (`true`, `false`, or `null` when it has no status command), its sign-in's state, and its `life` (below) |
+| `GET /status` | CLI process, sign-in (`true`, `false`, or `null` when unknown), status source and lifetime. |
 | `GET /usage` | What the sessions used, from the logs: per CLI (sessions, turns, tokens, cost, by UTC day, and its last word on its plan's limits) and per session (turns, tokens, cost, context). Below |
 | `POST /refresh/<cli>` | Has the CLI refresh its sign-in now: `{ moved, life }`. 409 while a turn of it runs, or when a refresh cannot move its end |
-| `POST /connect/<cli>` | Starts its sign-in: `{ state: "waiting", url, code? }` |
+| `POST /connect/<cli>` | Starts sign-in. `{wait:false}` returns immediately; omitted waits for its page/code. |
 | `GET /connect/<cli>` | Where it is: `idle`, `starting`, `waiting`, `done`, `failed` |
 | `POST /connect/<cli>/input` | `{ text }` typed into it: Claude's code |
 | `DELETE /connect/<cli>` | Stops it |
@@ -268,10 +268,12 @@ permission request. Stop cancels the turn; reloading can resume the last convers
 runner's log. Terminal opens in a separate tab. The copy icon copies the private home link for
 another browser; vendor sign-in links have their own copy buttons.
 
-Saving a key on the page selects Auto. For OpenRouter this is `openrouter/auto` through Claude
-Code. Advanced allows a specific harness and model. API clients can request the same defaults
-with `POST /profiles` and `{ provider: "openrouter", harness: "auto", model: "auto" }`, or add
-`auto: true` to a key's `PUT` request. Existing profiles are kept when replacing a key.
+Saving an OpenRouter key prepares the curated Auto model pool. Advanced keeps explicit harness
+and model profiles. See the [profile API](../runner/README.md#profiles).
+
+Sign-in progress polls `GET /connect/<cli>` independently every 500 ms while active. Browser/code
+steps and completion update without waiting for slower overall account checks. Vibe uses its
+read-only ACP `_auth/status`; no prompt or model call is needed.
 
 A CLI with no status command reports a recorded successful sign-in (`statusSource: "sign-in"`),
 not a live check. Only its completion date is stored in `.runner/sign-ins.json`; a vendor token

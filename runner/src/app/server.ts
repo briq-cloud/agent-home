@@ -216,6 +216,7 @@ function signedInCached(name: string): Promise<boolean | null> {
  */
 function signedIn(cli: Cli): Promise<boolean | null> {
   if (cli.profile) return Promise.resolve(Boolean(keys.key(cli.profile.provider)));
+  if (cli.authStatusMethod) return hub.authStatus(cli.name);
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
     return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
   if (!cli.status) return Promise.resolve(completedSignIns[cli.name] ? true : null);
@@ -327,13 +328,15 @@ const server = createServer(async (req, res) => {
           running: hub.running(c.name),
           signedIn: await signedInCached(c.name),
           signIn: signIns.get(c.name)?.status.state,
-          statusSource: c.status
-            ? (statusSources.get(c.name) ?? 'command')
-            : c.profile || c.apiKeys
-              ? 'key'
-              : completedSignIns[c.name]
-                ? 'sign-in'
-                : 'unavailable',
+          statusSource: c.authStatusMethod
+            ? 'acp'
+            : c.status
+              ? (statusSources.get(c.name) ?? 'command')
+              : c.profile || c.apiKeys
+                ? 'key'
+                : completedSignIns[c.name]
+                  ? 'sign-in'
+                  : 'unavailable',
           // How its person signs in: on the page, with a command in the terminal, or by an API key.
           signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
           ...(c.terminalLogin ? { command: c.terminalLogin } : {}),
@@ -486,7 +489,22 @@ const server = createServer(async (req, res) => {
             ? `${c.name} signs in in the terminal: ${c.terminalLogin}`
             : `${c.name} takes an API key: ${c.keyFrom ? `add ${c.keyFrom}'s on the page (PUT /keys/${c.keyFrom}), or ` : ''}${(c.apiKeys ?? []).join(' or ')} in its environment`,
         });
-      if (parts.length === 2 && req.method === 'POST') return json(res, 200, await s.start(childEnv));
+      if (parts.length === 2 && req.method === 'POST') {
+        let input: Record<string, unknown>;
+        try {
+          input = await body(req);
+        } catch {
+          return json(res, 400, { error: 'invalid connect body' });
+        }
+        if (
+          !input ||
+          typeof input !== 'object' ||
+          Array.isArray(input) ||
+          (input.wait !== undefined && typeof input.wait !== 'boolean')
+        )
+          return json(res, 400, { error: 'wait must be a boolean' });
+        return json(res, 200, await s.start(childEnv, { wait: input.wait !== false }));
+      }
       if (parts.length === 2 && req.method === 'GET') return json(res, 200, s.status);
       if (parts.length === 2 && req.method === 'DELETE') {
         s.cancel();

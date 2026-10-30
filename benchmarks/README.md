@@ -56,6 +56,10 @@ receives a random relay credential. Each response's generation ID is reconciled 
 The relay pins the model and caps output at 2048 tokens. Forwarded requests are sequential. Billing reconciles in the background, with a $0.20 admission
 reservation per unsettled request. Billing is joined after all task executions. Pending costs remain null in provisional records.
 Final `results.json` joins the provider ledger; exhausted reservations wait for settlement.
+If a comparison stops on delayed billing, reuse its `BENCH_RESULTS` folder with
+`BENCH_PAID=1 BENCH_KEYS_FILE=/work/.logins/keys.json node resume-comparison.mjs`.
+It reconciles costs, preserves frozen choices and the original budget, and skips completed trials.
+An untracked interrupted trial requires manual reconciliation before more paid work.
 Errored model attempts carry explicit zero-cost provenance from OpenRouter’s published error policy.
 Other unknown billing stops further paid requests. A
 threshold cannot guarantee a hard dollar cap: one accepted request can cross it. Cancellation

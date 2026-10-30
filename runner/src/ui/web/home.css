@@ -531,3 +531,143 @@ footer {
   overflow: auto;
   font-size: 12px;
 }
+
+/* Sign-in remains visible while its command runs, independent of status scans. */
+.signin-intro {
+  margin: -4px 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  max-width: 75ch;
+}
+.card.signin-active {
+  grid-column: span 2;
+  border-color: var(--accent);
+}
+.signin-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+}
+.signin-flow p {
+  margin: 0;
+}
+.signin-heading {
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -.2px;
+}
+.signin-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: signin-step;
+}
+.signin-progress li {
+  counter-increment: signin-step;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.signin-progress li:before {
+  content: counter(signin-step);
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 10px;
+}
+.signin-progress .current {
+  color: var(--accent);
+  font-weight: 600;
+}
+.signin-progress .current:before {
+  border-color: var(--accent);
+  background: var(--soft);
+}
+.signin-host {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.signin-host strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.signin-browser-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.signin-open {
+  text-align: center;
+  white-space: normal;
+  flex: 1;
+}
+.signin-code-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 9px;
+  background: var(--input);
+  padding: 10px 12px;
+}
+.signin-code-row .code {
+  font-size: 22px;
+  letter-spacing: 1.5px;
+  margin-top: 3px;
+}
+.signin-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.signin-flow > .text-button {
+  align-self: flex-start;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+.signin-working:before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+@media (max-width: 560px) {
+  .card.signin-active {
+    grid-column: span 1;
+  }
+  .signin-progress {
+    gap: 8px 12px;
+  }
+  .signin-progress li {
+    font-size: 10px;
+  }
+}
+.signin-copy {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.signin-copy-feedback {
+  font-size: 12px;
+}
+.signin-code-row > div {
+  min-width: 0;
+}
