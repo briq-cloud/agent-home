@@ -617,7 +617,10 @@ test('a successful sign-in without a status command is recorded, without credent
   assert.equal(fixed.statusSource, 'sign-in');
   const record = JSON.parse(readFileSync(join(home, 'state', 'sign-ins.json'), 'utf8'));
   assert.equal(typeof record.fixed, 'string');
-  assert.deepEqual(Object.keys(record), ['fixed']);
+  // An earlier mock login may have completed during the intervening tests.
+  // Every record must still be only a known CLI's completion date.
+  assert.ok(Object.keys(record).every((name) => ['fixed', 'mock'].includes(name)));
+  assert.ok(Object.values(record).every((value) => typeof value === 'string' && Number.isFinite(Date.parse(value))));
   assert.equal(statSync(join(home, 'state', 'sign-ins.json')).mode & 0o777, 0o600);
 });
 

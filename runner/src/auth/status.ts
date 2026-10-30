@@ -1,5 +1,32 @@
 import { spawn } from 'node:child_process';
 
+const STATUS_OUTPUT_LIMIT = 16_384;
+
+function explicitStatus(stream: string): boolean | undefined {
+  const candidates = [stream.trim(), ...stream.split(/\r?\n/).map((line) => line.trim())];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const value: unknown = JSON.parse(candidate);
+      if (
+        value !== null &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        typeof (value as { loggedIn?: unknown }).loggedIn === 'boolean'
+      ) {
+        return (value as { loggedIn: boolean }).loggedIn;
+      }
+    } catch {
+      /* Status commands may print human-readable text instead of JSON. */
+    }
+  }
+  return undefined;
+}
+
+function explicitlySignedOut(text: string): boolean {
+  return /\b(?:not\s+logged\s+in|logged\s+out|not\s+authenticated|not\s+signed\s+in|login\s+required)\b/i.test(text);
+}
+
 /** A status command that could not finish says nothing about the person's sign-in. */
 export function commandStatus(
   command: string[],
@@ -8,15 +35,21 @@ export function commandStatus(
 ): Promise<boolean | null> {
   return new Promise((resolve) => {
     const [cmd, ...args] = command;
-    const child = spawn(cmd as string, args, { env, stdio: ['ignore', 'pipe', 'ignore'] });
-    let out = '';
+    const child = spawn(cmd as string, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout: Buffer[] = [],
+      stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let invalid = false;
     let timedOut = false;
-    child.stdout?.on('data', (b: Buffer) => {
-      if (Buffer.byteLength(out) + b.length > 16384) {
-        timedOut = true;
+    const collect = (chunks: Buffer[]) => (chunk: Buffer) => {
+      outputBytes += chunk.length;
+      if (outputBytes > STATUS_OUTPUT_LIMIT) {
+        invalid = true;
         child.kill('SIGKILL');
-      } else out += b.toString();
-    });
+      } else chunks.push(Buffer.from(chunk));
+    };
+    child.stdout?.on('data', collect(stdout));
+    child.stderr?.on('data', collect(stderr));
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');
@@ -25,11 +58,15 @@ export function commandStatus(
       clearTimeout(timer);
       resolve(null);
     });
-    child.on('exit', (code, signal) => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (timedOut || signal || code === null) return resolve(null);
-      const m = /"loggedIn"\s*:\s*(true|false)/.exec(out);
-      resolve(m ? m[1] === 'true' : code === 0);
+      if (timedOut || invalid || signal || code === null) return resolve(null);
+      const out = Buffer.concat(stdout).toString('utf8');
+      const err = Buffer.concat(stderr).toString('utf8');
+      const structured = explicitStatus(out) ?? explicitStatus(err);
+      if (structured !== undefined) return resolve(structured);
+      if (explicitlySignedOut(`${out}\n${err}`)) return resolve(false);
+      resolve(code === 0);
     });
   });
 }

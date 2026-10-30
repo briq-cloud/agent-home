@@ -19,6 +19,58 @@ test('reads a structured status even when the command exits successfully', async
   );
   assert.equal(await commandStatus([process.execPath, '-e', 'console.log(JSON.stringify({loggedIn:true}))'], {}), true);
 });
+
+test('explicit signed-out messages from successful status commands stay negative', async () => {
+  const messages = ['Not logged in', 'Logged out', 'Not authenticated', 'Not signed in', 'Login required'];
+  for (const message of messages) {
+    assert.equal(
+      await commandStatus([process.execPath, '-e', `process.stderr.write(${JSON.stringify(message)})`], {}),
+      false,
+      message,
+    );
+  }
+  assert.equal(
+    await commandStatus([process.execPath, '-e', 'process.stdout.write("status available")'], {}),
+    true,
+    'legacy status commands with no explicit state still use exit status',
+  );
+});
+
+test('explicit JSON loggedIn state takes precedence over human-readable output and exit status', async () => {
+  assert.equal(
+    await commandStatus(
+      [process.execPath, '-e', 'console.log(JSON.stringify({loggedIn:true})); console.error("Not logged in")'],
+      {},
+    ),
+    true,
+  );
+  assert.equal(
+    await commandStatus(
+      [process.execPath, '-e', 'console.log(JSON.stringify({loggedIn:false})); process.exitCode = 0'],
+      {},
+    ),
+    false,
+  );
+  assert.equal(
+    await commandStatus(
+      [process.execPath, '-e', 'console.log(JSON.stringify({loggedIn:false})); process.exitCode = 1'],
+      {},
+    ),
+    false,
+  );
+});
+
+test('status output bounds cover stdout and stderr, while timeout remains unavailable', async () => {
+  assert.equal(await commandStatus([process.execPath, '-e', 'process.stderr.write("x".repeat(17000))'], {}), null);
+  assert.equal(
+    await commandStatus(
+      [process.execPath, '-e', 'process.stderr.write("Not logged in"); setInterval(() => {}, 1000)'],
+      {},
+      100,
+    ),
+    null,
+  );
+});
 test('API authentication is never labelled an included subscription', async () => {
   assert.equal(parseBillingStatus('{"loggedIn":true,"authMethod":"api_key"}'), 'use');
   assert.equal(parseBillingStatus('{"loggedIn":true,"authMethod":"claude.ai"}'), 'subscription');
