@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import type { Cli } from './clis.ts';
+import type { Cli } from './catalog.ts';
 
 /**
  * A provider the person brings a key for, and the harnesses that can use it: Claude Code on an
@@ -81,6 +81,9 @@ export interface Profile {
   provider: string;
   harness: Harness;
   model?: string;
+  /** Exact catalog version, approved for automatic selection by the home's operator. */
+  canonical?: string;
+  autoEligible?: boolean;
 }
 
 /** The variable a Codex profile reads its key from: its config names it, nothing else does. */
@@ -126,7 +129,10 @@ export class Keys {
   }
 
   dropProfile(name: string): void {
-    this.write(this.profilesFile, this.profiles().filter((q) => q.name !== name));
+    this.write(
+      this.profilesFile,
+      this.profiles().filter((q) => q.name !== name),
+    );
   }
 
   /**
@@ -139,12 +145,23 @@ export class Keys {
     const key = this.key(p.provider) ?? '';
     const home = join(this.logins, 'profiles', p.name);
     mkdirSync(home, { recursive: true, mode: 0o700 });
-    const base = { name: p.name, acp: harnessCli.acp, profile: { provider: p.provider, harness: p.harness, ...(p.model ? { model: p.model } : {}) } };
+    const base = {
+      name: p.name,
+      acp: harnessCli.acp,
+      profile: { provider: p.provider, harness: p.harness, ...(p.model ? { model: p.model } : {}) },
+    };
     if (p.harness === 'claude') {
       const c = provider.claude as NonNullable<Provider['claude']>;
       const models = p.model
         ? Object.fromEntries(
-            ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL'].map((n) => [n, p.model as string]),
+            [
+              'ANTHROPIC_MODEL',
+              'ANTHROPIC_DEFAULT_FABLE_MODEL',
+              'ANTHROPIC_DEFAULT_OPUS_MODEL',
+              'ANTHROPIC_DEFAULT_SONNET_MODEL',
+              'ANTHROPIC_DEFAULT_HAIKU_MODEL',
+              'CLAUDE_CODE_SUBAGENT_MODEL',
+            ].map((n) => [n, p.model as string]),
           )
         : {};
       return {
@@ -216,9 +233,12 @@ export function profileFor(provider: unknown, harness: unknown, model: unknown):
   if (!model && p.claude?.needsModel && p.id !== 'openrouter') model = p.example;
   if (harness !== 'claude' && harness !== 'codex')
     return `harness is claude or codex${p.cli ? `; ${p.id}'s key goes to ${p.cli.name} itself` : ''}`;
-  if (!p[harness]) return `${p.name} has no endpoint ${harness === 'codex' ? 'that serves the Responses API, which Codex needs' : 'for Claude Code'}`;
-  if (model !== undefined && (typeof model !== 'string' || !/^[\w./:@[\]-]{1,128}$/.test(model))) return 'model is a model name';
+  if (!p[harness])
+    return `${p.name} has no endpoint ${harness === 'codex' ? 'that serves the Responses API, which Codex needs' : 'for Claude Code'}`;
+  if (model !== undefined && (typeof model !== 'string' || !/^[\w./:@[\]-]{1,128}$/.test(model)))
+    return 'model is a model name';
   const needsModel = harness === 'codex' || Boolean(p.claude?.needsModel);
-  if (needsModel && !model) return `${p.name} needs a model with ${harness}${p.example ? `, such as ${p.example}` : ''}`;
+  if (needsModel && !model)
+    return `${p.name} needs a model with ${harness}${p.example ? `, such as ${p.example}` : ''}`;
   return { name: `${p.id}-${harness}`, provider: p.id, harness, ...(model ? { model: model as string } : {}) };
 }

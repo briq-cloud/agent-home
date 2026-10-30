@@ -60,7 +60,7 @@ export async function startLive(root, suite = {}) {
   const source = resolve(
     process.env.BENCH_RUNNER_SOURCE ?? fileURLToPath(new URL("../runner", import.meta.url)),
   );
-  const { clis } = await import(pathToFileURL(join(source, "src/clis.ts")));
+  const { clis } = await import(pathToFileURL(join(source, "src/providers/catalog.ts")));
   const harness = clis({}).find((c) => c.name === "claude");
   if (!harness) throw Error("Claude adapter missing.");
   const configDir = join(root, "profile");

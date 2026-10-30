@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import type { Cli } from './clis.ts';
-import { log } from './log.ts';
+import type { Cli } from '../providers/catalog.ts';
+import { log } from '../telemetry/log.ts';
 
 /** What a sign-in shows the app: the vendor's page, and a code when the vendor gives one. */
 export interface SignInState {
@@ -99,7 +99,12 @@ export class SignIn {
       const tick = setInterval(() => {
         const s = this.current;
         const waited = Date.now() - started;
-        if (s.state === 'done' || s.state === 'failed' || (s.state === 'waiting' && (s.code || waited > 3000)) || waited > 30_000) {
+        if (
+          s.state === 'done' ||
+          s.state === 'failed' ||
+          (s.state === 'waiting' && (s.code || waited > 3000)) ||
+          waited > 30_000
+        ) {
           clearInterval(tick);
           resolve(s);
         }

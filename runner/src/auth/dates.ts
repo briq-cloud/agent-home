@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import type { SignInDates } from './clis.ts';
+import type { SignInDates } from '../providers/catalog.ts';
 
 /** What `/status` says of a sign-in's life. */
 export interface SignInLife {
@@ -21,7 +21,11 @@ const WEEK_MS = 7 * 86_400_000;
  * Reads the dates of a sign-in file, field by field from its text: the tokens beside them are
  * never parsed, kept or returned. `undefined` when the file or a date is not there.
  */
-export function signInLife(dates: SignInDates, env: Record<string, string | undefined>, now = Date.now()): SignInLife | undefined {
+export function signInLife(
+  dates: SignInDates,
+  env: Record<string, string | undefined>,
+  now = Date.now(),
+): SignInLife | undefined {
   const file = dates.file.replace(/\$([A-Z_][A-Z0-9_]*)/g, (_, name: string) => env[name] ?? '');
   let text: string;
   try {
@@ -37,7 +41,8 @@ export function signInLife(dates: SignInDates, env: Record<string, string | unde
     return Number.isFinite(t) && t > 0 ? t : undefined;
   };
   const refreshed = at(dates.refreshedAt);
-  const ends = at(dates.endsAt) ?? (refreshed !== undefined && dates.days ? refreshed + dates.days * 86_400_000 : undefined);
+  const ends =
+    at(dates.endsAt) ?? (refreshed !== undefined && dates.days ? refreshed + dates.days * 86_400_000 : undefined);
   if (ends === undefined) return undefined;
   const access = at(dates.accessEndsAt);
   return {

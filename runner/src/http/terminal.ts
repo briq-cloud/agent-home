@@ -1,7 +1,7 @@
 import { type IncomingMessage, type ServerResponse, request } from 'node:http';
 import { connect } from 'node:net';
 import type { Duplex } from 'node:stream';
-import { log } from './log.ts';
+import { log } from '../telemetry/log.ts';
 
 /**
  * The terminal (ttyd, on localhost with `--base-path /terminal`) behind the runner's door: a
