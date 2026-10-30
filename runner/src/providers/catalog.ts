@@ -56,7 +56,7 @@ export interface SignInDates {
 }
 
 /** The adapters this package pins, for the two CLIs that have no ACP mode of their own. */
-const BIN = fileURLToPath(new URL('../node_modules/.bin/', import.meta.url));
+const BIN = fileURLToPath(new URL('../../node_modules/.bin/', import.meta.url));
 
 export const CLIS: Cli[] = [
   {
@@ -66,7 +66,11 @@ export const CLIS: Cli[] = [
     status: ['claude', 'auth', 'status'],
     oneRefresher: true,
     // About 29 days from the sign-in, used or not; the access token lasts 8 hours (measured).
-    signIn: { file: '$CLAUDE_CONFIG_DIR/.credentials.json', endsAt: 'refreshTokenExpiresAt', accessEndsAt: 'expiresAt' },
+    signIn: {
+      file: '$CLAUDE_CONFIG_DIR/.credentials.json',
+      endsAt: 'refreshTokenExpiresAt',
+      accessEndsAt: 'expiresAt',
+    },
   },
   {
     name: 'codex',
@@ -106,7 +110,32 @@ export const CLIS: Cli[] = [
 
 /** The CLIs, or `RUNNER_CLIS` (a JSON array of `Cli`) in their place: another CLI, or a test's. */
 export function clis(env: NodeJS.ProcessEnv): Cli[] {
-  return env.RUNNER_CLIS ? (JSON.parse(env.RUNNER_CLIS) as Cli[]) : CLIS;
+  const table = env.RUNNER_CLIS ? (JSON.parse(env.RUNNER_CLIS) as Cli[]) : CLIS;
+  if (!Array.isArray(table) || table.length > 32) throw Error('RUNNER_CLIS must be an array with at most 32 entries');
+  const seen = new Set<string>();
+  for (const cli of table) {
+    if (
+      !cli ||
+      typeof cli.name !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/.test(cli.name) ||
+      cli.name === 'auto' ||
+      seen.has(cli.name)
+    )
+      throw Error('CLI names must be unique; auto is reserved');
+    seen.add(cli.name);
+    for (const key of ['acp', 'login', 'status'] as const) {
+      const command = cli[key];
+      if (key !== 'acp' && command === undefined) continue;
+      if (
+        !Array.isArray(command) ||
+        !command.length ||
+        command.length > 128 ||
+        command.some((s) => typeof s !== 'string' || !s || s.length > 4096 || s.includes('\0'))
+      )
+        throw Error('invalid CLI command');
+    }
+  }
+  return table;
 }
 
 /**

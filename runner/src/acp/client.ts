@@ -1,6 +1,6 @@
 import { type Id, type Rpc, RpcFailure } from './agent.ts';
 import { GLOBAL_CAPABILITIES, type Hub, type Peer } from './hub.ts';
-import { log } from './log.ts';
+import { log } from '../telemetry/log.ts';
 
 /**
  * One ACP connection from an app. The runner is its agent: requests go to the hub, which
@@ -28,7 +28,8 @@ export class ClientConn implements Peer {
   async run(stream: { readable: ReadableStream<unknown>; writable: WritableStream<unknown> }): Promise<void> {
     this.writer = stream.writable.getWriter();
     try {
-      for await (const wire of stream.readable) for (const msg of Array.isArray(wire) ? wire : [wire]) this.receive(msg as Rpc);
+      for await (const wire of stream.readable)
+        for (const msg of Array.isArray(wire) ? wire : [wire]) this.receive(msg as Rpc);
     } catch (err) {
       log.info('client stream ended', { cli: this.cli, err: String(err) });
     } finally {

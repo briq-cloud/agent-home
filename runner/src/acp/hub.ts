@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Agent, type Rpc, RpcFailure } from './agent.ts';
-import type { Cli } from './clis.ts';
-import { log } from './log.ts';
+import type { Cli } from '../providers/catalog.ts';
+import { log } from '../telemetry/log.ts';
 
 /** A client connection, as the hub sees it. */
 export interface Peer {
@@ -401,7 +401,9 @@ export class Hub {
     const e = this.engine(cli);
     const methodId = (params as { methodId?: string } | undefined)?.methodId;
     if (method === 'authenticate' && methodId && e.agent.cli.blockedAuth?.includes(methodId))
-      return Promise.reject(new RpcFailure({ code: -32602, message: `${cli} does not sign in with ${methodId} in an agent home` }));
+      return Promise.reject(
+        new RpcFailure({ code: -32602, message: `${cli} does not sign in with ${methodId} in an agent home` }),
+      );
     return e.agent.request(method, params);
   }
 
@@ -439,7 +441,11 @@ export class Hub {
     // session goes to the next CLI while the first is busy, rather than queue behind it.
     fit.sort((a, b) => Number(a.nearLimit) - Number(b.nearLimit) || a.busy - b.busy || a.rank - b.rank);
     const first = fit[0];
-    if (!first) throw new RpcFailure({ code: -32002, message: 'no CLI to give a session to: all are signed out or at their limit' });
+    if (!first)
+      throw new RpcFailure({
+        code: -32002,
+        message: 'no CLI to give a session to: all are signed out or at their limit',
+      });
     return first.cli;
   }
 
@@ -459,7 +465,9 @@ export class Hub {
   /** The CLIs at their limit now, and until when. */
   limits(): Record<string, string> {
     const now = Date.now();
-    return Object.fromEntries([...this.limited].filter(([, t]) => t > now).map(([cli, t]) => [cli, new Date(t).toISOString()]));
+    return Object.fromEntries(
+      [...this.limited].filter(([, t]) => t > now).map(([cli, t]) => [cli, new Date(t).toISOString()]),
+    );
   }
 
   private limit(cli: string, until = Date.now() + LIMITED_MS): void {
@@ -475,9 +483,18 @@ export class Hub {
     for (const [key, value] of Object.entries(meta ?? {})) {
       if (!/rate.?limit/i.test(key) || !value) continue;
       if (value.status === 'rejected')
-        this.limit(cli, typeof value.resetsAt === 'number' ? (value.resetsAt < 1e12 ? value.resetsAt * 1000 : value.resetsAt) : undefined);
+        this.limit(
+          cli,
+          typeof value.resetsAt === 'number'
+            ? value.resetsAt < 1e12
+              ? value.resetsAt * 1000
+              : value.resetsAt
+            : undefined,
+        );
       // Its fullest window (Claude's `unifiedWindows`); a report without windows says none is full.
-      const windows = Object.values((value as { unifiedWindows?: Record<string, { utilization?: number }> }).unifiedWindows ?? {});
+      const windows = Object.values(
+        (value as { unifiedWindows?: Record<string, { utilization?: number }> }).unifiedWindows ?? {},
+      );
       this.used.set(cli, Math.max(0, ...windows.map((w) => (typeof w?.utilization === 'number' ? w.utilization : 0))));
     }
     if (msg.method === 'session/update' && MODEL_UPDATES.has(msg.params?.update?.sessionUpdate)) {

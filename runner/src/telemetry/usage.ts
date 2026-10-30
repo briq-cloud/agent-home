@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { Rpc } from './agent.ts';
+import type { Rpc } from '../acp/agent.ts';
 
 /** Token counts as ACP reports them (`Usage`, unstable): totals for a session so far. */
 export interface Tokens {
@@ -80,7 +80,11 @@ function addCost(a: Cost | undefined, amount: number, currency: string): Cost {
  * before), the number of turns, and the last word of each CLI on its plan's limits. `noCost`: the
  * CLIs whose cost is not what they report, profiles priced by Claude Code at Anthropic's prices.
  */
-export function usageReport(stateDir: string, clis: string[], noCost = new Set<string>()): { clis: CliUsage[]; sessions: SessionUsage[] } {
+export function usageReport(
+  stateDir: string,
+  clis: string[],
+  noCost = new Set<string>(),
+): { clis: CliUsage[]; sessions: SessionUsage[] } {
   const out: CliUsage[] = [];
   const sessions: SessionUsage[] = [];
   for (const cli of clis) {
@@ -109,9 +113,11 @@ export function usageReport(stateDir: string, clis: string[], noCost = new Set<s
         if (m.method === 'session/update' && p.update?.sessionUpdate === 'usage_update') {
           const u = p.update;
           if (typeof u.used === 'number' && typeof u.size === 'number') s.context = { used: u.used, size: u.size };
-          if (!noCost.has(cli) && u.cost && typeof u.cost.amount === 'number') cost = { amount: u.cost.amount, currency: u.cost.currency ?? 'USD' };
+          if (!noCost.has(cli) && u.cost && typeof u.cost.amount === 'number')
+            cost = { amount: u.cost.amount, currency: u.cost.currency ?? 'USD' };
           for (const [key, value] of Object.entries((u._meta ?? {}) as Record<string, unknown>))
-            if (/rate.?limit|quota/i.test(key) && value) total.limits = { key, value, ...(s.lastTurnAt ? { at: s.lastTurnAt } : {}) };
+            if (/rate.?limit|quota/i.test(key) && value)
+              total.limits = { key, value, ...(s.lastTurnAt ? { at: s.lastTurnAt } : {}) };
         } else if (m.method === '_runner/turn' && p.state === 'idle' && p.stopReason !== 'cancelled' && p.at) {
           s.turns++;
           s.lastTurnAt = p.at;

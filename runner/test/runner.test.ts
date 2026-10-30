@@ -26,8 +26,14 @@ const ENDS = Date.now() + 3 * 86_400_000;
 before(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
   home = dir;
-  writeFileSync(join(dir, 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }));
-  writeFileSync(join(dir, 'fixed.json'), JSON.stringify({ oauth: { refreshToken: 'secret', refreshTokenExpiresAt: ENDS } }));
+  writeFileSync(
+    join(dir, 'auth.json'),
+    JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }),
+  );
+  writeFileSync(
+    join(dir, 'fixed.json'),
+    JSON.stringify({ oauth: { refreshToken: 'secret', refreshTokenExpiresAt: ENDS } }),
+  );
   const mock = [process.execPath, join(here, 'mock-agent.ts')];
   // A stand-in for ttyd: a page under /terminal/, and a WebSocket that echoes.
   const fake = createServer((req, res) => {
@@ -64,7 +70,12 @@ before(async () => {
           signIn: { file: '$MOCK_HOME/auth.json', refreshedAt: 'last_refresh', days: 30, refreshAfterDays: 8 },
         },
         { name: 'flaky', acp: mock, login: ['true'], status: ['sh', '-c', 'kill -TERM $$'] },
-        { name: 'fixed', acp: mock, login: ['true'], signIn: { file: '$MOCK_HOME/fixed.json', endsAt: 'refreshTokenExpiresAt' } },
+        {
+          name: 'fixed',
+          acp: mock,
+          login: ['true'],
+          signIn: { file: '$MOCK_HOME/fixed.json', endsAt: 'refreshTokenExpiresAt' },
+        },
         // For /acp: one never signed in, one more to route to.
         { name: 'off', acp: mock, login: ['true'], status: ['false'] },
         { name: 'second', acp: mock, login: ['true'], status: ['true'] },
@@ -176,23 +187,29 @@ test('refuses a caller without the key, and says what it runs', async () => {
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/status`)).status, 401);
   const status = await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } });
   const clis = (await status.json()).clis;
-  assert.deepEqual(clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]), [
-    ['mock', true],
-    ['flaky', null],
-    ['fixed', null],
-    ['off', false],
-    ['second', true],
-    ['term', null],
-    ['keyed', true],
-    ['keyless', false],
-    ['claude', true],
-    ['codex', true],
-  ]);
+  assert.deepEqual(
+    clis.map((c: { name: string; signedIn: boolean }) => [c.name, c.signedIn]),
+    [
+      ['mock', true],
+      ['flaky', null],
+      ['fixed', null],
+      ['off', false],
+      ['second', true],
+      ['term', null],
+      ['keyed', true],
+      ['keyless', false],
+      ['claude', true],
+      ['codex', true],
+    ],
+  );
   const by = Object.fromEntries(clis.map((c: { name: string }) => [c.name, c]));
   assert.equal(by.mock.signInWith, 'page');
   assert.deepEqual([by.term.signInWith, by.term.command], ['terminal', 'term auth login']);
   assert.deepEqual([by.keyless.signInWith, by.keyless.apiKeys], ['api-key', ['GEMINI_API_KEY']]);
-  const term = await fetch(`http://127.0.0.1:${PORT}/connect/term`, { method: 'POST', headers: { authorization: `Bearer ${TOKEN}` } });
+  const term = await fetch(`http://127.0.0.1:${PORT}/connect/term`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${TOKEN}` },
+  });
   assert.equal(term.status, 409);
   assert.match((await term.json()).error, /signs in in the terminal: term auth login/);
   // The dates of each sign-in, never its tokens.
@@ -257,7 +274,9 @@ test('queues a turn over the limit, and says where it is', async () => {
   const b = (await app.request('session/new', { cwd: '/tmp', mcpServers: [] })).result.sessionId;
   const slow = app.request('session/prompt', say(a, 'slow'));
   const quick = app.request('session/prompt', say(b, 'hello'));
-  const queued = await app.until((m) => m.method === '_runner/turn' && m.params.sessionId === b && m.params.state === 'queued');
+  const queued = await app.until(
+    (m) => m.method === '_runner/turn' && m.params.sessionId === b && m.params.state === 'queued',
+  );
   assert.equal(queued.params.position, 1);
   assert.equal((await slow).result.stopReason, 'end_turn');
   assert.equal((await quick).result.stopReason, 'end_turn');
@@ -295,7 +314,13 @@ test('refreshes a sign-in that a refresh renews, and says why not for one that o
   const ok = await post('mock');
   assert.equal(ok.status, 200);
   // The mock's file does not change: the end did not move.
-  assert.deepEqual(await ok.json(), { name: 'mock', moved: false, life: (await (await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()).clis[0].life });
+  assert.deepEqual(await ok.json(), {
+    name: 'mock',
+    moved: false,
+    life: (
+      await (await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })).json()
+    ).clis[0].life,
+  });
   const no = await post('fixed');
   assert.equal(no.status, 409);
   assert.match((await no.json()).error, /sign in again/);
@@ -337,7 +362,9 @@ test('counts what the sessions used, from the logs, per session, per CLI and per
   await app.request('session/prompt', say(id, 'hello'));
   await app.request('session/prompt', say(id, 'hello'));
   app.close();
-  const usage = await (await fetch(`http://127.0.0.1:${PORT}/usage`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  const usage = await (
+    await fetch(`http://127.0.0.1:${PORT}/usage`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  ).json();
   const mine = usage.sessions.find((s: { id: string }) => s.id === id);
   assert.equal(mine.turns, 2);
   assert.equal(mine.tokens.total, 220);
@@ -356,7 +383,11 @@ test('/acp routes each session: the CLI asked for, else the first fit, skipping 
   // `off` comes first in the route but is signed out: the next one, with its own capabilities.
   assert.equal(picked.result._meta.agentHome.cli, 'mock');
   assert.equal(picked.result._meta.agentHome.agentCapabilities.loadSession, true);
-  const asked = await app.request('session/new', { cwd: '/tmp', mcpServers: [], _meta: { agentHome: { cli: 'second' } } });
+  const asked = await app.request('session/new', {
+    cwd: '/tmp',
+    mcpServers: [],
+    _meta: { agentHome: { cli: 'second' } },
+  });
   assert.equal(asked.result._meta.agentHome.cli, 'second');
   // Later calls go to the CLI that holds the session, whatever the endpoint.
   const done = await app.request('session/prompt', say(asked.result.sessionId, 'hello'));
@@ -396,7 +427,9 @@ test('/acp leaves out a CLI that hit its plan limit, until its reset', async () 
   assert.match(limited.error.message, /usage limit/);
   const next = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
   assert.equal(next.result._meta.agentHome.cli, 'second');
-  const status = await (await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })).json();
+  const status = await (
+    await fetch(`http://127.0.0.1:${PORT}/status`, { headers: { authorization: `Bearer ${TOKEN}` } })
+  ).json();
   assert.ok(status.limited.mock);
   app.close();
 });
@@ -423,7 +456,10 @@ test('the bridge makes the home a local ACP agent, the folder of the client mapp
     for (let i = 0; i < 100 && !answers.has(id); i++) await new Promise((r) => setTimeout(r, 50));
     return answers.get(id) as Msg;
   };
-  assert.equal((await ask(1, 'initialize', { protocolVersion: 1, clientCapabilities: {} })).result.agentInfo.name, 'mock');
+  assert.equal(
+    (await ask(1, 'initialize', { protocolVersion: 1, clientCapabilities: {} })).result.agentInfo.name,
+    'mock',
+  );
   const created = await ask(2, 'session/new', { cwd: '/Users/ana/shop', mcpServers: [] });
   assert.equal(created.result._meta.cwd, '/work/shop');
   const done = await ask(3, 'session/prompt', say(created.result.sessionId, 'hello'));
@@ -436,7 +472,10 @@ test('never offers a sign-in method the home blocks, and refuses it', async () =
   const app = new App('/acp/keyless');
   await app.open();
   const init = await app.request('initialize', { protocolVersion: 1, clientCapabilities: {} });
-  assert.deepEqual(init.result.authMethods.map((m: { id: string }) => m.id), ['api-key']);
+  assert.deepEqual(
+    init.result.authMethods.map((m: { id: string }) => m.id),
+    ['api-key'],
+  );
   const refused = await app.request('authenticate', { methodId: 'personal' });
   assert.match(refused.error.message, /does not sign in with personal/);
   const allowed = await app.request('authenticate', { methodId: 'api-key' });
@@ -472,7 +511,10 @@ test('keeps a key on the home, never gives it back, and runs a provider with Cla
   assert.deepEqual(made, { name: 'zai-claude', provider: 'zai', harness: 'claude', acp: '/acp/zai-claude' });
   const status = await (await api('GET', '/status')).json();
   const profile = status.clis.find((c: { name: string }) => c.name === 'zai-claude');
-  assert.deepEqual([profile.signedIn, profile.signInWith, profile.profile], [true, 'api-key', { provider: 'zai', harness: 'claude' }]);
+  assert.deepEqual(
+    [profile.signedIn, profile.signInWith, profile.profile],
+    [true, 'api-key', { provider: 'zai', harness: 'claude' }],
+  );
   assert.doesNotMatch(JSON.stringify(status), /zai-secret-key/);
   // Its own settings folder, never the person's Claude sign-in; the provider maps Claude's model names.
   assert.deepEqual(await envOf('/acp/zai-claude'), {
@@ -484,7 +526,11 @@ test('keeps a key on the home, never gives it back, and runs a provider with Cla
   const app = await connect('/acp', 'agent-home');
   const picked = await app.request('session/new', { cwd: '/tmp', mcpServers: [] });
   assert.notEqual(picked.result._meta.agentHome.cli, 'zai-claude');
-  const named = await app.request('session/new', { cwd: '/tmp', mcpServers: [], _meta: { agentHome: { cli: 'zai-claude' } } });
+  const named = await app.request('session/new', {
+    cwd: '/tmp',
+    mcpServers: [],
+    _meta: { agentHome: { cli: 'zai-claude' } },
+  });
   assert.equal(named.result._meta.agentHome.cli, 'zai-claude');
   app.close();
 });
@@ -495,10 +541,19 @@ test('a provider that names its model, with Claude Code or Codex; a new key rest
   assert.equal(noModel.status, 200);
   assert.equal((await noModel.json()).model, 'openrouter/auto');
   assert.equal((await api('POST', '/profiles', { provider: 'zai', harness: 'codex' })).status, 400);
-  assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex', model: 'vendor/some-model' })).status, 200);
-  assert.equal((await api('POST', '/profiles', { provider: 'openrouter', harness: 'claude', model: 'vendor/some-model' })).status, 200);
+  assert.equal(
+    (await api('POST', '/profiles', { provider: 'openrouter', harness: 'codex', model: 'vendor/some-model' })).status,
+    200,
+  );
+  assert.equal(
+    (await api('POST', '/profiles', { provider: 'openrouter', harness: 'claude', model: 'vendor/some-model' })).status,
+    200,
+  );
   const codex = await envOf('/acp/openrouter-codex');
-  assert.deepEqual(codex, { codexHome: join(home, 'logins', 'profiles', 'openrouter-codex'), codexKey: 'or-first-key' });
+  assert.deepEqual(codex, {
+    codexHome: join(home, 'logins', 'profiles', 'openrouter-codex'),
+    codexKey: 'or-first-key',
+  });
   const config = readFileSync(join(codex.codexHome as string, 'config.toml'), 'utf8');
   assert.match(config, /model = "vendor\/some-model"/);
   assert.match(config, /base_url = "https:\/\/openrouter.ai\/api\/v1"/);
@@ -521,12 +576,17 @@ test('a CLI of the image that takes a key gets the one added on the page', async
   assert.equal((await api('PUT', '/keys/google', { key: 'has spaces in it' })).status, 400);
 });
 
-
 test('Auto configures a provider without requiring a harness or model', async () => {
   const saved = await api('PUT', '/keys/openrouter', { key: 'or-auto-key', auto: true });
   assert.equal(saved.status, 200);
   const auto = await api('POST', '/profiles', { provider: 'openrouter', harness: 'auto', model: 'auto' });
-  assert.deepEqual(await auto.json(), { name: 'openrouter-claude', provider: 'openrouter', harness: 'claude', model: 'openrouter/auto', acp: '/acp/openrouter-claude' });
+  assert.deepEqual(await auto.json(), {
+    name: 'openrouter-claude',
+    provider: 'openrouter',
+    harness: 'claude',
+    model: 'openrouter/auto',
+    acp: '/acp/openrouter-claude',
+  });
   const actual = await envOf('/acp/openrouter-claude');
   assert.equal(actual.model, 'openrouter/auto');
   assert.equal(actual.token, 'or-auto-key');
@@ -535,7 +595,9 @@ test('Auto configures a provider without requiring a harness or model', async ()
 
 test('copy link preserves both gates and assets require authentication', async () => {
   assert.equal((await fetch(`http://127.0.0.1:${PORT}/link`)).status, 401);
-  const link = await fetch(`http://127.0.0.1:${PORT}/link`, { headers: { authorization: `Bearer ${TOKEN}`, cookie: 'other=1; briq_token=router-private-token' } });
+  const link = await fetch(`http://127.0.0.1:${PORT}/link`, {
+    headers: { authorization: `Bearer ${TOKEN}`, cookie: 'other=1; briq_token=router-private-token' },
+  });
   assert.equal(link.headers.get('cache-control'), 'no-store');
   const query = new URLSearchParams((await link.json()).query);
   assert.equal(query.get('token'), TOKEN);
@@ -558,7 +620,6 @@ test('a successful sign-in without a status command is recorded, without credent
   assert.deepEqual(Object.keys(record), ['fixed']);
   assert.equal(statSync(join(home, 'state', 'sign-ins.json')).mode & 0o777, 0o600);
 });
-
 
 test('falls back to the last completed sign-in when a live check is unavailable', async () => {
   assert.equal((await api('POST', '/connect/flaky')).status, 200);

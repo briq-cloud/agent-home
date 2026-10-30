@@ -1,0 +1,28 @@
+#!/bin/sh
+# Standalone supervisor; briq recipes may supply their own command.
+set -eu
+umask 077
+: "${RUNNER_TOKEN:?Set RUNNER_TOKEN to a private random value}"
+export RUNNER_CWD="${RUNNER_CWD:-/work}"
+export RUNNER_STATE="${RUNNER_STATE:-$RUNNER_CWD/.runner}"
+export RUNNER_LOGINS="${RUNNER_LOGINS:-$RUNNER_CWD/.logins}"
+mkdir -p "$RUNNER_CWD" "$RUNNER_STATE" "$RUNNER_LOGINS"
+terminal_pid=''
+runner_pid=''
+stop() {
+  trap - TERM INT
+  [ -z "$runner_pid" ] || kill "$runner_pid" 2>/dev/null || true
+  [ -z "$terminal_pid" ] || kill "$terminal_pid" 2>/dev/null || true
+  [ -z "$runner_pid" ] || wait "$runner_pid" 2>/dev/null || true
+  [ -z "$terminal_pid" ] || wait "$terminal_pid" 2>/dev/null || true
+}
+trap stop TERM INT EXIT
+if [ "${RUNNER_TERMINAL_ENABLED:-1}" = 1 ]; then
+  ttyd --interface 127.0.0.1 --port "${RUNNER_TTYD_PORT:-7681}" --base-path /terminal --writable bash > "$RUNNER_STATE/terminal.log" 2>&1 &
+  terminal_pid=$!
+fi
+agent-home-runner &
+runner_pid=$!
+code=0
+wait "$runner_pid" || code=$?
+exit "$code"

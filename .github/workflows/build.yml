@@ -44,6 +44,8 @@ jobs:
           npm ci --omit=optional --no-fund --no-audit
           npm run typecheck
           npm test
+          npm run benchmark -- /tmp/foundation-results.json
+          node --check src/ui/web/home.js
           cd ../benchmarks
           npm ci --no-fund --no-audit
           npm test
@@ -104,8 +106,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          load: ${{ github.event_name == 'pull_request' }}
+          push: false
+          load: true
           provenance: false
           build-args: |
             BASE=${{ steps.v.outputs.base }}
@@ -126,12 +128,33 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Standalone startup smoke test
+        run: |
+          set -eu
+          docker run -d --name agent-home-smoke -e RUNNER_TOKEN=ci-smoke -e RUNNER_CLIS='[]' "$IMAGE:${{ steps.date.outputs.tag }}"
+          trap 'docker logs agent-home-smoke; docker rm -f agent-home-smoke' EXIT
+          for n in $(seq 1 30); do
+            docker exec agent-home-smoke node -e "fetch('http://127.0.0.1:8090/features',{headers:{authorization:'Bearer ci-smoke'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
+            sleep 1
+          done
+          docker exec agent-home-smoke node -e "fetch('http://127.0.0.1:8090/terminal/',{headers:{authorization:'Bearer ci-smoke'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+      - name: Publish the checked image
+        id: publish
+        if: github.event_name != 'pull_request'
+        run: |
+          set -eu
+          docker push "$IMAGE:${{ steps.date.outputs.tag }}"
+          docker push "$IMAGE:latest"
+          digest="$(docker buildx imagetools inspect "$IMAGE:${{ steps.date.outputs.tag }}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Attest the provenance
         if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.build.outputs.digest }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
 
       - name: Write the reference from the image
         run: |
@@ -141,7 +164,7 @@ jobs:
           [ "${{ github.event_name }}" = pull_request ] && { cat REFERENCE.md >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           mb="$(docker manifest inspect "$IMAGE:$t" | jq '[.layers[].size] | add / 1048576 | round')"
           printf '\n## Image\n\n`%s:%s`, %s MB compressed, digest `%s`, on `%s`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://%s:%s --repo briq-cloud/agent-home`.\n' \
-            "$IMAGE" "$t" "$mb" "${{ steps.build.outputs.digest }}" "${{ steps.v.outputs.base }}" "$IMAGE" "$t" >> REFERENCE.md
+            "$IMAGE" "$t" "$mb" "${{ steps.publish.outputs.digest }}" "${{ steps.v.outputs.base }}" "$IMAGE" "$t" >> REFERENCE.md
           cat REFERENCE.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Commit the reference

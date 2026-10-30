@@ -1,76 +1,83 @@
-# briq agent home
+# Agent home
 
-The image behind `briq_run({ recipe: "agent-home" })` on [briq](https://briq.cloud): one person's
-computer in the cloud, where they sign in to each vendor's agent CLI with the vendor's own flow,
-and their agents run on their own plans.
+One computer for your agent subscriptions, provider keys and long-running projects.
+Use a specific CLI, or let Auto coordinate tasks across your connected providers.
 
+```sh
+export RUNNER_TOKEN="$(openssl rand -hex 32)"
+docker run --rm -p 127.0.0.1:8090:8090 --env RUNNER_TOKEN \
+  -v agent-home:/work ghcr.io/briq-cloud/agent-home:latest
 ```
-ghcr.io/briq-cloud/agent-home:latest
-```
 
-The [briq sandbox](https://github.com/briq-cloud/sandbox) (Ubuntu 24.04, Python, Node.js, git, the
-usual tools) plus:
+Open `http://localhost:8090/?token=<RUNNER_TOKEN>`. Sign in through each vendor's own flow.
+Keep the volume: it holds sign-ins, keys, conversations, tasks and memory.
+[Briq](https://briq.cloud) is another way to run the same image.
 
-| CLI | Command | Sign-in |
+## Two entry points
+
+| Choice | ACP endpoint | Behaviour |
 | --- | --- | --- |
-| Claude Code | `claude` | `claude auth login` |
-| Codex | `codex` | `codex login --device-auth` |
-| Copilot CLI | `copilot` | `copilot login --device-code` |
-| Cursor | `agent` | `NO_OPEN_BROWSER=1 agent login` |
-| Grok Build | `grok` | `grok login --device-auth` |
-| Mistral Vibe | `vibe` | `vibe --setup` |
-| Gemini CLI | `gemini` | a key only (`GEMINI_API_KEY`), enforced by its system settings: it serves no consumer plan since June 2026 |
+| Specific provider | `/acp/auto` with `_meta.agentHome.cli` | Pins that harness and shares task/context services. |
+| Auto orchestrator | `/acp/auto` | Persists tasks, selects a route and keeps the conversation pinned. |
 
-Other providers' keys (the GLM, Kimi, MiniMax and Alibaba coding plans, DeepSeek, OpenRouter) run
-on Claude Code or Codex as profiles, added on the runner's page.
+Auto considers subscriptions first. API execution and decision-model calls require explicit opt-in.
+The page includes chat, task status, permission requests, provider profiles and a terminal.
+Raw `/acp/<cli-or-profile>` remains available for full vendor ACP capabilities.
+`/acp` remains the compatibility endpoint for subscription load balancing.
 
-and `ttyd` for a terminal page, and `agent-home-runner`: it drives the CLIs over ACP for apps and
-keeps their sessions while nobody is connected ([runner/README.md](runner/README.md)). Every version, as the last build left them:
-**[REFERENCE.md](REFERENCE.md)**. Inside a home, `agent-home-versions` prints the same.
-
-## How it is built
-
-- **Unmodified binaries**, each from the vendor's own release channel.
-- **Pinned per build.** A build takes each CLI's current stable release; a date tag
-  (`2026-10-27`) never moves. `latest` follows the newest build, every Monday and on every change
-  here, for `linux/amd64`.
-- **Self-update off.** `DISABLE_AUTOUPDATER` and `DISABLE_UPDATES` (Claude Code),
-  `/etc/codex/config.toml`, `COPILOT_AUTO_UPDATE=false`, `GROK_DISABLE_AUTOUPDATER` and
-  `/etc/grok/managed_config.toml`, `/etc/gemini-cli/settings.json`. Cursor and Vibe read theirs
-  from the user's own config. Gemini's usage statistics are off in its system settings.
-- **Checked downloads.** Each one against its publisher's checksum (Claude Code's manifest, the
-  GitHub release digests, ttyd's `SHA256SUMS`, PyPI's); Cursor and Grok publish none, so their
-  hashes are recorded. Every sha256 and the base image's digest are in REFERENCE.md.
-- **Provenance.** Each pushed image is attested by this repo's build:
-  `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:<tag> --repo briq-cloud/agent-home`.
-- **No browser.** A CLI that opens a link (a sign-in page) calls `xdg-open` or `$BROWSER`; here both
-  are `show-url`, which shows the link as plain text in a terminal window of its own.
-
-Sign-ins live where each CLI's variable says (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`,
-`GROK_HOME`, `VIBE_HOME`, `XDG_CONFIG_HOME`). On briq they are on the home's volume, which is never
-forked or backed up.
-
-## Run it elsewhere
-
-```bash
-docker run --rm -it ghcr.io/briq-cloud/agent-home:latest bash
+```mermaid
+flowchart LR
+  App[Apps / home page] --> Direct[Specific provider]
+  App --> Auto[Auto orchestrator]
+  Auto --> Tasks[SQLite tasks / DAG / leases]
+  Tasks --> Router[Routing: plans + models + budgets]
+  Tasks --> Context[Source snapshots / factual memory]
+  Router --> Hub[ACP session hub]
+  Direct --> Tasks
+  Hub --> CLI[Vendor CLIs / isolated key profiles]
+  CLI --> Vendor[Vendor subscriptions / APIs]
+  CLI <-->|Scoped MCP tools| Tasks
 ```
 
-## Build it
+## What runs each concept
 
-```bash
-docker build -t agent-home .
-docker run --rm agent-home agent-home-versions
+| Concept | Component | Default / boundary |
+| --- | --- | --- |
+| Harnesses | Unmodified vendor CLIs + official ACP adapters | Pinned per image. |
+| Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, explicit retries. |
+| Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic routing off; exact approved model bindings. |
+| Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
+| Prompt caching | Each vendor's native cache | No subscription traffic interception. |
+| Memory | SQLite FTS5 factual store | Explicit writes, provenance, expiry and deletion. |
+| Communication | MCP task tools + durable mailboxes | Delegation off; one coordinator and one child. |
+| Deferred work | UTC scheduling + expiring pricing evidence | Per-task opt-in; route/window rechecked at dispatch. |
+| Permissions | Vendor ACP requests + user responses | Waits for approval unless an explicit vendor mode is selected. |
+| Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
+
+Research: [T3 Code, Tencent memory and alternatives](docs/research/2026-10-30-architecture.html).
+Tencent's gateway and provider batch APIs remain evaluated integrations, not active dependencies.
+
+## Configure and develop
+
+| Setting | Default |
+| --- | --- |
+| `RUNNER_ORCHESTRATOR` | `1` |
+| `RUNNER_DYNAMIC_ROUTING` | `0`; needs an OpenRouter key and per-task decision budget |
+| `RUNNER_DELEGATION` | `0`; requires at least two turn slots |
+| `RUNNER_MEMORY` | `1`; retrieval and writes remain explicit |
+| `RUNNER_DEFERRED` | `1`; individual tasks opt in |
+| `RUNNER_TERMINAL_ENABLED` | `1` in the standalone launcher |
+
+```sh
+cd runner
+npm ci
+npm run typecheck
+npm test
+npm run benchmark -- /tmp/agent-home-benchmark.json
 ```
 
-## Links
+[Task/API examples](runner/README.md) · [Architecture](docs/architecture.md) ·
+[Image and CLI list](docs/image.md) · [Pinned versions](REFERENCE.md) · [Model benchmarks](benchmarks/README.md)
 
-- [The recipe](https://briq.cloud/cookbook/agent-home): sign-in, sessions, limits.
-- [The sandbox reference](https://briq.cloud/docs/sandbox): what the base image has.
-
-MIT licensed. The briq service is operated by Uplab SAS under its
-[terms](https://briq.cloud/legal/terms).
-
-## Benchmarks
-
-[Small ACP benchmarks](benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
+This is a single-user home. Coordination and path checks do not provide OS sandboxes.
+Agents retain the host permissions their CLIs run with.

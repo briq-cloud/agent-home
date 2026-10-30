@@ -1,8 +1,8 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
-import type { Cli } from './clis.ts';
-import { log } from './log.ts';
+import type { Cli } from '../providers/catalog.ts';
+import { log } from '../telemetry/log.ts';
 
 export type Id = string | number;
 
@@ -123,7 +123,8 @@ export class Agent {
       this.writer = undefined;
       this.ready = undefined;
       this.known.clear();
-      for (const p of this.pending.values()) p.reject(new RpcFailure({ code: -32603, message: `${this.cli.name} exited` }));
+      for (const p of this.pending.values())
+        p.reject(new RpcFailure({ code: -32603, message: `${this.cli.name} exited` }));
       this.pending.clear();
       this.events.exited();
     });
@@ -194,7 +195,10 @@ export class Agent {
 }
 
 /** The runner's variables for its CLIs, with a CLI's own over them: `null` removes one. */
-export function withEnv(env: Record<string, string>, own: Record<string, string | null> | undefined): Record<string, string> {
+export function withEnv(
+  env: Record<string, string>,
+  own: Record<string, string | null> | undefined,
+): Record<string, string> {
   const out = { ...env };
   for (const [k, v] of Object.entries(own ?? {})) {
     if (v === null) delete out[k];

@@ -22,12 +22,14 @@
     <div class="grid" id="clis"><p class="muted">Loading agents…</p></div>
   </section>
   <section class="chat-shell" aria-labelledby="chat-title" id="chat">
-    <div class="chat-header"><div><p class="eyebrow">TRY YOUR CONNECTION</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="">Auto · subscriptions</option></select><button id="new-chat">New chat</button></div></div>
+    <div class="chat-header"><div><p class="eyebrow">YOUR AGENT HOME</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="auto">Auto orchestrator</option></select><button id="new-chat">New chat</button></div></div>
+    <label class="api-choice"><input type="checkbox" id="allow-paid"> Allow API-key profiles for this conversation (usage billed)</label>
     <p id="chat-status" role="status" class="muted">Choose an agent, or let your home choose.</p>
     <div id="chat-messages" role="log" aria-label="Conversation"><div class="empty-chat"><span class="chat-spark">✳</span><h3>A quick check, a real conversation.</h3><p>Send a message through your home’s ACP connection.</p></div></div>
     <div id="permissions" aria-live="polite"></div>
     <form id="chat-form"><label class="sr-only" for="prompt">Message</label><textarea id="prompt" rows="2" placeholder="Ask your agent…" required></textarea><div class="composer-footer"><span class="muted">Works on this home · /work</span><div class="actions"><button type="button" id="stop-chat" hidden>Stop</button><button class="primary" id="send-chat" type="submit">Send ↑</button></div></div></form>
   </section>
+  <section aria-labelledby="tasks-title"><div class="section-title"><div><p class="eyebrow">PROJECT EXECUTION</p><h2 id="tasks-title">Tasks</h2></div><span class="muted">Continues while disconnected</span></div><div id="task-list" class="grid"><p class="muted">Auto conversations appear here.</p></div></section>
   <section aria-labelledby="keys-title" id="keys-section">
     <div class="section-title"><div><p class="eyebrow">BRING YOUR OWN PROVIDER</p><h2 id="keys-title">Keys &amp; models</h2></div><span class="muted">Stored on this home</span></div>
     <div class="grid" id="keys"></div>

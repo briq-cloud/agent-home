@@ -137,12 +137,17 @@ RUN cd /opt/agent-home-runner \
   && npm cache clean --force \
   && printf '#!/bin/sh\nexec node /opt/agent-home-runner/src/main.ts "$@"\n' > /usr/local/bin/agent-home-runner \
   && chmod 755 /usr/local/bin/agent-home-runner \
-  && node --input-type=module -e "await import('/opt/agent-home-runner/src/clis.ts')"
+  && node --input-type=module -e "await import('/opt/agent-home-runner/src/providers/catalog.ts')"
 
 # A link a CLI opens (a sign-in page) shows in the terminal instead: `show-url`, as BROWSER and as
 # xdg-open (Vibe, Copilot and Cursor call it).
 COPY bin/show-url /usr/local/bin/show-url
 COPY bin/agent-home-versions /usr/local/bin/agent-home-versions
+COPY bin/agent-home-start /usr/local/bin/agent-home-start
 RUN chmod 755 /usr/local/bin/show-url /usr/local/bin/agent-home-versions \
+  && chmod 755 /usr/local/bin/agent-home-start \
   && ln -s /usr/local/bin/show-url /usr/local/bin/xdg-open \
   && agent-home-versions > /dev/null
+
+EXPOSE 8090
+CMD ["agent-home-start"]
