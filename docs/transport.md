@@ -275,6 +275,9 @@ Sign-in progress polls `GET /connect/<cli>` independently every 500 ms while act
 steps and completion update without waiting for slower overall account checks. Vibe uses its
 read-only ACP `_auth/status`. Grok uses the explicit authentication message from `grok models`;
 its model list alone proves nothing. Neither check needs a prompt or model call.
+Copilot uses its native SDK `auth.getStatus` (`statusSource: "sdk"`), through the installed CLI.
+The check is cached, bounded and stopped before native work or sign-in starts. It creates no
+chat session and returns no account identity or credentials. Unsupported or failed checks stay unknown.
 
 A CLI with no status command reports a recorded successful sign-in (`statusSource: "sign-in"`),
 not a live check. Only its completion date is stored in `.runner/sign-ins.json`; a vendor token

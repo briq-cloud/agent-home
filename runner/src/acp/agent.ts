@@ -31,6 +31,8 @@ export class RpcFailure extends Error {
 }
 
 export interface AgentEvents {
+  /** Join read-only native observations before starting; release after spawn is attempted. */
+  beforeStart?(): Promise<() => void>;
   /** A notification from the CLI: `session/update` and the like. */
   notification(msg: Rpc): void;
   /** A request from the CLI to its client, such as a permission: its result, or a throw. */
@@ -54,6 +56,7 @@ export class Agent {
   private writer: WritableStreamDefaultWriter<Rpc> | undefined;
   private ready: Promise<unknown> | undefined;
   private next = 1;
+  private startGeneration = 0;
   private readonly pending = new Map<Id, { resolve(v: unknown): void; reject(e: Error): void }>();
 
   constructor(cli: Cli, env: Record<string, string>, cwd: string, events: AgentEvents) {
@@ -69,7 +72,18 @@ export class Agent {
 
   /** Its `initialize` answer, starting the process first if needed. */
   ensure(): Promise<unknown> {
-    this.ready ??= this.start().catch((err: unknown) => {
+    const generation = this.startGeneration;
+    this.ready ??= (async () => {
+      const release = await this.events.beforeStart?.();
+      try {
+        if (generation !== this.startGeneration) throw new Error('Agent start interrupted');
+        // start() spawns synchronously before awaiting initialize. Once spawned,
+        // running=true keeps account observers out even if initialize fails.
+        return this.start();
+      } finally {
+        release?.();
+      }
+    })().catch((err: unknown) => {
       this.ready = undefined;
       throw err;
     });
@@ -85,11 +99,13 @@ export class Agent {
   }
 
   stop(): void {
+    this.startGeneration++;
     this.child?.kill('SIGTERM');
   }
 
   /** Stops the process and waits for it to exit: nothing holds the CLI's sign-in in memory after. */
   stopAndWait(): Promise<void> {
+    this.startGeneration++;
     const child = this.child;
     if (!child) return Promise.resolve();
     return new Promise((resolve) => {

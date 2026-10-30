@@ -192,6 +192,7 @@ interface Engine {
 }
 
 export interface HubOptions {
+  beforeStart?: (cli: string) => Promise<() => void>;
   clis: Cli[];
   env: Record<string, string>;
   /** Where the CLIs run: the home's volume. */
@@ -227,6 +228,7 @@ export class Hub {
   private readonly route: string[];
   private readonly signedIn: (cli: string) => Promise<boolean | null>;
   private readonly stateDir: string;
+  private readonly beforeStart: HubOptions['beforeStart'];
   /** CLIs at their plan's limit, until when: `/acp` picks another. */
   private readonly limited = new Map<string, number>();
   /** How much of its plan each CLI last said it used, its fullest window (0 to 1). */
@@ -238,6 +240,7 @@ export class Hub {
   constructor(opts: HubOptions) {
     this.slots = new Slots(opts.maxTurns);
     this.stateDir = opts.stateDir;
+    this.beforeStart = opts.beforeStart;
     this.env = opts.env;
     this.cwd = opts.cwd;
     this.route = opts.route?.length ? opts.route : opts.clis.map((c) => c.name);
@@ -251,6 +254,7 @@ export class Hub {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const sessions = new Map<string, Session>();
     const agent = new Agent(cli, this.env, this.cwd, {
+      beforeStart: this.beforeStart ? () => this.beforeStart!(cli.name) : undefined,
       notification: (msg) => this.fromAgent(cli.name, sessions, msg),
       request: (msg) => {
         const s = sessions.get(msg.params?.sessionId);
