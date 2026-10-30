@@ -26,7 +26,7 @@ Raw `/acp/<cli>` remains available without managed task services.
 | `GET /routing/models` | List exact-version profiles approved for Auto. |
 | `POST /tasks` | Task submission; default runtime limit is 30 minutes. |
 | `POST /tasks/batch` | `{tasks:[...]}`; atomic dependency graph, up to 100 tasks. |
-| `GET /tasks?projectId=home` | Up to 100 tasks. |
+| `GET /tasks?projectId=home&limit=100&offset=0` | Task page and `nextOffset` (`null` at the end). |
 | `GET /tasks/:id` | Status, references, attempt and lease state. |
 | `POST /tasks/:id/cancel` | Cancel the task and its active children. |
 | `POST /tasks/:id/retry` | Explicit retry, within the original attempt allowance. |
@@ -81,12 +81,20 @@ Memory content is untrusted reference data. A current snapshot does not prove th
 | `GET /memories?projectId=home&query=...` | Bounded FTS recall with provenance. |
 | `DELETE /memories/:projectId/:key` | Forget one fact. |
 | `POST /messages` | `{projectId,taskId?,recipient,text,idempotencyKey}`. |
-| `GET /messages?projectId=home` | Durable project messages. |
+| `GET /messages?projectId=home&limit=100&offset=0` | Message page and `nextOffset`. |
 
 Enable `RUNNER_DELEGATION=1` to expose task-scoped MCP tools to executor sessions.
 The coordinator spawns children, yields with `home_task_wait`, reads results and exchanges messages.
 Children cannot spawn grandchildren. Cancelling a wait cancels its coordinator.
 Shared-workspace coordination is cooperative; it is not an OS write lock.
+
+Set `RUNNER_FLEET_CONCURRENCY=4` and `RUNNER_MAX_TURNS=4` for two independent coordinator/child pairs.
+Values `6` and `8` allow three or four pairs. Each pair reserves a child slot to avoid deadlocks.
+Canonical project roots must be separate folders or worktrees. Aliases and nested roots serialize.
+Cancelled native prompts retain their slots until the vendor finishes; `/features.fleet` lists draining tasks.
+Keep active checkout folders in place. External processes and raw ACP clients are outside this coordination.
+The page provides a project fleet inspector, task creation, dependencies, permissions and durable messages.
+Messages are stored for recipient polling; sending one does not wake an agent.
 
 ## Acceptance checks
 
@@ -103,6 +111,32 @@ Windows use UTC. Pricing schedules additionally require source, expiry, provider
 The executor rechecks that evidence against the selected route before execution.
 Scheduling a CLI at night does not turn it into a batch API request.
 Deferred jobs need an awake home; arranging external wake scheduling is a deployment responsibility.
+
+## Offline text batches
+
+Enable `RUNNER_BATCH=1` with an OpenRouter key. This handles summarize, extract and rewrite jobs separately from CLI sessions.
+
+```json
+{
+  "idempotencyKey":"release-notes-1", "operation":"summarize",
+  "model":"anthropic/claude-haiku-5.5", "allowPaid":true, "budgetEstimateUsd":0.01,
+  "items":[{"id":"notes","text":"The release adds tenant-scoped cache invalidation."}]
+}
+```
+
+| Endpoint | Result |
+| --- | --- |
+| `POST /text-batches` | Submit once with the body above; repeating the same key and intent returns the stored job. |
+| `GET /text-batches?limit=100&offset=0` | Local job history. |
+| `GET /text-batches/:id` | Durable state, text results and reported cost; unknown cost stays null. |
+| `POST /text-batches/:id/poll` | Refresh the existing provider ID. |
+
+The provider may take 24 hours. It currently has no batch cancellation endpoint.
+At most 16 jobs remain unsettled, with 16 text items each. Inputs and outputs are bounded.
+`RUNNER_BATCH_MAX_ESTIMATED_USD` limits the caller estimate; it does not cap provider charges.
+Ambiguous submissions remain `submission_unknown` and are never automatically repeated.
+The runner polls stored jobs while awake and resumes after restart. Provider retention is 30 days.
+Vendor subscription traffic, interactive tools and typed routing decisions use their existing paths.
 
 For standalone launches, `bin/agent-home-start` defaults each vendor home under
 `$RUNNER_LOGINS` (`claude`, `codex`, `copilot`, `grok`, `vibe`, `config`, `gemini`) and respects

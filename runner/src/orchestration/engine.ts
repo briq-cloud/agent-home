@@ -94,7 +94,7 @@ function within(root: string, path: string): boolean {
 }
 
 /**
- * One root coordinator and one direct child at most. A child shares its parent's
+ * One root coordinator and one direct child per project. A child shares its parent's
  * project and may execute only during wait(child, {parentTaskId}); that wait is
  * the coordinator's promise to pause writes. Grandchildren are refused. Run one
  * Engine per task database (leases still fence writers across processes). This is
@@ -121,6 +121,8 @@ export class Engine {
   private readonly now: () => number;
   private readonly workerId = `engine-${randomUUID()}`;
   private readonly active = new Map<string, Active>();
+  /** Native prompts can outlive task cancellation; keep their workspace slots occupied. */
+  private readonly nativePrompts = new Map<string, Task>();
   private readonly listeners = new Map<string, Set<(rpc: Rpc) => void>>();
   private readonly yielded = new Map<string, { childId: string; count: number }>();
   private readonly waits = new Set<() => void>();
@@ -131,7 +133,8 @@ export class Engine {
   constructor(options: EngineOptions) {
     this.options = options;
     this.maxConcurrent = duration(options.maxConcurrent ?? 2, 'maxConcurrent');
-    if (this.maxConcurrent > 2) throw new Error('Only one root and one direct child may run concurrently');
+    if (this.maxConcurrent > 8 || (this.maxConcurrent > 1 && this.maxConcurrent % 2))
+      throw new Error('Fleet concurrency must be 1, 2, 4, 6 or 8');
     this.heartbeatMs = duration(options.heartbeatMs ?? 5000, 'heartbeatMs');
     this.leaseMs = duration(options.leaseMs ?? 30000, 'leaseMs');
     this.pollMs = duration(options.pollMs ?? 100, 'pollMs');
@@ -418,8 +421,8 @@ export class Engine {
   async wait(taskId: string, options: { parentTaskId?: string } = {}): Promise<Task> {
     const task = this.options.tasks.getTask(taskId);
     if (!task) throw new Error('Unknown task');
-    if (isTerminal(task)) return task;
     const parentId = options.parentTaskId;
+    if (isTerminal(task) && !parentId) return task;
     if (parentId) {
       if (this.maxConcurrent < 2) throw new Error('Delegation requires a second execution slot');
       const parent = this.active.get(parentId);
@@ -456,7 +459,7 @@ export class Engine {
         const check = () => {
           const current = this.options.tasks.getTask(taskId);
           const parent = parentId && this.options.tasks.getTask(parentId);
-          if (!current || (parent && isTerminal(parent) && !isTerminal(current))) {
+          if (!current || (parent && isTerminal(parent))) {
             cleanup();
             rejectWait(new Error('Task or waiting parent is unavailable'));
             return;
@@ -466,6 +469,15 @@ export class Engine {
             for (const active of this.active.values())
               if (parentId && active.task.parentId === parentId && active.task.id !== taskId)
                 this.cancel(active.task.id);
+            // A cancelled child/prerequisite can still be executing in the
+            // vendor. Keep the coordinator's cooperative write pause until all
+            // child work actually settles, including an already-terminal target.
+            if (
+              parentId &&
+              ([...this.active.values()].some((active) => active.task.parentId === parentId) ||
+                [...this.nativePrompts.values()].some((child) => child.parentId === parentId))
+            )
+              return;
             cleanup();
             resolveWait(current);
           }
@@ -486,17 +498,28 @@ export class Engine {
 
   private eligible(task: Task): boolean {
     if (task.notBefore > this.now()) return false;
-    if (!task.parentId)
-      return !this.options.tasks
-        .listTasks({ status: 'running', limit: 1000 })
-        .some((running) => !running.parentId || running.projectId === task.projectId);
+    const running = [
+      ...new Map(
+        [
+          ...this.options.tasks.listTasks({ status: 'running', limit: 1000 }),
+          ...[...this.active.values()].map((value) => value.task),
+          ...this.nativePrompts.values(),
+        ].map((value) => [value.id, value]),
+      ).values(),
+    ];
+    if (!task.parentId) {
+      // Reserve a child slot for each coordinator, including coordinators that
+      // have not yielded yet. Otherwise two waiting roots can consume all slots.
+      if (running.filter((value) => !value.parentId).length >= Math.max(1, this.maxConcurrent / 2)) return false;
+      return !running.some((value) => this.projectsOverlap(task, value));
+    }
     const parent = this.active.get(task.parentId);
     const yielded = this.yielded.get(task.parentId);
     if (
       !parent ||
       !yielded ||
       parent.abort.signal.aborted ||
-      this.options.tasks.listTasks({ status: 'running', limit: 1000 }).some((running) => !!running.parentId)
+      running.some((value) => !!value.parentId && value.projectId === task.projectId)
     )
       return false;
     // Only the awaited child and its direct-child prerequisites may use the write slot.
@@ -511,6 +534,49 @@ export class Engine {
     return needed.has(task.id);
   }
 
+  private projectsOverlap(a: Task, b: Task): boolean {
+    if (a.projectId === b.projectId) return true;
+    try {
+      const root = (task: Task): string => {
+        const artifact = this.options.context.readArtifact({ project: task.projectId, id: task.promptRef });
+        const config = JSON.parse(artifact!.content.toString('utf8')) as Config;
+        if (typeof config.projectRoot !== 'string' || !isAbsolute(config.projectRoot)) throw Error('Missing root');
+        return config.projectRoot;
+      };
+      const x = root(a),
+        y = root(b);
+      return within(x, y) || within(y, x);
+    } catch {
+      // Unknown roots serialize. Dispatch still reports invalid artifacts once
+      // the other project finishes; admission never treats unknown as isolated.
+      return true;
+    }
+  }
+
+  private occupiedSlots(): number {
+    return new Set([...this.active.keys(), ...this.nativePrompts.keys()]).size;
+  }
+
+  fleetStatus(): { occupiedSlots: number; totalSlots: number; draining: Array<{ taskId: string; projectId: string }> } {
+    return {
+      occupiedSlots: this.occupiedSlots(),
+      totalSlots: this.maxConcurrent,
+      draining: [...this.nativePrompts.values()]
+        .filter((task) => !this.active.has(task.id))
+        .map((task) => ({ taskId: task.id, projectId: task.projectId })),
+    };
+  }
+
+  private nativePrompt(active: Active, operation: Promise<unknown>): Promise<unknown> {
+    this.nativePrompts.set(active.task.id, active.task);
+    const settled = () => {
+      this.nativePrompts.delete(active.task.id);
+      this.tick();
+    };
+    operation.then(settled, settled);
+    return operation;
+  }
+
   private tick(): void {
     if (!this.started || this.ticking) return;
     this.ticking = true;
@@ -520,8 +586,8 @@ export class Engine {
         const task = this.options.tasks.getTask(active.task.id);
         if (!task || task.status !== 'running' || task.leaseToken !== active.task.leaseToken) this.abort(active);
       }
-      if (this.active.size >= this.maxConcurrent) return;
-      for (let offset = 0; this.active.size < this.maxConcurrent; offset += 1000) {
+      if (this.occupiedSlots() >= this.maxConcurrent) return;
+      for (let offset = 0; this.occupiedSlots() < this.maxConcurrent; offset += 1000) {
         const queued = this.options.tasks.listTasks({ status: 'queued', limit: 1000, offset });
         for (const candidate of queued) {
           if (!this.eligible(candidate)) continue;
@@ -531,7 +597,7 @@ export class Engine {
             leaseMs: this.leaseMs,
           });
           if (task) this.launch(task);
-          if (this.active.size >= this.maxConcurrent) break;
+          if (this.occupiedSlots() >= this.maxConcurrent) break;
         }
         if (queued.length < 1000) break;
       }
@@ -740,7 +806,7 @@ export class Engine {
       if (input.context.memoryQuery)
         append(
           'retrieved project memory, provenance may be stale',
-          this.options.context.searchMemories({ project: task.projectId, query: input.context.memoryQuery }),
+          this.options.context.searchPromptMemories({ project: task.projectId, query: input.context.memoryQuery }),
         );
     }
     if (guidance) parts.push(`\n\n[TRUSTED RUNNER GUIDANCE]\n${guidance}\n[END TRUSTED RUNNER GUIDANCE]`);
@@ -839,7 +905,10 @@ export class Engine {
       active.collecting = true;
       const response = await this.cancellable(
         active,
-        this.options.hub.prompt(route.cli, { sessionId: id, prompt: [{ type: 'text', text: prompt }] }, active.peer),
+        this.nativePrompt(
+          active,
+          this.options.hub.prompt(route.cli, { sessionId: id, prompt: [{ type: 'text', text: prompt }] }, active.peer),
+        ),
       );
       if (active.abort.signal.aborted) return;
       active.collecting = false;

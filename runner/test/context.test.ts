@@ -72,6 +72,28 @@ test('same-revision source replacement makes memory provenance stale', () => {
     store.putSource({ project: 'repo', revision: 'r1', path: 'facts.md', content: 'Correction: uses pnpm.' });
     const memory = store.searchMemories({ project: 'repo', query: 'npm' })[0];
     assert.equal(memory?.sourceCurrent, false);
+    assert.equal(store.searchPromptMemories({ project: 'repo', query: 'npm' }).length, 0);
+    assert.equal(store.searchMemories({ project: 'repo', query: 'npm' }).length, 1, 'stale rows stay inspectable');
+  } finally {
+    store.close();
+  }
+});
+
+test('prompt-context freshness filtering happens before result limits', () => {
+  const store = new ContextStore({ maxResults: 1 });
+  try {
+    store.setProjectRevision('repo', 'r1');
+    const old = store.putSource({ project: 'repo', revision: 'r1', path: 'old.md', content: 'needle' });
+    store.putMemory({ project: 'repo', key: 'stale', text: 'needle needle needle', source: old });
+    const current = store.putSource({ project: 'repo', revision: 'r1', path: 'current.md', content: 'needle' });
+    store.putMemory({ project: 'repo', key: 'current', text: 'needle', source: current });
+    store.putSource({ project: 'repo', revision: 'r1', path: 'old.md', content: 'replacement no longer has needle' });
+
+    assert.equal(store.searchMemories({ project: 'repo', query: 'needle', limit: 1 })[0]?.key, 'stale');
+    const promptRows = store.searchPromptMemories({ project: 'repo', query: 'needle', limit: 1 });
+    assert.equal(promptRows.length, 1);
+    assert.equal(promptRows[0]?.key, 'current');
+    assert.equal(promptRows[0]?.sourceCurrent, true);
   } finally {
     store.close();
   }
@@ -103,6 +125,7 @@ test('database migration is versioned and file-backed state survives reopen with
       reopened.setProjectRevision('project', 'r2');
       assert.throws(() => reopened.getSource({ project: 'project', revision: 'r1', path: 'facts.md' }), /stale/);
       assert.equal(reopened.searchMemories({ project: 'project', query: 'pnpm' })[0]?.sourceCurrent, false);
+      assert.equal(reopened.searchPromptMemories({ project: 'project', query: 'pnpm' }).length, 0);
     } finally {
       reopened.close();
     }
@@ -261,6 +284,7 @@ test('memory results are bounded and expose source reference provenance', () => 
     store.setProjectRevision('p', 'r2');
     const staleProvenance = store.searchMemories({ project: 'p', query: 'sharedneedle', limit: 1 })[0];
     assert.equal(staleProvenance?.sourceCurrent, false);
+    assert.equal(store.searchPromptMemories({ project: 'p', query: 'sharedneedle', limit: 1 }).length, 0);
   } finally {
     store.close();
   }

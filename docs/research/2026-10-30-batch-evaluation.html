@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenRouter batch adapter evaluation — 2026-10-30</title>
+<style>
+:root{color-scheme:light dark;--bg:#f5f7fb;--panel:#fff;--ink:#172231;--muted:#596a7e;--line:#d9e1eb;--blue:#285fc4;--amber:#8a4b08}@media(prefers-color-scheme:dark){:root{--bg:#111722;--panel:#192230;--ink:#edf2f8;--muted:#adbacb;--line:#344153;--blue:#8eb6ff;--amber:#ffd08a}}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:940px;margin:32px auto;padding:0 22px 40px}h1{font-size:clamp(26px,4vw,36px);line-height:1.12;margin:0 0 8px}h2{font-size:20px;margin:24px 0 8px}.stamp,p{color:var(--muted)}.stamp{font-size:13px}.box{background:var(--panel);border-left:4px solid var(--blue);padding:12px 16px;border-radius:8px;margin:18px 0}.scroll{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--panel)}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}th{font-size:13px;color:var(--muted)}tr:last-child td{border-bottom:0}a{color:var(--blue)}code{font-size:.92em}ul{color:var(--muted);padding-left:22px}.small{font-size:13px}.tag{font-weight:650;color:var(--blue)}.warn{font-weight:650;color:var(--amber)}
+</style>
+</head>
+<body><main>
+<h1>OpenRouter batch: bounded adapter review</h1>
+<p class="stamp">Research and implementation snapshot · 30 Oct 2026 · No provider request made</p>
+<div class="box"><strong>What this supports:</strong> opt-in asynchronous summarize, extract, or rewrite operations over caller-supplied text, with a persistent job handle. It does not route CLI/ACP prompts or interactive agent decisions. The adapter requires per-job paid consent and a caller cost estimate. That estimate is visible intent, not a billing ceiling.</div>
+
+<h2>What the provider documents</h2>
+<div class="scroll"><table><thead><tr><th>Property</th><th>Primary-source evidence</th><th>Implication</th></tr></thead><tbody>
+<tr><td>Async window</td><td>Batch submission returns a batch ID; poll <code>GET /api/v1/batches/{id}</code> until terminal. Completion window is 24h.</td><td>Suitable for deferred, variable-latency work only.</td></tr>
+<tr><td>Pricing</td><td>Launch post says providers choose completion time in a 24h window and generally charge 50% or less of normal per-token price. Discount varies by model.</td><td class="warn">No fixed discount guarantee; normal per-model pricing still applies.</td></tr>
+<tr><td>Routing/results</td><td>One batch has one model and endpoint; provider routing is selected for the batch. Individual request results/errors return independently.</td><td>Adapter pins one caller-selected model, fixed chat-completions endpoint, at most 16 text items.</td></tr>
+<tr><td>Data support/retention</td><td>Docs support text bodies; inputs/results are retained up to 30 days unless deleted. Provider fetches any URL later, so the adapter excludes files/URLs.</td><td>Only inline text is accepted by this module; no URL/file ingestion.</td></tr>
+</tbody></table></div>
+<p><a href="https://openrouter.ai/blog/announcements/batch-api/">OpenRouter Batch API announcement (22 Sep 2026)</a> · <a href="https://raw.githubusercontent.com/OpenRouterTeam/docs/main/batch-quickstart.mdx">Official batch quickstart</a> · <a href="https://github.com/OpenRouterTeam/typescript-sdk">Official TypeScript SDK</a></p>
+
+<h2>Adapter behavior</h2>
+<div class="scroll"><table><thead><tr><th>Control</th><th>Current implementation</th><th>Test evidence</th></tr></thead><tbody>
+<tr><td>Explicit spend consent</td><td>Requires <code>allowPaid: true</code>, a caller estimate within the configured estimate ceiling, and emits a non-hard-cap billing notice.</td><td>Rejects absent consent, excessive estimate, >16 items, or duplicate IDs before network calls.</td></tr>
+<tr><td>Bounded text</td><td>Fixed operations only; each item ≤8,000 chars; total input ≤48,000; output ≤512 tokens/request and ≤4,096 chars/result.</td><td>Oversized result rejected; job remains resumable for later inspection.</td></tr>
+<tr><td>Durable recovery</td><td>Stores private SQLite intent before POST, then provider batch ID before any poll. Credentials are fetched through a callback and not written to the database.</td><td>File mode 0600; restart resumes the same provider ID.</td></tr>
+<tr><td>Cost reporting</td><td>Uses finite nonnegative <code>batch.usage.cost</code> as authoritative aggregate; per-item costs remain nullable. Sums item costs only when all are known.</td><td>Reports aggregate source as <code>batch-usage.cost</code> or <code>result-usage.cost</code>; unknown costs remain null.</td></tr>
+<tr><td>Ambiguous POST</td><td>Any failed/uncertain create becomes <code>submission_unknown</code>. Restart does not resubmit or poll without a provider ID.</td><td>Simulated lost response stays unknown after reopen; create count remains one.</td></tr>
+<tr><td>Polling</td><td>Reads only the saved provider ID. Terminal output is persisted and served locally afterward.</td><td>Fake provider covers in-progress → completed and per-result extraction.</td></tr>
+</tbody></table></div>
+<p class="small">Unit tests use an injected fake BatchClient. The installed SDK is <code>@openrouter/sdk 1.5.21</code>. A separate staging probe used synthetic text and the home-owned OpenRouter key; the key stayed on the home.</p>
+
+<h2>Small live probe</h2><p>Two fact-extraction inputs on Haiku 5.5, Anthropic backend: synchronous $0.0000808, 2.8 seconds total; batch $0.0000554, about 14 minutes. Both retained the required facts (2/2). Token counts and cache state differ. This is a functional/billing check, not an agent-quality or general discount result.</p><h2>Integration</h2>
+<p>The service exposes text-batch job endpoints behind <code>RUNNER_BATCH=1</code>, off by default. Jobs need per-job paid consent and idempotency keys. Background polling resumes persisted provider IDs; ambiguous POSTs never resubmit. CLI sessions and typed agent decisions keep their existing paths. Provider jobs may take 24 hours and currently cannot be cancelled.</p>
+</main></body></html>

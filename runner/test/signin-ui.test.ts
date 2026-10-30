@@ -35,6 +35,7 @@ test(
         [
           ['/', '../src/ui/web/index.html'],
           ['/assets/home.js', '../src/ui/web/home.js'],
+        ['/assets/fleet.js', '../src/ui/web/fleet.js'],
           ['/assets/home.css', '../src/ui/web/home.css'],
         ].map(
           async ([url, path]) => [url, await readFile(fileURLToPath(new URL(path!, import.meta.url)), 'utf8')] as const,
@@ -104,7 +105,9 @@ test(
           profiles: [],
         });
       if (path === '/usage') return fulfill({ clis: [] });
-      if (path === '/tasks') return fulfill({ tasks: [] });
+      if (path === '/tasks') return fulfill({ tasks: [], nextOffset: null });
+    if (path === '/projects') return fulfill({ projects: [{ id: 'home', root: '/work', revision: 'test' }] });
+    if (path === '/features') return fulfill({ orchestrator: true, delegation: false, concurrency: { coordinators: 1, children: 1, maxDepth: 1 } });
       const login = /^\/connect\/(claude|codex)(\/input)?$/.exec(path);
       if (login) {
         const name = login[1]!;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -324,6 +324,114 @@ test('atomic forward-reference submissions obey success prerequisites and reject
   await until(() => f.hub.prompts.has('session-2'));
   f.hub.finish('session-2');
   await f.engine.wait('after');
+});
+
+test('opt-in fleet reserves child slots for two independent coordinators without deadlock', async (t) => {
+  const roots: Record<string, string> = {};
+  const f = fixture(t, { maxConcurrent: 4, projectRoot: (id) => roots[id]! });
+  for (const id of ['a', 'b', 'c']) {
+    roots[id] = join(f.root, id);
+    mkdirSync(roots[id]!);
+  }
+  const submit = (id: string, projectId: string, parentId?: string) =>
+    f.engine.submit(submission(id, { projectId, ...(parentId ? { parentId } : {}) }));
+  const session = (id: string): string =>
+    f.hub.calls.find((c) => c.method === 'session/prompt' && c.params.prompt[0].text.includes(`Do ${id}`))!.params
+      .sessionId;
+  const a = submit('a-root', 'a'),
+    b = submit('b-root', 'b'),
+    c = submit('c-root', 'c');
+  f.engine.start();
+  await until(() => f.hub.prompts.size === 2);
+  assert.equal(f.tasks.getTask(c.id)?.status, 'queued', 'a coordinator cannot consume a reserved child slot');
+  const ac = submit('a-child', 'a', a.id),
+    bc = submit('b-child', 'b', b.id);
+  const waits = [f.engine.wait(ac.id, { parentTaskId: a.id }), f.engine.wait(bc.id, { parentTaskId: b.id })];
+  await until(() => f.hub.prompts.size === 4);
+  assert.equal(f.tasks.getTask(ac.id)?.status, 'running');
+  assert.equal(f.tasks.getTask(bc.id)?.status, 'running');
+  assert.equal(f.tasks.getTask(c.id)?.status, 'queued');
+  f.hub.finish(session(ac.id));
+  f.hub.finish(session(bc.id));
+  assert.ok((await Promise.all(waits)).every((task) => task.status === 'succeeded'));
+  f.hub.finish(session(a.id));
+  f.hub.finish(session(b.id));
+  await Promise.all([f.engine.wait(a.id), f.engine.wait(b.id)]);
+  await until(() => f.hub.prompts.size === 5);
+  f.hub.finish(session(c.id));
+  assert.equal((await f.engine.wait(c.id)).status, 'succeeded');
+});
+
+test('fleet serializes canonical aliases and nested project roots while separate folders proceed', async (t) => {
+  const roots: Record<string, string> = {};
+  const f = fixture(t, { maxConcurrent: 4, projectRoot: (id) => roots[id]! });
+  roots.a = join(f.root, 'shared');
+  roots.nested = join(roots.a, 'nested');
+  roots.b = join(f.root, 'separate');
+  mkdirSync(roots.nested, { recursive: true });
+  mkdirSync(roots.b);
+  roots.alias = join(f.root, 'alias');
+  symlinkSync(roots.a, roots.alias);
+  for (const projectId of ['a', 'alias', 'nested', 'b']) f.engine.submit(submission(projectId, { projectId }));
+  f.engine.start();
+  await until(() => f.hub.prompts.size === 2);
+  assert.equal(f.tasks.getTask('a')?.status, 'running');
+  assert.equal(f.tasks.getTask('b')?.status, 'running');
+  assert.equal(f.tasks.getTask('alias')?.status, 'queued');
+  assert.equal(f.tasks.getTask('nested')?.status, 'queued');
+  f.engine.cancel('a');
+  await until(() => f.tasks.getTask('alias')?.status === 'running');
+  assert.equal(f.tasks.getTask('nested')?.status, 'queued');
+  f.engine.cancel('alias');
+  await until(() => f.tasks.getTask('nested')?.status === 'running');
+  f.engine.cancel('nested');
+  f.engine.cancel('b');
+});
+
+test('cancelled native prompts retain their workspace until the vendor actually settles', async (t) => {
+  const f = fixture(t, { maxConcurrent: 4 });
+  f.hub.honorCancellation = false;
+  f.engine.submit(submission('first'));
+  f.engine.submit(submission('second'));
+  f.engine.start();
+  await until(() => f.hub.prompts.has('session-1'));
+  f.engine.cancel('first');
+  await until(() => f.hub.detached.length === 1);
+  assert.equal(f.tasks.getTask('second')?.status, 'queued', 'cancel request is not proof the vendor stopped writing');
+  assert.deepEqual(f.engine.fleetStatus().draining, [{ taskId: 'first', projectId: 'project' }]);
+  f.hub.finish('session-1', 'late result');
+  await until(() => f.hub.prompts.has('session-2'));
+  f.hub.finish('session-2');
+  assert.equal((await f.engine.wait('second')).status, 'succeeded');
+  assert.deepEqual(f.engine.fleetStatus().draining, []);
+});
+
+test('a coordinator keeps yielding while a cancelled child or prerequisite native prompt drains', async (t) => {
+  for (const prerequisite of [false, true]) {
+    const f = fixture(t);
+    f.hub.honorCancellation = false;
+    const parent = f.engine.submit(submission('parent'));
+    const first = f.engine.submit(submission('first', { parentId: parent.id }));
+    const target = prerequisite
+      ? f.engine.submit(submission('target', { parentId: parent.id, dependencyIds: [first.id] }))
+      : first;
+    f.engine.start();
+    await until(() => f.hub.prompts.has('session-1'));
+    let resumed = false;
+    const waiting = f.engine.wait(target.id, { parentTaskId: parent.id }).then((value) => {
+      resumed = true;
+      return value;
+    });
+    await until(() => f.hub.prompts.has('session-2'));
+    f.engine.cancel(target.id);
+    await until(() => f.hub.detached.length === 1);
+    await sleep(15);
+    assert.equal(resumed, false, 'persisted cancellation must not release a coordinator onto a still-writing child');
+    f.hub.finish('session-2');
+    assert.equal((await waiting).status, 'cancelled');
+    f.hub.finish('session-1');
+    await f.engine.wait(parent.id);
+  }
 });
 
 test('context selection is explicit, project confined, bounded and untrusted; memory is read only', async (t) => {

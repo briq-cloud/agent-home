@@ -42,6 +42,8 @@ flowchart LR
   CLI <-->|Scoped MCP tools| Tasks
   CLI --> Verify[Caller-owned acceptance checks]
   Verify --> Tasks
+  App --> Batch[Opt-in text batch jobs / SQLite]
+  Batch --> OR[OpenRouter Batch API]
 ```
 
 ## What runs each concept
@@ -49,19 +51,21 @@ flowchart LR
 | Concept | Component | Default / boundary |
 | --- | --- | --- |
 | Harnesses | Unmodified vendor CLIs + official ACP adapters | Pinned per image. |
-| Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, explicit retries. |
+| Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, opt-in fleet slots, explicit retries. |
 | Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic decisions enabled; key and per-task budget required. |
 | Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
 | Prompt caching | Each vendor's native cache | No subscription traffic interception. |
-| Memory | SQLite FTS5 factual store | Explicit writes, provenance, expiry and deletion. |
-| Communication | MCP task tools + durable mailboxes | Delegation off; one coordinator and one child. |
-| Deferred work | UTC scheduling + expiring pricing evidence | Per-task opt-in; route/window rechecked at dispatch. |
+| Memory | SQLite FTS5 factual store | Explicit writes, current-source prompt recall, expiry and deletion. |
+| Communication | MCP task tools + durable mailboxes | Delegation off; one coordinator and one child per project. |
+| Deferred work | UTC scheduling + OpenRouter SDK batches | Explicit windows; separate opt-in offline text transformations. |
 | Permissions | Vendor ACP requests + user responses | Waits for approval unless an explicit vendor mode is selected. |
 | Verification | Bounded commands + artifact hashes | Explicit checks; absent checks remain unverified. |
 | Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
 
 Research: [T3 Code, Tencent memory and alternatives](docs/research/2026-10-30-architecture.html).
-Tencent's gateway and provider batch APIs remain evaluated integrations, not active dependencies.
+Tencent memory remains an evaluated integration. OpenRouter batches use the existing SDK and require a separate opt-in.
+Evaluations: [memory](docs/research/2026-10-30-memory-evaluation.html) ·
+[fleet](docs/research/2026-10-30-fleet-evaluation.html) · [batch](docs/research/2026-10-30-batch-evaluation.html).
 
 ## Configure and develop
 
@@ -70,8 +74,11 @@ Tencent's gateway and provider batch APIs remain evaluated integrations, not act
 | `RUNNER_ORCHESTRATOR` | `1` |
 | `RUNNER_DYNAMIC_ROUTING` | `1`; decisions require an OpenRouter key and positive per-task `decisionBudgetUsd` |
 | `RUNNER_DELEGATION` | `0`; requires at least two turn slots |
+| `RUNNER_FLEET_CONCURRENCY` | `2` (or `1` with one turn slot); opt-in `4`, `6`, `8` for separate project folders |
 | `RUNNER_MEMORY` | `1`; retrieval and writes remain explicit |
 | `RUNNER_DEFERRED` | `1`; individual tasks opt in |
+| `RUNNER_BATCH` | `0`; offline text batches require an OpenRouter key and per-job paid consent |
+| `RUNNER_BATCH_MAX_ESTIMATED_USD` | `0.05` per job; caller estimate, not a provider billing cap |
 | `RUNNER_TERMINAL_ENABLED` | `1` in the standalone launcher |
 
 ```sh

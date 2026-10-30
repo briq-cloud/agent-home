@@ -10,17 +10,26 @@ export function configuration(env: NodeJS.ProcessEnv) {
     if (!['0', '1'].includes(env[name]!)) throw Error(`${name} must be 0 or 1`);
     return env[name] === '1';
   };
+  const maxTurns = integer('RUNNER_MAX_TURNS', 2, 1, 32);
+  const fleetConcurrency = integer('RUNNER_FLEET_CONCURRENCY', Math.min(2, maxTurns), 1, 8);
+  if (fleetConcurrency > 1 && fleetConcurrency % 2) throw Error('RUNNER_FLEET_CONCURRENCY must be 1, 2, 4, 6 or 8');
+  const batchMaxEstimatedUsd = Number(env.RUNNER_BATCH_MAX_ESTIMATED_USD ?? 0.05);
+  if (!Number.isFinite(batchMaxEstimatedUsd) || batchMaxEstimatedUsd < 0 || batchMaxEstimatedUsd > 2)
+    throw Error('RUNNER_BATCH_MAX_ESTIMATED_USD must be between 0 and 2');
   return {
+    fleetConcurrency,
     port: integer('RUNNER_PORT', 8090, 1, 65535),
     host: env.RUNNER_HOST ?? '0.0.0.0',
     stateDir: resolve(env.RUNNER_STATE ?? '/work/.runner'),
     cwd: resolve(env.RUNNER_CWD ?? '/work'),
-    maxTurns: integer('RUNNER_MAX_TURNS', 2, 1, 32),
+    maxTurns,
     orchestrator: flag('RUNNER_ORCHESTRATOR', true),
     dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', true),
     delegation: flag('RUNNER_DELEGATION', false),
     memory: flag('RUNNER_MEMORY', true),
     deferred: flag('RUNNER_DEFERRED', true),
+    batch: flag('RUNNER_BATCH', false),
+    batchMaxEstimatedUsd,
     defaultRoute: env.RUNNER_DEFAULT_ROUTE,
   };
 }
