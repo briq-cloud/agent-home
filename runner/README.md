@@ -22,6 +22,8 @@ Raw `/acp/<cli>` remains available without managed task services.
 | `GET /features` | Enabled services and execution limits. |
 | `GET /projects` | Registered roots and revisions. |
 | `PUT /projects/:id` | `{root,revision}`; roots stay inside `RUNNER_CWD` and cannot be retargeted. |
+| `POST /routing/models` | Prepare or refresh the curated Auto model pool from the public catalog. |
+| `GET /routing/models` | List exact-version profiles approved for Auto. |
 | `POST /tasks` | Task submission; default runtime limit is 30 minutes. |
 | `POST /tasks/batch` | `{tasks:[...]}`; atomic dependency graph, up to 100 tasks. |
 | `GET /tasks?projectId=home` | Up to 100 tasks. |
@@ -32,12 +34,14 @@ Raw `/acp/<cli>` remains available without managed task services.
 | `POST /tasks/:id/permissions/:requestId` | `{optionId}`; only offered options are accepted. |
 
 A task supports `id`, `parentId`, `dependencyIds`, `inputRefs`, `deadline`, `notBefore`,
-`maxAttempts`, `maxRuntimeMs`, `modeId`, and explicit routing/context options.
+`maxAttempts`, `maxRuntimeMs`, `modeId`, `acceptance`, and explicit routing/context options.
 Dependency failure blocks queued dependents. Crashed attempts require review before retry.
 `modeId` must be advertised by the chosen CLI. No unattended permission mode is selected implicitly.
 
 For API execution, pass `allowPaidApi:true`. Priced routing also needs `maxEstimatedUsd`.
-Dynamic decisions need `decisionBudgetUsd` and `RUNNER_DYNAMIC_ROUTING=1`.
+`RUNNER_DYNAMIC_ROUTING` defaults to `1`, making dynamic decisions available. It does not trigger
+inference by itself: a decision call also requires an OpenRouter key and a positive per-task
+`decisionBudgetUsd`. Set `RUNNER_DYNAMIC_ROUTING=0` to disable dynamic decisions globally.
 Estimates guard admission. CLI execution charges remain unknown; these are not hard dollar caps.
 
 ## Profiles
@@ -50,9 +54,14 @@ Estimates guard admission. CLI execution charges remain unknown; these are not h
 }
 ```
 
-`POST /profiles` creates the named profile and pins its catalog version for automatic routing.
-Approve models after checking their harness compatibility. A catalog score does not prove tool support.
-Multiple named profiles can share a provider key. Each has its own settings folder.
+Saving an OpenRouter key with `auto:true` at `PUT /keys/openrouter` prepares up to four curated,
+pinned-model Auto profiles: Haiku, Sonnet, DeepSeek and GLM. A profile is added only after its exact
+version passes public catalog checks for context, text, tools and pricing. This checks catalog
+metadata, not successful harness execution. The operator can edit or remove profiles. These catalog
+priors are a starting pool, not learned best-model results. `POST /routing/models` prepares or
+refreshes the pool; `GET /routing/models` lists eligible profiles. `POST /profiles` creates an
+individual profile; automatic use still requires approval and an exact catalog version. Multiple
+named profiles can share a provider key. Each has its own settings folder.
 
 ## Context, memory and communication
 
@@ -79,11 +88,24 @@ The coordinator spawns children, yields with `home_task_wait`, reads results and
 Children cannot spawn grandchildren. Cancelling a wait cancels its coordinator.
 Shared-workspace coordination is cooperative; it is not an OS write lock.
 
+## Acceptance checks
+
+Tasks may include `acceptance:{commands:[{argv:["npm","test"],timeoutMs:30000}],artifacts:[{path:"dist/app.js",sha256:"<64 hex characters>"}]}`.
+The same option is accepted at ACP `session/new` as `_meta.agentHome.acceptance`. Checks are bounded
+to four commands, sixteen artifacts and 120 seconds total. Commands are owner-provided argv executed
+as the runner's user, without a shell; they are not sandboxed. Credential paths are refused for
+artifact checks. No declared checks means the result is `unverified`, not passed.
+
 ## Deferred tasks
 
 Pass `schedule:{flexibleDeadline:true,userWindows:[{start:"22:00",end:"24:00"}]}` with a deadline.
 Windows use UTC. Pricing schedules additionally require source, expiry, provider and exact model evidence.
 The executor rechecks that evidence against the selected route before execution.
 Scheduling a CLI at night does not turn it into a batch API request.
+
+For standalone launches, `bin/agent-home-start` defaults each vendor home under
+`$RUNNER_LOGINS` (`claude`, `codex`, `copilot`, `grok`, `vibe`, `config`, `gemini`) and respects
+explicit home-variable overrides. The writable terminal runs in `tmux` so it survives tab
+disconnects.
 
 [ACP, sign-in and usage reference](../docs/transport.md) · [Architecture](../docs/architecture.md)

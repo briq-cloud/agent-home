@@ -21,6 +21,9 @@ Keep the volume: it holds sign-ins, keys, conversations, tasks and memory.
 | Auto orchestrator | `/acp/auto` | Persists tasks, selects a route and keeps the conversation pinned. |
 
 Auto considers subscriptions first. API execution and decision-model calls require explicit opt-in.
+Dynamic decisions are available by default, but never run without an OpenRouter key and a positive
+per-task `decisionBudgetUsd`; set `RUNNER_DYNAMIC_ROUTING=0` to disable them globally. Without both
+gates, Auto uses its configured subscription/default route without a decision-model call.
 The page includes chat, task status, permission requests, provider profiles and a terminal.
 Raw `/acp/<cli-or-profile>` remains available for full vendor ACP capabilities.
 `/acp` remains the compatibility endpoint for subscription load balancing.
@@ -37,6 +40,8 @@ flowchart LR
   Hub --> CLI[Vendor CLIs / isolated key profiles]
   CLI --> Vendor[Vendor subscriptions / APIs]
   CLI <-->|Scoped MCP tools| Tasks
+  CLI --> Verify[Caller-owned acceptance checks]
+  Verify --> Tasks
 ```
 
 ## What runs each concept
@@ -45,13 +50,14 @@ flowchart LR
 | --- | --- | --- |
 | Harnesses | Unmodified vendor CLIs + official ACP adapters | Pinned per image. |
 | Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, explicit retries. |
-| Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic routing off; exact approved model bindings. |
+| Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic decisions enabled; key and per-task budget required. |
 | Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
 | Prompt caching | Each vendor's native cache | No subscription traffic interception. |
 | Memory | SQLite FTS5 factual store | Explicit writes, provenance, expiry and deletion. |
 | Communication | MCP task tools + durable mailboxes | Delegation off; one coordinator and one child. |
 | Deferred work | UTC scheduling + expiring pricing evidence | Per-task opt-in; route/window rechecked at dispatch. |
 | Permissions | Vendor ACP requests + user responses | Waits for approval unless an explicit vendor mode is selected. |
+| Verification | Bounded commands + artifact hashes | Explicit checks; absent checks remain unverified. |
 | Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
 
 Research: [T3 Code, Tencent memory and alternatives](docs/research/2026-10-30-architecture.html).
@@ -62,7 +68,7 @@ Tencent's gateway and provider batch APIs remain evaluated integrations, not act
 | Setting | Default |
 | --- | --- |
 | `RUNNER_ORCHESTRATOR` | `1` |
-| `RUNNER_DYNAMIC_ROUTING` | `0`; needs an OpenRouter key and per-task decision budget |
+| `RUNNER_DYNAMIC_ROUTING` | `1`; decisions require an OpenRouter key and positive per-task `decisionBudgetUsd` |
 | `RUNNER_DELEGATION` | `0`; requires at least two turn slots |
 | `RUNNER_MEMORY` | `1`; retrieval and writes remain explicit |
 | `RUNNER_DEFERRED` | `1`; individual tasks opt in |
@@ -75,6 +81,12 @@ npm run typecheck
 npm test
 npm run benchmark -- /tmp/agent-home-benchmark.json
 ```
+
+Save an OpenRouter key with `{ "key":"…", "auto":true }` at `PUT /keys/openrouter` to prepare
+the curated, pinned-model Auto pool. Up to four Haiku, Sonnet, DeepSeek and GLM profiles are added
+only when their exact versions pass the public catalog checks. The operator can edit or remove
+these profiles. Catalog priors are a starting signal, not learned “best model” results. Use
+`POST /routing/models` to prepare/refresh and `GET /routing/models` to inspect eligible profiles.
 
 [Task/API examples](runner/README.md) · [Architecture](docs/architecture.md) ·
 [Image and CLI list](docs/image.md) · [Pinned versions](REFERENCE.md) · [Model benchmarks](benchmarks/README.md)

@@ -242,6 +242,19 @@ async function session(c: ReturnType<typeof connect>, meta?: unknown): Promise<s
 }
 const prompt = (id: string, text = 'Implement this') => ({ sessionId: id, prompt: [{ type: 'text', text }] });
 
+test('new and reloaded sessions expose persisted billing consent to clients', async (t) => {
+  const h = await fixture(t);
+  for (const allowPaidApi of [false, true]) {
+    const first = h.open();
+    const created = result(await first.request('session/new', { _meta: { agentHome: { allowPaidApi } } }));
+    assert.equal(created._meta.agentHome.allowPaidApi, allowPaidApi);
+    await first.close();
+    const loaded = result(await h.open().request('session/load', { sessionId: created.sessionId }));
+    assert.equal(loaded._meta.agentHome.allowPaidApi, allowPaidApi);
+    assert.equal(h.submissions.length, 0);
+  }
+});
+
 test('Auto initialize/new are text-only and defer execution; private state ignores client cwd', async (t) => {
   const h = await fixture(t),
     c = h.open();
@@ -500,5 +513,80 @@ test('requested CLI and mode metadata must be nonempty strings', async (t) => {
     const response = await c.request('session/new', { _meta: { agentHome: selection } });
     assert.equal(response.error?.code, -32602);
   }
+  assert.equal(h.submissions.length, 0);
+});
+
+test('acceptance metadata is validated, persisted and forwarded unchanged across reconnect and continuation', async (t) => {
+  const h = await fixture(t),
+    first = h.open();
+  const requested = {
+    commands: [{ argv: ['node', '--test'] }],
+    artifacts: [{ path: 'result.txt', sha256: 'A'.repeat(64) }],
+  };
+  const normalized = {
+    commands: [{ argv: ['node', '--test'], timeoutMs: 30_000 }],
+    artifacts: [{ path: 'result.txt', sha256: 'a'.repeat(64) }],
+  };
+  const id = await session(first, { acceptance: requested });
+  assert.equal(h.submissions.length, 0, 'session metadata never executes checks or starts a model');
+  const saved = JSON.parse(await readFile(join(h.stateDir, 'auto', `${id}.json`), 'utf8'));
+  assert.deepEqual(saved.acceptance, normalized);
+  const response = first.request('session/prompt', prompt(id));
+  await first.wait((rpc) => rpc.method === '_runner/task');
+  assert.deepEqual(h.submissions[0]!.acceptance, normalized);
+  h.finish(h.submissions[0]!.id!);
+  result(await response);
+  await first.close();
+  const reconnect = h.open();
+  result(await reconnect.request('session/load', { sessionId: id }));
+  const continued = reconnect.request('session/prompt', {
+    ...prompt(id, 'Continue'),
+    _meta: { agentHome: { acceptance: { commands: [{ argv: ['unrequested-check'] }] } } },
+  });
+  await reconnect.wait((rpc) => rpc.method === '_runner/task' && rpc.params.id !== h.submissions[0]!.id);
+  assert.deepEqual(h.submissions[1]!.acceptance, normalized, 'prompt metadata cannot replace persisted session checks');
+  h.finish(h.submissions[1]!.id!);
+  result(await continued);
+});
+
+test('malformed, oversized and unsafe acceptance metadata rejects before session execution', async (t) => {
+  const h = await fixture(t),
+    c = h.open();
+  const invalidAcceptance: unknown[] = [
+    null,
+    'tests',
+    { commands: 'node --test' },
+    { commands: [{ argv: [] }] },
+    { commands: Array.from({ length: 5 }, () => ({ argv: ['true'] })) },
+    {
+      commands: [
+        { argv: ['true'], timeoutMs: 60_001 },
+        { argv: ['true'], timeoutMs: 60_000 },
+      ],
+    },
+    { artifacts: [{ path: '../escape' }] },
+    { artifacts: [{ path: '.env' }] },
+    { artifacts: [{ path: 'output.txt', sha256: 'invalid' }] },
+  ];
+  for (const input of invalidAcceptance) {
+    const response = await c.request('session/new', { _meta: { agentHome: { acceptance: input } } });
+    assert.equal(response.error?.code, -32602);
+    assert.match(response.error!.message, /Invalid acceptance/);
+  }
+  assert.equal(h.submissions.length, 0);
+  assert.equal(h.loads.length, 0);
+});
+
+test('persisted acceptance is revalidated before loading history or forwarding another prompt', async (t) => {
+  const h = await fixture(t),
+    c = h.open(),
+    id = await session(c);
+  const path = join(h.stateDir, 'auto', `${id}.json`);
+  const saved = JSON.parse(await readFile(path, 'utf8'));
+  saved.acceptance = { commands: [{ argv: ['true'], timeoutMs: 120_001 }] };
+  await writeFile(path, JSON.stringify(saved));
+  assert.equal((await c.request('session/load', { sessionId: id })).error?.code, -32602);
+  assert.equal((await c.request('session/prompt', prompt(id))).error?.code, -32602);
+  assert.equal(h.loads.length, 0);
   assert.equal(h.submissions.length, 0);
 });

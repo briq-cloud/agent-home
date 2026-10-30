@@ -1,6 +1,6 @@
 {
   "name": "agent-home-runner",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Drives the agent CLIs of an agent home over ACP, for apps, while nobody is connected.",
   "type": "module",

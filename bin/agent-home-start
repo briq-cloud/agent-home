@@ -6,7 +6,33 @@ umask 077
 export RUNNER_CWD="${RUNNER_CWD:-/work}"
 export RUNNER_STATE="${RUNNER_STATE:-$RUNNER_CWD/.runner}"
 export RUNNER_LOGINS="${RUNNER_LOGINS:-$RUNNER_CWD/.logins}"
-mkdir -p "$RUNNER_CWD" "$RUNNER_STATE" "$RUNNER_LOGINS"
+: "${CLAUDE_CONFIG_DIR:=$RUNNER_LOGINS/claude}"
+: "${CODEX_HOME:=$RUNNER_LOGINS/codex}"
+: "${COPILOT_HOME:=$RUNNER_LOGINS/copilot}"
+: "${GROK_HOME:=$RUNNER_LOGINS/grok}"
+: "${VIBE_HOME:=$RUNNER_LOGINS/vibe}"
+: "${XDG_CONFIG_HOME:=$RUNNER_LOGINS/config}"
+: "${GEMINI_CLI_HOME:=$RUNNER_LOGINS/gemini}"
+export CLAUDE_CONFIG_DIR CODEX_HOME COPILOT_HOME GROK_HOME VIBE_HOME XDG_CONFIG_HOME GEMINI_CLI_HOME
+mkdir -p "$RUNNER_CWD" "$RUNNER_STATE" "$RUNNER_LOGINS" \
+  "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$COPILOT_HOME" "$GROK_HOME" "$VIBE_HOME" \
+  "$XDG_CONFIG_HOME" "$GEMINI_CLI_HOME" "$XDG_CONFIG_HOME/cursor"
+chmod 700 "$RUNNER_STATE" "$RUNNER_LOGINS" \
+  "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$COPILOT_HOME" "$GROK_HOME" "$VIBE_HOME" \
+  "$XDG_CONFIG_HOME" "$XDG_CONFIG_HOME/cursor" "$GEMINI_CLI_HOME"
+cursor_config="$XDG_CONFIG_HOME/cursor/cli-config.json"
+if [ -f "$cursor_config" ]; then
+  jq '.channel = "static"' "$cursor_config" > "$cursor_config.new"
+  chmod 600 "$cursor_config.new"
+  mv "$cursor_config.new" "$cursor_config"
+else
+  printf '%s\n' '{"version":1,"editor":{"vimMode":false},"permissions":{"allow":[],"deny":[]},"channel":"static"}' > "$cursor_config"
+  chmod 600 "$cursor_config"
+fi
+vibe_config="$VIBE_HOME/config.toml"
+[ -f "$vibe_config" ] || printf '%s\n' 'enable_update_checks = false' > "$vibe_config"
+chmod 600 "$vibe_config"
+cd "$RUNNER_CWD"
 terminal_pid=''
 runner_pid=''
 stop() {
@@ -18,7 +44,7 @@ stop() {
 }
 trap stop TERM INT EXIT
 if [ "${RUNNER_TERMINAL_ENABLED:-1}" = 1 ]; then
-  ttyd --interface 127.0.0.1 --port "${RUNNER_TTYD_PORT:-7681}" --base-path /terminal --writable bash > "$RUNNER_STATE/terminal.log" 2>&1 &
+  ttyd --interface 127.0.0.1 --port "${RUNNER_TTYD_PORT:-7681}" --base-path /terminal --writable tmux new-session -A -s home > "$RUNNER_STATE/terminal.log" 2>&1 &
   terminal_pid=$!
 fi
 agent-home-runner &

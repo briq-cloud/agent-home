@@ -576,8 +576,13 @@ export class TaskStore {
     });
   }
 
-  fail(id: string, token: number, options: AttemptUsage & { errorRef?: string; retryAt?: number } = {}): Task | null {
+  fail(
+    id: string,
+    token: number,
+    options: AttemptUsage & { errorRef?: string; outputRef?: string; retryAt?: number } = {},
+  ): Task | null {
     if (options.errorRef !== undefined) nonempty(options.errorRef, 'errorRef');
+    if (options.outputRef !== undefined) nonempty(options.outputRef, 'outputRef');
     if (options.retryAt !== undefined) integer(options.retryAt, 'retryAt');
     return this.transaction(() => {
       const now = this.time();

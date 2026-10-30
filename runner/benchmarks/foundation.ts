@@ -59,10 +59,11 @@ const samples: Array<{
   outputArtifacts: number;
   unknownCosts: number;
   promptBytes: number;
+  verificationCounts: { passed: number; failed: number; unverified: number; cancelled: number };
 }> = [];
 try {
   engine.start();
-  for (const arm of ['baseline', 'context-and-memory']) {
+  for (const arm of ['baseline', 'context-and-memory', 'acceptance']) {
     const started = performance.now(),
       offset = prompts.length;
     const jobs = Array.from({ length: 20 }, (_, i) =>
@@ -73,10 +74,23 @@ try {
         ...(arm === 'context-and-memory'
           ? { context: { revision: version, paths: ['source.txt'], memoryQuery: 'Flags' } }
           : {}),
+        ...(arm === 'acceptance' ? { acceptance: { artifacts: [{ path: 'source.txt', sha256: source.hash }] } } : {}),
       }),
     );
     const finished = await Promise.all(jobs.map((task) => engine.wait(task.id)));
     assert(finished.every((t) => t.status === 'succeeded' && t.outputRef && t.costMicros === null));
+    const verificationCounts = { passed: 0, failed: 0, unverified: 0, cancelled: 0 };
+    for (const task of finished) {
+      const output = JSON.parse(context.readArtifact({ project, id: task.outputRef! })!.content.toString('utf8'));
+      const status = output.verification.status as keyof typeof verificationCounts;
+      assert(Object.hasOwn(verificationCounts, status));
+      verificationCounts[status]++;
+      assert.equal(status, arm === 'acceptance' ? 'passed' : 'unverified');
+      if (arm === 'acceptance') {
+        assert.equal(output.verification.checks[0].kind, 'artifact');
+        assert.equal(output.verification.checks[0].sha256, source.hash);
+      }
+    }
     if (arm === 'context-and-memory')
       assert(prompts.slice(offset).every((p) => p.includes(source.hash) && p.includes('Flags take precedence')));
     samples.push({
@@ -86,6 +100,7 @@ try {
       outputArtifacts: finished.filter((t) => t.outputRef).length,
       unknownCosts: finished.filter((t) => t.costMicros === null).length,
       promptBytes: prompts.slice(offset).reduce((n, p) => n + Buffer.byteLength(p), 0),
+      verificationCounts,
     });
   }
   const memory = await runMemoryAcceptanceBenchmark();
@@ -109,6 +124,8 @@ try {
       'src/context/store.ts',
       'src/routing/index.ts',
       'src/scheduling/offpeak.ts',
+      'src/verification/index.ts',
+      'benchmarks/foundation.ts',
     ].map((p) => [
       p,
       createHash('sha256')
@@ -136,7 +153,16 @@ try {
   };
   const destination = resolve(process.argv[2] ?? 'foundation-results.json');
   writeFileSync(destination, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
-  console.log(JSON.stringify({ report: destination, tasks: 40, memoryChecks: memory.length, paidCalls: 0 }));
+  console.log(
+    JSON.stringify({
+      report: destination,
+      tasks: samples.reduce((sum, arm) => sum + arm.runs, 0),
+      verificationCounts: samples.map(({ arm, verificationCounts }) => ({ arm, ...verificationCounts })),
+      memoryChecks: memory.length,
+      modelCalls: 0,
+      paidCalls: 0,
+    }),
+  );
 } finally {
   await engine.stop();
   tasks.close();

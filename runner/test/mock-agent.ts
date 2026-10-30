@@ -36,7 +36,10 @@ async function handle(m: Msg): Promise<unknown> {
       return {
         protocolVersion: 1,
         agentCapabilities: { loadSession: true },
-        authMethods: [{ id: 'personal', name: 'Personal account' }, { id: 'api-key', name: 'API key' }],
+        authMethods: [
+          { id: 'personal', name: 'Personal account' },
+          { id: 'api-key', name: 'API key' },
+        ],
         agentInfo: { name: 'mock', version: '1' },
       };
     case 'authenticate':
@@ -55,17 +58,31 @@ async function handle(m: Msg): Promise<unknown> {
     }
     case 'session/prompt': {
       const { sessionId, prompt } = m.params;
-      const text = prompt?.[0]?.text ?? '';
+      const fullText = prompt?.[0]?.text ?? '';
+      // Fixture command dispatch ignores the runner's trusted/context prefix.
+      const taskMarker = '\n\n[CURRENT TASK]\n';
+      const taskStart = fullText.lastIndexOf(taskMarker);
+      const text = taskStart < 0 ? fullText : fullText.slice(taskStart + taskMarker.length);
       if (text === 'die') process.exit(1);
-      if (text === 'limit') throw Object.assign(new Error("You've hit your usage limit. Try again later."), { code: -32603 });
+      if (text === 'limit')
+        throw Object.assign(new Error("You've hit your usage limit. Try again later."), { code: -32603 });
       if (text === 'slow') await new Promise((r) => setTimeout(r, 500));
       // What a profile gives its harness, for a test to check.
       const e = process.env;
       if (text === 'env')
-        update(sessionId, JSON.stringify({
-          base: e.ANTHROPIC_BASE_URL, token: e.ANTHROPIC_AUTH_TOKEN, apiKey: e.ANTHROPIC_API_KEY, model: e.ANTHROPIC_MODEL,
-          config: e.CLAUDE_CONFIG_DIR, codexHome: e.CODEX_HOME, codexKey: e.AGENT_HOME_PROVIDER_KEY, gemini: e.GEMINI_API_KEY,
-        }));
+        update(
+          sessionId,
+          JSON.stringify({
+            base: e.ANTHROPIC_BASE_URL,
+            token: e.ANTHROPIC_AUTH_TOKEN,
+            apiKey: e.ANTHROPIC_API_KEY,
+            model: e.ANTHROPIC_MODEL,
+            config: e.CLAUDE_CONFIG_DIR,
+            codexHome: e.CODEX_HOME,
+            codexKey: e.AGENT_HOME_PROVIDER_KEY,
+            gemini: e.GEMINI_API_KEY,
+          }),
+        );
       if (text === 'ask') {
         update(sessionId, 'asking');
         const r = await ask('session/request_permission', {
@@ -95,13 +112,19 @@ async function handle(m: Msg): Promise<unknown> {
             _meta: {
               '_mock/rateLimit':
                 text === 'hot'
-                  ? { status: 'allowed_warning', unifiedWindows: { five_hour: { utilization: 0.95, resetsAt: 1800000000 } } }
+                  ? {
+                      status: 'allowed_warning',
+                      unifiedWindows: { five_hour: { utilization: 0.95, resetsAt: 1800000000 } },
+                    }
                   : { status: 'allowed', resetsAt: 1800000000 },
             },
           },
         },
       });
-      return { stopReason: 'end_turn', usage: { inputTokens: 100 * turns, outputTokens: 10 * turns, totalTokens: 110 * turns } };
+      return {
+        stopReason: 'end_turn',
+        usage: { inputTokens: 100 * turns, outputTokens: 10 * turns, totalTokens: 110 * turns },
+      };
     }
     default:
       throw Object.assign(new Error(`no method ${m.method}`), { code: -32601 });

@@ -151,6 +151,8 @@ async function resultText(project: string, ref: string): Promise<string> {
 test('HTTP token protects task APIs and direct delegate access requires a task capability', async () => {
   assert.equal((await api('POST', '/tasks', {}, '')).status, 401);
   assert.equal((await api('POST', '/tasks', {}, 'wrong-token')).status, 401);
+  assert.equal((await api('POST', '/routing/models', {}, '')).status, 401);
+  assert.equal((await api('POST', '/routing/models', {})).status, 409);
   const denied = await fetch(`http://127.0.0.1:${port}/delegate`, {
     method: 'POST',
     headers: { authorization: 'Bearer invalid-task-capability', 'content-type': 'application/json' },
@@ -206,6 +208,44 @@ test('batch dependencies complete in order through the task API', async () => {
   const second = await waitForTask('batch-dependent');
   assert.deepEqual([first.status, second.status], ['succeeded', 'succeeded']);
   assert.ok(second.dependencyIds.includes(first.id));
+});
+
+test('task acceptance distinguishes checked outputs, failed checks and unverified execution', async () => {
+  for (const [suffix, acceptance, expected, verification] of [
+    [
+      'pass',
+      { commands: [{ argv: [process.execPath, '-e', 'process.stdout.write("checked")'] }] },
+      'succeeded',
+      'passed',
+    ],
+    ['fail', { commands: [{ argv: [process.execPath, '-e', 'process.exit(7)'] }] }, 'failed', 'failed'],
+    ['unchecked', undefined, 'succeeded', 'unverified'],
+  ] as const) {
+    const id = `http-acceptance-${suffix}`;
+    const accepted = await api('POST', '/tasks', {
+      id,
+      projectId: 'home',
+      prompt: 'hello',
+      route: explicit,
+      acceptance,
+    });
+    assert.equal(accepted.status, 202);
+    const completed = await waitForTask(id);
+    assert.equal(completed.status, expected);
+    assert.equal(completed.attempts, 1);
+    const response = await api('GET', `/artifacts/home/${completed.outputRef}`);
+    const artifact = (await response.json()) as { content: string };
+    const result = JSON.parse(artifact.content);
+    assert.equal(result.verification.status, verification);
+    assert.equal(result.costMicros, null);
+  }
+  const rejected = await api('POST', '/tasks', {
+    projectId: 'home',
+    prompt: 'hello',
+    route: explicit,
+    acceptance: { artifacts: [{ path: '../outside' }] },
+  });
+  assert.equal(rejected.status, 400);
 });
 
 test('permission options are validated and an explicit valid answer resumes the ACP task', async () => {
