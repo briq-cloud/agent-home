@@ -67,7 +67,8 @@ async function startRunner(): Promise<void> {
   };
   runner.stdout?.on('data', capture);
   runner.stderr?.on('data', capture);
-  for (let attempt = 0; attempt < 100; attempt++) {
+  const healthDeadline = Date.now() + 15_000;
+  while (Date.now() < healthDeadline) {
     if (runner.exitCode !== null) throw new Error(`runner exited before health check: ${output}`);
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(300) });
