@@ -4,7 +4,7 @@ import { createNodeHttpHandler, createNodeWebSocketUpgradeHandler } from '@agent
 import { AcpServer } from '@agentclientprotocol/sdk/experimental/server';
 import { WebSocketServer } from 'ws';
 import { ClientConn } from '../acp/client.ts';
-import { type Cli, cliEnv, clis } from '../providers/catalog.ts';
+import { type Cli, cliEnv, clis, effectiveCliEnv } from '../providers/catalog.ts';
 import { signInLife } from '../auth/dates.ts';
 import { Hub } from '../acp/hub.ts';
 import { log } from '../telemetry/log.ts';
@@ -20,6 +20,7 @@ import { configuration } from './config.ts';
 import { Application } from './services.ts';
 import { ProviderMutations } from './provider-mutations.ts';
 import { AutoConn } from '../acp/auto.ts';
+import { Accounts, createAccount, updateAccount } from '../providers/accounts.ts';
 import { prepareAutoProfiles, AUTO_POOL_SOURCE } from '../providers/auto-models.ts';
 
 /**
@@ -42,6 +43,7 @@ const base = clis(env);
 const childEnv = cliEnv(env);
 const stateDir = config.stateDir;
 const logins = env.RUNNER_LOGINS ?? '/work/.logins';
+const accounts = new Accounts({ stateDir, logins });
 const keys = new Keys({
   keysFile: env.RUNNER_KEYS ?? `${logins}/keys.json`,
   profilesFile: `${stateDir}/profiles.json`,
@@ -63,7 +65,10 @@ function profileClis(): Cli[] {
 }
 
 /** Every CLI the runner drives now: the image's, then the person's profiles. */
-let table: Cli[] = [...base.map(withKey), ...profileClis()];
+function nativeClis(): Cli[] {
+  return base.flatMap((c) => (c.name === 'claude' ? accounts.clis(withKey(c), childEnv) : [withKey(c)]));
+}
+let table: Cli[] = [...nativeClis(), ...profileClis()];
 const providerMutations = new ProviderMutations();
 const hub = new Hub({
   clis: table,
@@ -75,7 +80,11 @@ const hub = new Hub({
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean),
-  signedIn: (name) => signedInCached(name),
+  signedIn: async (name) => {
+    const signed = await signedInCached(name),
+      c = table.find((c) => c.name === name);
+    return c?.subscriptionAccount && authBilling.get(name) !== 'subscription' ? null : signed;
+  },
   beforeStart: async (name) => {
     if (name !== 'copilot') return () => {};
     copilotNativeStarting++;
@@ -96,8 +105,11 @@ const hub = new Hub({
  * started anew with it on its next use (a running turn ends), the others keep their process.
  */
 async function reload(): Promise<void> {
-  const next = [...base.map(withKey), ...profileClis()];
-  const same = (a: Cli, b: Cli | undefined) => b !== undefined && JSON.stringify(a) === JSON.stringify(b);
+  const next = [...nativeClis(), ...profileClis()];
+  const same = (a: Cli, b: Cli | undefined) =>
+    b !== undefined &&
+    JSON.stringify({ ...a, subscriptionAccount: undefined }) ===
+      JSON.stringify({ ...b, subscriptionAccount: undefined });
   for (const c of table)
     if (
       !same(
@@ -114,8 +126,13 @@ async function reload(): Promise<void> {
       )
     )
       hub.add(c);
+  for (const c of next) {
+    hub.setAccountMetadata(c.name, c.subscriptionAccount);
+    if (!signIns.has(c.name) && c.login) signIns.set(c.name, makeSignIn(c));
+  }
   table = next;
   known.clear();
+  authBilling.clear();
   await copilotAccounts.invalidate();
 }
 async function prepareModels() {
@@ -137,7 +154,22 @@ function completedSignIn(name: string): void {
   known.delete(name);
   if (name === 'copilot') void copilotAccounts.invalidate();
 }
-const signIns = new Map(base.map((c) => [c.name, new SignIn(c, () => completedSignIn(c.name))]));
+const signInReleases = new Map<string, () => void>();
+function releaseSignIn(name: string): void {
+  signInReleases.get(name)?.();
+  signInReleases.delete(name);
+  known.delete(name);
+  authBilling.delete(name);
+}
+function makeSignIn(c: Cli): SignIn {
+  return new SignIn(
+    c,
+    () => completedSignIn(c.name),
+    {},
+    () => releaseSignIn(c.name),
+  );
+}
+const signIns = new Map(table.filter((c) => !c.profile).map((c) => [c.name, makeSignIn(c)]));
 /** ttyd on localhost, started with `--base-path /terminal`. */
 const terminal = terminalProxy(new URL(env.RUNNER_TERMINAL ?? 'http://127.0.0.1:7681'));
 
@@ -217,6 +249,7 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 /** `signedIn`, kept 30 s: `/acp` asks it for each new session. */
 const known = new Map<string, { at: number; value: Promise<boolean | null> }>();
 const statusSources = new Map<string, 'command' | 'sign-in'>();
+const authBilling = new Map<string, 'subscription' | 'use' | 'unknown'>();
 let pendingCopilotStarts = 0;
 let copilotNativeStarting = 0;
 const copilotAccounts = new CopilotAccountObserver({
@@ -245,14 +278,22 @@ function signedInCached(name: string): Promise<boolean | null> {
  * Without either: unknown.
  */
 function signedIn(cli: Cli): Promise<boolean | null> {
+  if (['starting', 'waiting'].includes(signIns.get(cli.name)?.status.state ?? '')) return Promise.resolve(null);
   if (cli.profile) return Promise.resolve(Boolean(keys.key(cli.profile.provider)));
   if (cli.name === 'copilot') return copilotAccounts.check().then((result) => result.signedIn);
   if (cli.authStatusMethod) return hub.authStatus(cli.name);
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
     return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
   if (!cli.status) return Promise.resolve(completedSignIns[cli.name] ? true : null);
-  return commandStatus(cli.status, childEnv).then((value) => {
-    const recorded = value === null && Boolean(completedSignIns[cli.name]);
+  authBilling.delete(cli.name);
+  return commandStatus(
+    cli.status,
+    effectiveCliEnv(cli, childEnv),
+    10_000,
+    !!cli.subscriptionAccount && !cli.subscriptionAccount.isDefault,
+    (billing) => authBilling.set(cli.name, billing),
+  ).then((value) => {
+    const recorded = !cli.subscriptionAccount && value === null && Boolean(completedSignIns[cli.name]);
     statusSources.set(cli.name, recorded ? 'sign-in' : 'command');
     return recorded ? true : value;
   });
@@ -265,6 +306,10 @@ const application = new Application({
   table: () => table,
   signedIn: signedInCached,
   authEnv: childEnv,
+  billingStatus: async (name) => {
+    await signedInCached(name);
+    return authBilling.get(name) ?? 'unknown';
+  },
   extensionEnv: () => env,
   providerSnapshot: () => providerMutations.run(() => ({ profiles: keys.profiles(), table: [...table] })),
 });
@@ -312,6 +357,31 @@ const server = createServer(async (req, res) => {
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
     if (config.orchestrator && (await application.http(req, res, url, () => body(req)))) return;
+    if (parts[0] === 'accounts') {
+      res.setHeader('cache-control', 'no-store');
+      if (parts.length === 1 && req.method === 'GET') return json(res, 200, { accounts: accounts.list() });
+      if ((parts.length === 1 && req.method === 'POST') || (parts.length === 2 && req.method === 'PATCH')) {
+        return await providerMutations.run(async () => {
+          if (!base.some((c) => c.name === 'claude')) return json(res, 409, { error: 'Claude Code is unavailable' });
+          let input;
+          try {
+            input = await body(req);
+          } catch {
+            return json(res, 400, { error: 'invalid account request' });
+          }
+          const schema = req.method === 'POST' ? createAccount : updateAccount;
+          if (!schema.safeParse(input).success) return json(res, 400, { error: 'invalid account metadata' });
+          if (req.method === 'PATCH' && !accounts.list().some((a) => a.id === parts[1]))
+            return json(res, 404, { error: 'unknown account' });
+          if (req.method === 'POST' && accounts.list().length >= 9)
+            return json(res, 409, { error: 'account limit reached' });
+          const account = req.method === 'POST' ? accounts.create(input) : accounts.update(parts[1]!, input);
+          await reload();
+          return json(res, req.method === 'POST' ? 201 : 200, { account });
+        });
+      }
+      return json(res, 405, { error: 'account operation unavailable' });
+    }
     if (url.pathname === '/routing/models' && req.method === 'POST')
       return await providerMutations.run(async () => {
         if (!keys.key('openrouter')) return json(res, 409, { error: "add OpenRouter's key first" });
@@ -378,7 +448,10 @@ const server = createServer(async (req, res) => {
           ...(c.apiKeys ? { apiKeys: c.apiKeys } : {}),
           ...(c.keyFrom ? { keyFrom: c.keyFrom } : {}),
           ...(c.profile ? { profile: c.profile } : {}),
-          ...(c.signIn ? { life: signInLife(c.signIn, env) ?? null } : {}),
+          ...(c.subscriptionAccount
+            ? { subscriptionAccount: c.subscriptionAccount, billing: authBilling.get(c.name) ?? 'unknown' }
+            : {}),
+          ...(c.signIn ? { life: signInLife(c.signIn, effectiveCliEnv(c, env)) ?? null } : {}),
         })),
       );
       return json(res, 200, {
@@ -500,7 +573,7 @@ const server = createServer(async (req, res) => {
     }
     if (parts[0] === 'refresh' && parts[1] && signIns.has(parts[1]) && req.method === 'POST') {
       const c = table.find((t) => t.name === parts[1]) as Cli;
-      const life = c.signIn ? signInLife(c.signIn, env) : undefined;
+      const life = c.signIn ? signInLife(c.signIn, effectiveCliEnv(c, env)) : undefined;
       if (life && !life.renews)
         return json(res, 409, {
           error: `a refresh does not move ${c.name}'s sign-in: it ends ${life.endsAt}, sign in again (POST /connect/${c.name})`,
@@ -508,7 +581,7 @@ const server = createServer(async (req, res) => {
         });
       if (hub.busy(c.name)) return json(res, 409, { error: `a turn of ${c.name} is running: try again when it ends` });
       await hub.refresh(c.name, env.RUNNER_REFRESH_CWD ?? '/tmp');
-      const after = c.signIn ? signInLife(c.signIn, env) : undefined;
+      const after = c.signIn ? signInLife(c.signIn, effectiveCliEnv(c, env)) : undefined;
       // `moved`: the end is later than before. A CLI that refreshes only after some days moves nothing earlier.
       return json(res, 200, {
         name: c.name,
@@ -546,7 +619,17 @@ const server = createServer(async (req, res) => {
             known.delete(c.name);
             await copilotAccounts.invalidate();
           }
-          return json(res, 200, await s.start(childEnv, { wait: input.wait !== false }));
+          if (!['starting', 'waiting'].includes(s.status.state)) {
+            if (signInReleases.has(c.name)) return json(res, 409, { error: 'sign-in is stopping' });
+            try {
+              signInReleases.set(c.name, await hub.beginSignIn(c.name));
+            } catch {
+              return json(res, 409, { error: 'account has active native work; wait for it to finish' });
+            }
+          }
+          known.delete(c.name);
+          authBilling.delete(c.name);
+          return json(res, 200, await s.start(effectiveCliEnv(c, childEnv), { wait: input.wait !== false }));
         } finally {
           if (c.name === 'copilot') pendingCopilotStarts--;
         }

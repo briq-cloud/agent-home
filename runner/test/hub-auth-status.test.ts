@@ -93,7 +93,11 @@ test('timed-out callers share one pending status RPC until it settles', async (t
       .filter((line) => line === '_auth/status').length;
   assert.equal(countStatus(), 1, 'concurrent/timed-out callers did not enqueue another RPC');
 
+  // Await an observer of the pending response in this process, rather than
+  // treating the child's marker file as proof our RPC reader already settled.
+  const observed = hub.authStatus('vibe', 5000);
   release();
+  assert.equal(await observed, true);
   const settledBy = Date.now() + 1000;
   while (!readFileSync(methods, 'utf8').includes('.settled') && Date.now() < settledBy)
     await new Promise((resolve) => setTimeout(resolve, 5));

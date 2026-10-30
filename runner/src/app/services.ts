@@ -5,7 +5,7 @@ import { OpenRouter } from '@openrouter/sdk';
 import { z } from 'zod';
 import type { configuration } from './config.ts';
 import type { Hub } from '../acp/hub.ts';
-import type { Cli } from '../providers/catalog.ts';
+import { effectiveCliEnv, nativeHarness, type Cli } from '../providers/catalog.ts';
 import { PROVIDERS, type Keys, type Profile } from '../providers/profiles.ts';
 import { ContextStore } from '../context/store.ts';
 import { SemanticSearch, type SemanticSearchOptions } from '../context/semantic.ts';
@@ -80,6 +80,7 @@ type Options = {
   table: () => Cli[];
   signedIn: (cli: string) => Promise<boolean | null>;
   authEnv: Record<string, string>;
+  billingStatus?: (cli: string) => Promise<'subscription' | 'use' | 'unknown'>;
   providerSnapshot?: () => Promise<{ profiles: Profile[]; table: Cli[] }>;
   batchClientFactory?: BatchAdapterOptions['clientFactory'];
   semanticClientFactory?: SemanticSearchOptions['clientFactory'];
@@ -219,31 +220,37 @@ export class Application {
           vibe: ['MISTRAL_API_KEY'],
           gemini: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
         };
-        const hasApiKey = (apiNames[c.name] ?? c.apiKeys ?? []).some((n) =>
-          Boolean(c.env && n in c.env ? c.env[n] : this.options.authEnv[n]),
-        );
+        const harness = nativeHarness(c),
+          effectiveEnv = effectiveCliEnv(c, this.options.authEnv);
+        const hasApiKey = (apiNames[harness] ?? c.apiKeys ?? []).some((n) => Boolean(effectiveEnv[n]));
         const billing = p
           ? provider?.billing === 'plan'
             ? 'subscription'
             : 'use'
           : hasApiKey || c.apiKeys
             ? 'use'
-            : ['claude', 'codex'].includes(c.name)
-              ? c.status && (await commandBilling(c.status, this.options.authEnv)) === 'subscription'
+            : ['claude', 'codex'].includes(harness)
+              ? c.status &&
+                (await (this.options.billingStatus?.(c.name) ?? commandBilling(c.status, effectiveEnv))) ===
+                  'subscription'
                 ? 'subscription'
                 : 'use'
               : 'subscription';
         return {
           id: c.name,
           cli: c.name,
-          harness: p?.harness ?? c.name,
-          provider: p?.provider ?? c.name,
+          harness,
+          provider: p?.provider ?? harness,
           billing,
-          signedIn: await this.options.signedIn(c.name),
+          signedIn:
+            c.subscriptionAccount && billing !== 'subscription' && !hasApiKey
+              ? null
+              : await this.options.signedIn(c.name),
           compatibility: 'verified',
           model: p?.model,
           canonical: p?.autoEligible ? p.canonical : undefined,
           quotaBlocked: Boolean(this.options.hub.limits()[c.name]),
+          subscriptionAccount: c.subscriptionAccount,
           tools: true,
           modalities: ['text'],
         } satisfies Binding;

@@ -167,3 +167,8 @@ The private cache retains up to 1,024 intents, then refuses new ones to preserve
 
 The owner page and `/extensions` API manage shared skills and MCP connections.
 `RUNNER_EXTENSIONS=0` disables this feature. See [configuration and compatibility](../docs/extensions.md).
+
+## Subscription accounts
+
+`GET/POST /accounts` and `PATCH /accounts/:id` manage named Claude sign-ins and eligibility for new Auto tasks.
+Existing chats retain their account. See [setup and routing boundaries](../docs/accounts.md).

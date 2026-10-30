@@ -205,7 +205,9 @@ h3 {
     filter: invert(1);
   }
 }
+.product > div { min-width: 0; }
 .name {
+  overflow-wrap: anywhere;
   font-size: 14px;
   font-weight: 650;
 }

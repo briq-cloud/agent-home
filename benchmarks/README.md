@@ -72,7 +72,7 @@ Fresh sessions do not guarantee cold provider caches. Cache counters, order and 
 Costs of failures remain in totals. Unknown cost stays `null`. Home compute is billed separately by
 briq and is not guessed into the API-dollar total.
 
-## Results and later work
+## Reports
 
 Each output folder has `report.html`, `results.json`, immutable per-case records and fresh fixture
 folders. Results are local; telemetry, uploads and response caching are disabled. Secrets and relay
@@ -80,11 +80,6 @@ credentials are not included in reports. Keep output folders private.
 
 No new acceptance failures plus 20% lower time or cost is only a discovery signal. Confirm on a
 separate held-out task suite, with three repetitions, before claiming a general improvement.
-
-For routing, add a second execution route on four tasks and reuse the first-route observations.
-Replay Jev/Clef recommendations against that outcome matrix without rerunning execution agents.
-Do not train a router on these six tasks. RouteLLM and LLMRouter are comparison tools, not a proxy
-for vendor subscription traffic.
 
 ## Larger tasks and execution-model comparison
 
