@@ -8,6 +8,7 @@ import type { Hub } from '../acp/hub.ts';
 import type { Cli } from '../providers/catalog.ts';
 import { PROVIDERS, type Keys, type Profile } from '../providers/profiles.ts';
 import { ContextStore } from '../context/store.ts';
+import { SemanticSearch, type SemanticSearchOptions } from '../context/semantic.ts';
 import { TaskStore } from '../tasks/index.ts';
 import { Routing, type Binding } from '../routing/index.ts';
 import { Engine, type EngineSubmission } from '../orchestration/engine.ts';
@@ -80,6 +81,7 @@ type Options = {
   authEnv: Record<string, string>;
   providerSnapshot?: () => Promise<{ profiles: Profile[]; table: Cli[] }>;
   batchClientFactory?: BatchAdapterOptions['clientFactory'];
+  semanticClientFactory?: SemanticSearchOptions['clientFactory'];
 };
 export class Application {
   readonly tasks: TaskStore;
@@ -89,6 +91,7 @@ export class Application {
   readonly engine: Engine;
   readonly delegation: Delegation;
   readonly batches?: TextBatchAdapter;
+  readonly semantic?: SemanticSearch;
   private batchTimer?: ReturnType<typeof setInterval>;
   private batchWork?: Promise<void>;
   private stopping = false;
@@ -101,6 +104,7 @@ export class Application {
     if (config.fleetConcurrency > config.maxTurns)
       throw Error('RUNNER_FLEET_CONCURRENCY needs RUNNER_MAX_TURNS >= its value');
     if (config.delegation && config.maxTurns < 2) throw Error('RUNNER_DELEGATION needs RUNNER_MAX_TURNS >= 2');
+    if (config.semanticMemory && !config.memory) throw Error('RUNNER_SEMANTIC_MEMORY requires RUNNER_MEMORY=1');
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
     this.tasks = new TaskStore(join(config.stateDir, 'tasks.sqlite'));
     this.context = new ContextStore({ dbPath: join(config.stateDir, 'context.sqlite') });
@@ -108,6 +112,14 @@ export class Application {
     if (!this.projects.list().some((p) => p.id === 'home'))
       this.projects.put({ id: 'home', root: config.cwd, revision: 'unversioned' });
     for (const p of this.projects.list()) this.context.setProjectRevision(p.id, p.revision);
+    if (config.semanticMemory)
+      this.semantic = new SemanticSearch({
+        store: this.context,
+        cachePath: join(config.stateDir, 'semantic.sqlite'),
+        apiKey: () => keys.key('openrouter'),
+        maxBudgetEstimateUsd: config.semanticMemoryMaxEstimatedUsd,
+        clientFactory: options.semanticClientFactory,
+      });
     this.routing = new Routing({
       stateDir: config.stateDir,
       dynamic: config.dynamicRouting,
@@ -273,6 +285,8 @@ export class Application {
           dynamicRouting: this.options.config.dynamicRouting,
           delegation: this.options.config.delegation,
           memory: this.options.config.memory,
+          semanticMemory: Boolean(this.semantic),
+          semanticMemoryMaxEstimatedUsd: this.options.config.semanticMemoryMaxEstimatedUsd,
           batch: this.options.config.batch,
           concurrency: {
             coordinators: Math.max(1, this.options.config.fleetConcurrency / 2),
@@ -419,6 +433,53 @@ export class Application {
         this.projects.get(b.project);
         return reply(200, this.context.putSource(b));
       }
+      if (url.pathname === '/memories/search' && method === 'POST') {
+        const stopping = () => reply(503, { status: 'blocked', error: 'runner_stopping' });
+        if (this.stopping) return stopping();
+        if (!this.semantic) return reply(403, { status: 'denied', error: 'semantic_memory_disabled' });
+        let raw: Record<string, unknown>;
+        try {
+          raw = await body();
+        } catch {
+          return this.stopping ? stopping() : reply(400, { status: 'denied', error: 'invalid_request' });
+        }
+        if (this.stopping) return stopping();
+        const shortId = id.refine(
+          (value) => value.trim().length > 0 && !value.includes('\0') && Buffer.byteLength(value) <= 256,
+        );
+        const parsed = z
+          .object({
+            projectId: shortId,
+            revision: shortId,
+            query: z
+              .string()
+              .min(1)
+              .max(4096)
+              .refine((value) => value.trim().length > 0 && !value.includes('\0') && Buffer.byteLength(value) <= 4096),
+            allowPaid: z.literal(true),
+            budgetEstimateUsd: z.number().finite().positive().max(0.1),
+            idempotencyKey: z.string().regex(/^[A-Za-z0-9._:-]{1,80}$/),
+          })
+          .strict()
+          .safeParse(raw);
+        if (!parsed.success) return reply(400, { status: 'denied', error: 'invalid_request' });
+        const { projectId, revision, ...input } = parsed.data;
+        try {
+          if (
+            this.projects.get(projectId).revision !== revision ||
+            this.context.currentRevision(projectId) !== revision
+          )
+            throw Error('revision');
+        } catch {
+          return reply(400, { status: 'denied', error: 'invalid_project_or_revision' });
+        }
+        try {
+          const result = await this.semantic.search({ project: projectId, revision, ...input });
+          return reply(result.status === 'complete' ? 200 : result.status === 'blocked' ? 409 : 400, result);
+        } catch {
+          return reply(409, { status: 'blocked', error: 'semantic_search_unavailable' });
+        }
+      }
       if (url.pathname === '/memories' && method === 'PUT') {
         if (!this.options.config.memory) throw Error('memory disabled');
         const b = z
@@ -490,7 +551,7 @@ export class Application {
     return (this.stopWork ??= (async () => {
       this.stopping = true;
       clearInterval(this.batchTimer);
-      await Promise.all([this.batchWork, this.engine.stop(), this.batches?.shutdown()]);
+      await Promise.all([this.batchWork, this.engine.stop(), this.batches?.shutdown(), this.semantic?.shutdown()]);
       this.tasks.close();
       this.context.close();
     })());

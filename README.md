@@ -55,7 +55,7 @@ flowchart LR
 | Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic decisions enabled; key and per-task budget required. |
 | Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
 | Prompt caching | Each vendor's native cache | No subscription traffic interception. |
-| Memory | SQLite FTS5 factual store | Explicit writes, current-source prompt recall, expiry and deletion. |
+| Memory | SQLite FTS5 factual store; optional BGE-M3 search through OpenRouter | Explicit writes and current-source recall; semantic candidates require opt-in and paid consent. |
 | Communication | MCP task tools + durable mailboxes | Delegation off; one coordinator and one child per project. |
 | Deferred work | UTC scheduling + OpenRouter SDK batches | Explicit windows; separate opt-in offline text transformations. |
 | Permissions | Vendor ACP requests + user responses | Waits for approval unless an explicit vendor mode is selected. |
@@ -66,7 +66,7 @@ Implementation checks: [fleet](docs/benchmarks/2026-10-30-fleet-evaluation.html)
 [batch](docs/benchmarks/2026-10-30-batch-evaluation.html) ·
 [memory retrieval](docs/benchmarks/2026-10-30-memory-retrieval-confirmation.html) ·
 [managed tasks](docs/benchmarks/2026-10-30-managed-evaluation.html).
-Semantic retrieval remains experimental; ambiguity checks do not justify automatic recall.
+Semantic search returns cited candidates and similarity scores. It never injects them into prompts automatically.
 
 ## Libraries
 
@@ -88,6 +88,8 @@ Semantic retrieval remains experimental; ambiguity checks do not justify automat
 | `RUNNER_DELEGATION` | `0`; requires at least two turn slots |
 | `RUNNER_FLEET_CONCURRENCY` | `2` (or `1` with one turn slot); opt-in `4`, `6`, `8` for separate project folders |
 | `RUNNER_MEMORY` | `1`; retrieval and writes remain explicit |
+| `RUNNER_SEMANTIC_MEMORY` | `0`; embeddings require an OpenRouter key and per-request paid consent |
+| `RUNNER_SEMANTIC_MEMORY_MAX_ESTIMATED_USD` | `0.01`; caller estimate, not a billing cap |
 | `RUNNER_DEFERRED` | `1`; individual tasks opt in |
 | `RUNNER_BATCH` | `0`; offline text batches require an OpenRouter key and per-job paid consent |
 | `RUNNER_BATCH_MAX_ESTIMATED_USD` | `0.05` per job; caller estimate, not a provider billing cap |

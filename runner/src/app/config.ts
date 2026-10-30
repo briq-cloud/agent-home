@@ -16,6 +16,16 @@ export function configuration(env: NodeJS.ProcessEnv) {
   const batchMaxEstimatedUsd = Number(env.RUNNER_BATCH_MAX_ESTIMATED_USD ?? 0.05);
   if (!Number.isFinite(batchMaxEstimatedUsd) || batchMaxEstimatedUsd < 0 || batchMaxEstimatedUsd > 2)
     throw Error('RUNNER_BATCH_MAX_ESTIMATED_USD must be between 0 and 2');
+  const memory = flag('RUNNER_MEMORY', true);
+  const semanticMemory = flag('RUNNER_SEMANTIC_MEMORY', false);
+  if (semanticMemory && !memory) throw Error('RUNNER_SEMANTIC_MEMORY requires RUNNER_MEMORY=1');
+  const semanticMemoryMaxEstimatedUsd = Number(env.RUNNER_SEMANTIC_MEMORY_MAX_ESTIMATED_USD ?? 0.01);
+  if (
+    !Number.isFinite(semanticMemoryMaxEstimatedUsd) ||
+    semanticMemoryMaxEstimatedUsd <= 0 ||
+    semanticMemoryMaxEstimatedUsd > 0.1
+  )
+    throw Error('RUNNER_SEMANTIC_MEMORY_MAX_ESTIMATED_USD must be positive and at most 0.1');
   return {
     fleetConcurrency,
     port: integer('RUNNER_PORT', 8090, 1, 65535),
@@ -26,7 +36,9 @@ export function configuration(env: NodeJS.ProcessEnv) {
     orchestrator: flag('RUNNER_ORCHESTRATOR', true),
     dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', true),
     delegation: flag('RUNNER_DELEGATION', false),
-    memory: flag('RUNNER_MEMORY', true),
+    memory,
+    semanticMemory,
+    semanticMemoryMaxEstimatedUsd,
     deferred: flag('RUNNER_DEFERRED', true),
     batch: flag('RUNNER_BATCH', false),
     batchMaxEstimatedUsd,

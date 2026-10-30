@@ -200,3 +200,42 @@ test('disabled delegation exposes no MCP server and arbitrary capabilities are r
   assert.equal(h.delegation.server(root), undefined);
   await assert.rejects(h.delegation.call('not-a-capability', 'status', {}), /capability expired/);
 });
+
+test('agent lexical recall exposes only fresh current-project provenance and never stale or foreign facts', async (t) => {
+  const h = fixture(t),
+    root = h.claim(h.create()),
+    cap = h.capability(root);
+  for (const project of ['home', 'foreign']) h.context.setProjectRevision(project, 'r1');
+  const current = h.context.putSource({
+    project: 'home',
+    revision: 'r1',
+    path: 'current.md',
+    content: 'Current Alpha policy',
+  });
+  h.context.putMemory({ project: 'home', key: 'current', text: 'Alpha current fact', source: current });
+  const stale = h.context.putSource({ project: 'home', revision: 'r1', path: 'stale.md', content: 'Old Alpha policy' });
+  h.context.putMemory({ project: 'home', key: 'stale', text: 'Alpha stale fact', source: stale });
+  h.context.putSource({ project: 'home', revision: 'r1', path: 'stale.md', content: 'Corrected Alpha policy' });
+  const foreign = h.context.putSource({
+    project: 'foreign',
+    revision: 'r1',
+    path: 'facts.md',
+    content: 'Foreign Alpha policy',
+  });
+  h.context.putMemory({ project: 'foreign', key: 'foreign', text: 'Alpha foreign fact', source: foreign });
+  const recalled = (await h.delegation.call(cap, 'recall', { query: 'Alpha' })) as {
+    trust: string;
+    memories: Array<{ key: string; sourceCurrent: boolean }>;
+  };
+  assert.equal(recalled.trust, 'untrusted');
+  assert.deepEqual(
+    recalled.memories.map((memory) => memory.key),
+    ['current'],
+  );
+  assert.ok(recalled.memories.every((memory) => memory.sourceCurrent));
+  assert.equal(
+    h.context.searchMemories({ project: 'home', query: 'Alpha' }).length,
+    2,
+    'administrative listing still retains stale provenance for inspection',
+  );
+});

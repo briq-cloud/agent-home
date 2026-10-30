@@ -155,7 +155,7 @@ export class Delegation {
       if (typeof input.query !== 'string' || input.query.length > 2000) throw Error('query required');
       return {
         trust: 'untrusted',
-        memories: this.options.context.searchMemories({ project: cap.projectId, query: input.query, limit: 5 }),
+        memories: this.options.context.searchPromptMemories({ project: cap.projectId, query: input.query, limit: 5 }),
       };
     }
     throw Error('unknown delegation action');

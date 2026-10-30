@@ -29,6 +29,7 @@ export type MemoryRecord = {
   sourceCurrent: boolean;
   trust: 'untrusted';
 };
+export type FreshMemoryInventory = { revision: string; total: number; truncated: boolean; records: MemoryRecord[] };
 export type ArtifactRef = {
   project: string;
   id: string;
@@ -429,6 +430,32 @@ export class ContextStore implements MemoryBackend {
    */
   searchPromptMemories(input: { project: string; query: string; limit?: number }): MemoryRecord[] {
     return this.searchMemoryRows(input, true);
+  }
+
+  /** Fresh source-verified inventory for bounded semantic candidate search; lexical query is intentionally not applied. */
+  freshMemoryInventory(input: { project: string; revision: string; limit?: number; maxRecordBytes?: number }): FreshMemoryInventory {
+    this.assertCurrent(input.project, input.revision);
+    const limit = Math.max(1, Math.min(64, Math.floor(input.limit ?? 64)));
+    const maxRecordBytes = Math.max(1, Math.min(16_384, Math.floor(input.maxRecordBytes ?? 4_096)));
+    const countRow = this.db.prepare(`SELECT COUNT(*) AS total FROM memories m JOIN projects p ON p.project=m.project
+      JOIN sources s ON s.project=m.project AND s.revision=m.source_revision AND s.path=m.source_path AND s.hash=m.source_hash
+      WHERE m.project=? AND p.revision=? AND m.source_revision=? AND (m.expires_at IS NULL OR m.expires_at>?)`)
+      .get(input.project,input.revision,input.revision,this.now()) as {total:number};
+    const rows = this.db.prepare(`SELECT m.project,m.key,m.text,m.version,m.created_at,m.expires_at,m.source_path,m.source_hash,m.source_revision,m.bytes
+      FROM memories m JOIN projects p ON p.project=m.project
+      JOIN sources s ON s.project=m.project AND s.revision=m.source_revision AND s.path=m.source_path AND s.hash=m.source_hash
+      WHERE m.project=? AND p.revision=? AND m.source_revision=? AND m.bytes<=? AND (m.expires_at IS NULL OR m.expires_at>?)
+      ORDER BY m.created_at DESC,m.key LIMIT 65`).all(input.project,input.revision,input.revision,maxRecordBytes,this.now()) as Array<{
+      project:string; key:string; text:string; version:number; created_at:number; expires_at:number|null;
+      source_path:string; source_hash:string; source_revision:string; bytes:number;
+    }>;
+    const total = countRow.total;
+    const records = rows.slice(0,limit).map(row => ({
+      project:row.project,key:row.key,text:row.text,version:row.version,createdAt:row.created_at,expiresAt:row.expires_at,
+      source:{path:row.source_path,hash:row.source_hash,revision:row.source_revision},bytes:row.bytes,
+      tokenEstimate:estimateTokens(row.bytes),sourceReferenceVerified:true as const,sourceCurrent:true,trust:'untrusted' as const,
+    }));
+    return { revision:input.revision,total,truncated:total>records.length,records };
   }
 
   private searchMemoryRows(input: { project: string; query: string; limit?: number }, currentOnly: boolean): MemoryRecord[] {
