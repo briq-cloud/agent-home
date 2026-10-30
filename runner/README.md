@@ -102,6 +102,7 @@ Pass `schedule:{flexibleDeadline:true,userWindows:[{start:"22:00",end:"24:00"}]}
 Windows use UTC. Pricing schedules additionally require source, expiry, provider and exact model evidence.
 The executor rechecks that evidence against the selected route before execution.
 Scheduling a CLI at night does not turn it into a batch API request.
+Deferred jobs need an awake home; arranging external wake scheduling is a deployment responsibility.
 
 For standalone launches, `bin/agent-home-start` defaults each vendor home under
 `$RUNNER_LOGINS` (`claude`, `codex`, `copilot`, `grok`, `vibe`, `config`, `gemini`) and respects
