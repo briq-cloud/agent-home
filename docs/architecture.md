@@ -6,6 +6,7 @@ runner/src/
   acp/             vendor processes, sessions, direct and Auto transports
   providers/       CLI catalog, keys and isolated profiles
   auth/            vendor sign-in and non-secret status metadata
+  extensions/      shared MCP definitions, skill ownership, additive home context
   orchestration/   executor, project registry, scoped delegation
   tasks/           SQLite migrations, DAGs, leases, messages
   context/         source snapshots, factual memory, optional embedding candidate cache

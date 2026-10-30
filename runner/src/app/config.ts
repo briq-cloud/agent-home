@@ -1,4 +1,6 @@
 import { resolve } from 'node:path';
+import { z } from 'zod';
+import { validateDeploymentContext } from '../extensions/index.ts';
 export function configuration(env: NodeJS.ProcessEnv) {
   const integer = (name: string, fallback: number, min: number, max: number) => {
     const value = Number(env[name] ?? fallback);
@@ -26,6 +28,19 @@ export function configuration(env: NodeJS.ProcessEnv) {
     semanticMemoryMaxEstimatedUsd > 0.1
   )
     throw Error('RUNNER_SEMANTIC_MEMORY_MAX_ESTIMATED_USD must be positive and at most 0.1');
+  let deployment;
+  if (env.RUNNER_DEPLOYMENT_CONTEXT !== undefined) {
+    try {
+      deployment = validateDeploymentContext(
+        z
+          .object({ platform: z.literal('briq'), apiUrl: z.string(), homeId: z.string(), stackId: z.string() })
+          .strict()
+          .parse(JSON.parse(env.RUNNER_DEPLOYMENT_CONTEXT)),
+      );
+    } catch {
+      throw Error('RUNNER_DEPLOYMENT_CONTEXT must be strict public Briq deployment metadata without credentials');
+    }
+  }
   return {
     fleetConcurrency,
     port: integer('RUNNER_PORT', 8090, 1, 65535),
@@ -37,6 +52,8 @@ export function configuration(env: NodeJS.ProcessEnv) {
     dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', true),
     delegation: flag('RUNNER_DELEGATION', false),
     memory,
+    extensions: flag('RUNNER_EXTENSIONS', true),
+    deployment,
     semanticMemory,
     semanticMemoryMaxEstimatedUsd,
     deferred: flag('RUNNER_DEFERRED', true),

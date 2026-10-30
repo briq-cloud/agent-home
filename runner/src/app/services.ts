@@ -9,6 +9,7 @@ import type { Cli } from '../providers/catalog.ts';
 import { PROVIDERS, type Keys, type Profile } from '../providers/profiles.ts';
 import { ContextStore } from '../context/store.ts';
 import { SemanticSearch, type SemanticSearchOptions } from '../context/semantic.ts';
+import { ExtensionRegistry, type ServerDefinition } from '../extensions/index.ts';
 import { TaskStore } from '../tasks/index.ts';
 import { Routing, type Binding } from '../routing/index.ts';
 import { Engine, type EngineSubmission } from '../orchestration/engine.ts';
@@ -82,6 +83,8 @@ type Options = {
   providerSnapshot?: () => Promise<{ profiles: Profile[]; table: Cli[] }>;
   batchClientFactory?: BatchAdapterOptions['clientFactory'];
   semanticClientFactory?: SemanticSearchOptions['clientFactory'];
+  extensions?: ExtensionRegistry;
+  extensionEnv?: () => Record<string, string | undefined>;
 };
 export class Application {
   readonly tasks: TaskStore;
@@ -92,6 +95,7 @@ export class Application {
   readonly delegation: Delegation;
   readonly batches?: TextBatchAdapter;
   readonly semantic?: SemanticSearch;
+  readonly extensions?: ExtensionRegistry;
   private batchTimer?: ReturnType<typeof setInterval>;
   private batchWork?: Promise<void>;
   private stopping = false;
@@ -106,6 +110,16 @@ export class Application {
     if (config.delegation && config.maxTurns < 2) throw Error('RUNNER_DELEGATION needs RUNNER_MAX_TURNS >= 2');
     if (config.semanticMemory && !config.memory) throw Error('RUNNER_SEMANTIC_MEMORY requires RUNNER_MEMORY=1');
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
+    if (config.extensions) {
+      this.extensions =
+        options.extensions ?? new ExtensionRegistry({ stateDir: config.stateDir, deployment: config.deployment });
+      if (this.extensions.created) this.extensions.installBuiltins();
+      hub.configureExtensions({
+        registry: this.extensions,
+        env: options.extensionEnv ?? (() => options.authEnv),
+        deployment: config.deployment,
+      });
+    } else hub.configureExtensions(undefined);
     this.tasks = new TaskStore(join(config.stateDir, 'tasks.sqlite'));
     this.context = new ContextStore({ dbPath: join(config.stateDir, 'context.sqlite') });
     this.projects = new Projects(join(config.stateDir, 'projects.json'), config.cwd);
@@ -268,9 +282,17 @@ export class Application {
     const parts = url.pathname.split('/').filter(Boolean),
       method = req.method;
     if (
-      !['projects', 'tasks', 'artifacts', 'context', 'memories', 'messages', 'features', 'text-batches'].includes(
-        parts[0] ?? '',
-      )
+      ![
+        'projects',
+        'tasks',
+        'artifacts',
+        'context',
+        'memories',
+        'messages',
+        'features',
+        'text-batches',
+        'extensions',
+      ].includes(parts[0] ?? '')
     )
       return false;
     const reply = (code: number, value: unknown) => {
@@ -286,6 +308,7 @@ export class Application {
           delegation: this.options.config.delegation,
           memory: this.options.config.memory,
           semanticMemory: Boolean(this.semantic),
+          extensions: Boolean(this.extensions),
           semanticMemoryMaxEstimatedUsd: this.options.config.semanticMemoryMaxEstimatedUsd,
           batch: this.options.config.batch,
           concurrency: {
@@ -296,6 +319,45 @@ export class Application {
           fleet: this.engine.fleetStatus(),
           costs: 'CLI execution cost is unknown; estimates are admission guards, not hard caps',
         });
+      if (parts[0] === 'extensions') {
+        if (!this.extensions) return reply(403, { error: 'extensions_disabled' });
+        if (this.stopping) return reply(503, { error: 'runner_stopping' });
+        try {
+          if (parts.length === 1 && method === 'GET')
+            return reply(200, {
+              ...this.extensions.list(),
+              agents: this.options.hub.extensionStatus(),
+              updatePolicy:
+                'MCP changes compose at new native session opens/loads; no live rebind. Skill discovery links update at these boundaries; already-loaded instructions are not revoked. Removal unlinks only verified managed links; user replacements and canonical bodies are preserved.',
+            });
+          if (parts.length === 3 && method === 'PUT') {
+            const raw = await body();
+            if (this.stopping) return reply(503, { error: 'runner_stopping' });
+            if (raw.name !== parts[2]) throw Error('name mismatch');
+            if (parts[1] === 'mcp') this.extensions.putServer(raw as ServerDefinition);
+            else if (parts[1] === 'skills')
+              this.extensions.putSkill(
+                z.object({ name: z.string(), description: z.string(), body: z.string() }).strict().parse(raw),
+              );
+            else return reply(404, { error: 'unknown_extension_route' });
+            return reply(200, { revision: this.extensions.list().revision });
+          }
+          if (parts.length === 3 && method === 'DELETE') {
+            let links;
+            if (parts[1] === 'mcp') this.extensions.removeServer(parts[2]!);
+            else if (parts[1] === 'skills') links = this.extensions.removeSkill(parts[2]!);
+            else return reply(404, { error: 'unknown_extension_route' });
+            return reply(200, {
+              revision: this.extensions.list().revision,
+              userFilesPreserved: true,
+              ...(links ? { links: links.map(({ name, status }) => ({ name, status })) } : {}),
+            });
+          }
+          return reply(404, { error: 'unknown_extension_route' });
+        } catch {
+          return reply(400, { error: 'invalid_extension_configuration' });
+        }
+      }
       if (parts[0] === 'text-batches') {
         if (this.stopping) return reply(503, { error: 'runner is stopping; existing batch jobs are preserved' });
         if (!this.batches) return reply(403, { error: 'text batches are disabled; set RUNNER_BATCH=1 to opt in' });

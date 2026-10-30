@@ -35,7 +35,8 @@ test(
         [
           ['/', '../src/ui/web/index.html'],
           ['/assets/home.js', '../src/ui/web/home.js'],
-        ['/assets/fleet.js', '../src/ui/web/fleet.js'],
+          ['/assets/fleet.js', '../src/ui/web/fleet.js'],
+          ['/assets/extensions.js', '../src/ui/web/extensions.js'],
           ['/assets/home.css', '../src/ui/web/home.css'],
         ].map(
           async ([url, path]) => [url, await readFile(fileURLToPath(new URL(path!, import.meta.url)), 'utf8')] as const,
@@ -106,8 +107,13 @@ test(
         });
       if (path === '/usage') return fulfill({ clis: [] });
       if (path === '/tasks') return fulfill({ tasks: [], nextOffset: null });
-    if (path === '/projects') return fulfill({ projects: [{ id: 'home', root: '/work', revision: 'test' }] });
-    if (path === '/features') return fulfill({ orchestrator: true, delegation: false, concurrency: { coordinators: 1, children: 1, maxDepth: 1 } });
+      if (path === '/projects') return fulfill({ projects: [{ id: 'home', root: '/work', revision: 'test' }] });
+      if (path === '/features')
+        return fulfill({
+          orchestrator: true,
+          delegation: false,
+          concurrency: { coordinators: 1, children: 1, maxDepth: 1 },
+        });
       const login = /^\/connect\/(claude|codex)(\/input)?$/.exec(path);
       if (login) {
         const name = login[1]!;
@@ -244,5 +250,105 @@ test(
         fullPage: false,
       });
     assert.deepEqual(errors, []);
+  },
+);
+
+test(
+  'status refresh recovery clears only its own notice and preserves owner drafts and copy feedback',
+  {
+    skip: !browserPath && 'No Chrome/Chromium installed',
+    timeout: 15_000,
+  },
+  async (t) => {
+    const { chromium } = await import('playwright-core');
+    const browser = await chromium.launch({ headless: true, executablePath: browserPath });
+    t.after(() => browser.close());
+    const page = await browser.newPage();
+    page.setDefaultTimeout(4000);
+    await page.addInitScript(() => {
+      const interval = window.setInterval.bind(window);
+      window.setInterval = ((callback: TimerHandler, delay?: number, ...args: any[]) =>
+        interval(callback, delay === 5000 ? 100 : delay, ...args)) as typeof window.setInterval;
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => {} } });
+    });
+    const files = new Map(
+      await Promise.all(
+        [
+          ['/', '../src/ui/web/index.html'],
+          ['/assets/home.js', '../src/ui/web/home.js'],
+          ['/assets/fleet.js', '../src/ui/web/fleet.js'],
+          ['/assets/extensions.js', '../src/ui/web/extensions.js'],
+          ['/assets/home.css', '../src/ui/web/home.css'],
+        ].map(async ([url, file]) => [url!, await readFile(new URL(file!, import.meta.url), 'utf8')] as const),
+      ),
+    );
+    let responseStatus = 503;
+    await page.route('**/*', async (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const reply = (value: unknown, status = 200) =>
+        route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+      if (files.has(path))
+        return route.fulfill({
+          contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html',
+          body: files.get(path),
+        });
+      if (path === '/status')
+        return responseStatus === 200
+          ? reply({ clis: [], limited: {}, features: { orchestrator: false, extensions: false } })
+          : reply({ error: 'fixture unavailable' }, responseStatus);
+      if (path === '/keys')
+        return reply({
+          providers: [{ id: 'openrouter', name: 'OpenRouter', set: false, billing: 'use', harnesses: ['claude'] }],
+          profiles: [],
+        });
+      if (path === '/usage') return reply({ clis: [] });
+      if (path === '/link') return reply({ query: '?session=synthetic-copy-fixture' });
+      return reply({ error: 'unexpected fixture route' }, 404);
+    });
+    await page.goto('http://recovery.test/');
+    await page
+      .locator('#notice')
+      .getByText('Home status is temporarily unavailable. Retrying…', { exact: true })
+      .waitFor();
+    assert.equal(
+      await page
+        .locator('#notice')
+        .getByText('Open this home with its private link to connect.', { exact: true })
+        .count(),
+      0,
+      '503 is not an authentication failure',
+    );
+    responseStatus = 200;
+    const draft = page.getByLabel('OpenRouter key');
+    await draft.waitFor();
+    await page.waitForFunction(() => document.getElementById('notice')?.textContent === '');
+    await draft.fill('synthetic-unsaved-draft');
+    responseStatus = 503;
+    await page
+      .locator('#notice')
+      .getByText('Home status is temporarily unavailable. Retrying…', { exact: true })
+      .waitFor();
+    responseStatus = 200;
+    await page.waitForFunction(() => document.getElementById('notice')?.textContent === '');
+    assert.equal(await draft.inputValue(), 'synthetic-unsaved-draft');
+    responseStatus = 401;
+    await page
+      .locator('#notice')
+      .getByText('Open this home with its private link to connect.', { exact: true })
+      .waitFor();
+    responseStatus = 200;
+    await page.waitForFunction(() => document.getElementById('notice')?.textContent === '');
+    await page.getByRole('button', { name: 'Copy private home link', exact: true }).click();
+    await page.locator('#notice').getByText('Link copied', { exact: true }).waitFor();
+    responseStatus = 503;
+    await page.waitForTimeout(250);
+    responseStatus = 200;
+    await page.waitForTimeout(250);
+    assert.equal(
+      await page.locator('#notice').textContent(),
+      'Link copied',
+      'refresh failure and recovery must preserve unrelated owner feedback',
+    );
+    assert.equal(await draft.inputValue(), 'synthetic-unsaved-draft');
   },
 );
