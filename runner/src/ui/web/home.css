@@ -671,3 +671,65 @@ footer {
 .signin-code-row > div {
   min-width: 0;
 }
+
+.fleet { border: 1px solid var(--line); border-radius: 13px; background: var(--card); padding: 18px; }
+.fleet-toolbar, .fleet-lookup, .fleet-message-footer { display: flex; align-items: end; gap: 10px; }
+.fleet-toolbar label, .fleet-form-grid label, .fleet-budget-fields label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+.fleet-toolbar > input { flex: 1; min-width: 100px; }
+.fleet-toolbar select { max-width: 220px; }
+.fleet-capacity { margin: 12px 0; }
+.fleet-notice:empty { display: none; }
+.fleet-notice { margin: 10px 0; font-size: 13px; }
+.fleet-lookup { margin: 14px 0; }
+.fleet-lookup input { max-width: 460px; }
+.fleet-columns { display: grid; grid-template-columns: minmax(250px, .9fr) minmax(0, 1.4fr); gap: 20px; }
+.fleet-list { min-width: 0; border-right: 1px solid var(--line); padding-right: 18px; }
+.fleet-tree { display: block; max-height: 650px; overflow-y: auto; }
+.fleet-tree ul { list-style: none; margin: 0; padding: 0; }
+.fleet-tree ul ul { border-left: 1px solid var(--line); margin-left: 10px; padding-left: 12px; }
+.fleet-task { display: grid; grid-template-columns: 1fr auto; gap: 5px 8px; width: 100%; text-align: left; margin: 0 0 7px; padding: 10px; white-space: normal; }
+.fleet-task.selected { border-color: var(--accent); background: var(--soft); }
+.fleet-task-title { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.fleet-task > .muted { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.fleet-state { font-size: 10px; color: var(--muted); }
+.fleet-state.running, .fleet-state.succeeded { color: var(--ok); }
+.fleet-state.failed, .fleet-state.blocked { color: var(--warn); }
+.fleet-detail { margin: 0; min-width: 0; }
+.fleet-detail h3 { margin-bottom: 12px; }
+.fleet-detail h4 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; }
+.fleet-facts dl { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 5px 12px; font-size: 12px; margin: 0 0 12px; }
+.fleet-facts dt { color: var(--muted); }
+.fleet-facts dd { margin: 0; overflow-wrap: anywhere; }
+.fleet-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.fleet-link { font-size: 11px; padding: 5px 7px; }
+.fleet-actions { margin: 12px 0; flex-wrap: wrap; }
+.fleet-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; font: 12px / 1.5 ui-monospace, monospace; }
+.fleet-verification { font-size: 13px; font-weight: 600; }
+.fleet-detail .permission button { font-size: 12px; margin: 4px 5px 0 0; white-space: normal; }
+.fleet-messages { max-height: 320px; overflow: auto; }
+.fleet-message { border-top: 1px solid var(--line); padding: 8px 0; }
+.fleet-message p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0; font-size: 12px; }
+.fleet-message-form { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 8px; }
+.fleet-message-form textarea { border: 1px solid var(--line); margin-bottom: 8px; background: var(--input); padding: 10px; }
+.fleet-message-footer { justify-content: space-between; }
+.fleet-message-footer .muted { max-width: 38ch; }
+.fleet-composer { margin-top: 12px; padding-bottom: 12px; }
+.fleet-new-form { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.fleet-new-form > textarea { border: 1px solid var(--line); padding: 10px; background: var(--input); }
+.fleet-form-grid, .fleet-budget-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.fleet-form-grid select { min-width: 0; }
+.fleet-new-form > button { align-self: flex-start; }
+.fleet-new-form .api-choice { margin: 0; }
+.fleet-draining { border-left: 3px solid var(--warn); padding: 8px 12px; margin: 12px 0; background: var(--input); font-size: 12px; }
+.fleet-draining p { margin: 0; }
+.fleet-draining ul { margin: 6px 0 0; padding-left: 16px; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .fleet-toolbar { flex-wrap: wrap; align-items: end; }
+  .fleet-toolbar > input { flex-basis: 100%; }
+  .fleet-columns { grid-template-columns: 1fr; }
+  .fleet-list { border-right: 0; border-bottom: 1px solid var(--line); padding-right: 0; padding-bottom: 16px; }
+  .fleet-tree { max-height: 380px; }
+  .fleet-form-grid, .fleet-budget-fields { grid-template-columns: 1fr; }
+  .fleet-message-footer { align-items: start; flex-direction: column; }
+  .fleet-facts dl { grid-template-columns: 95px minmax(0, 1fr); }
+}

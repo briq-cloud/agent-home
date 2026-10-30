@@ -16,10 +16,22 @@ import { Delegation } from '../orchestration/delegation.ts';
 import { nextEligible, type OffpeakPolicy } from '../scheduling/offpeak.ts';
 import { commandBilling } from '../auth/status.ts';
 import { DEFAULT_AUTO_PROFILE } from '../providers/auto-models.ts';
+import { TextBatchAdapter, BatchSubmissionUnknownError, type BatchAdapterOptions } from '../scheduling/batch.ts';
 import { validateAcceptance, type Acceptance } from '../verification/index.ts';
 
 const id = z.string().min(1).max(256),
   hash = z.string().regex(/^[a-f0-9]{64}$/);
+function pageQuery(url: URL): { limit: number; offset: number } {
+  const read = (key: string, fallback: number, min: number, max: number) => {
+    const raw = url.searchParams.get(key);
+    if (raw === null) return fallback;
+    if (!/^\d+$/.test(raw)) throw Error(`Invalid ${key}`);
+    const value = Number(raw);
+    if (!Number.isSafeInteger(value) || value < min || value > max) throw Error(`Invalid ${key}`);
+    return value;
+  };
+  return { limit: read('limit', 100, 1, 100), offset: read('offset', 0, 0, 1_000_000) };
+}
 const submission = z
   .object({
     id: id.optional(),
@@ -66,6 +78,7 @@ type Options = {
   signedIn: (cli: string) => Promise<boolean | null>;
   authEnv: Record<string, string>;
   providerSnapshot?: () => Promise<{ profiles: Profile[]; table: Cli[] }>;
+  batchClientFactory?: BatchAdapterOptions['clientFactory'];
 };
 export class Application {
   readonly tasks: TaskStore;
@@ -74,10 +87,18 @@ export class Application {
   readonly routing: Routing;
   readonly engine: Engine;
   readonly delegation: Delegation;
+  readonly batches?: TextBatchAdapter;
+  private batchTimer?: ReturnType<typeof setInterval>;
+  private batchWork?: Promise<void>;
+  private stopping = false;
+  private stopWork?: Promise<void>;
   private readonly options: Options;
   constructor(options: Options) {
     this.options = options;
     const { config, keys, hub } = options;
+    if (config.batch && !config.orchestrator) throw Error('RUNNER_BATCH needs RUNNER_ORCHESTRATOR=1');
+    if (config.fleetConcurrency > config.maxTurns)
+      throw Error('RUNNER_FLEET_CONCURRENCY needs RUNNER_MAX_TURNS >= its value');
     if (config.delegation && config.maxTurns < 2) throw Error('RUNNER_DELEGATION needs RUNNER_MAX_TURNS >= 2');
     mkdirSync(config.stateDir, { recursive: true, mode: 0o700 });
     this.tasks = new TaskStore(join(config.stateDir, 'tasks.sqlite'));
@@ -107,6 +128,7 @@ export class Application {
       url: () => `http://127.0.0.1:${config.port}`,
     });
     this.engine = new Engine({
+      maxConcurrent: config.fleetConcurrency,
       tasks: this.tasks,
       context: this.context,
       hub,
@@ -133,6 +155,28 @@ export class Application {
       },
     });
     if (config.orchestrator) this.engine.start();
+    if (config.batch) {
+      this.batches = new TextBatchAdapter({
+        dbPath: join(config.stateDir, 'batches.sqlite'),
+        getApiKey: () => keys.key('openrouter') ?? '',
+        maxEstimatedUsd: config.batchMaxEstimatedUsd,
+        clientFactory: options.batchClientFactory,
+      });
+      this.batchTimer = setInterval(() => this.pollBatches(), 15_000);
+      this.batchTimer.unref();
+      this.pollBatches();
+    }
+  }
+
+  private pollBatches(): void {
+    if (!this.batches || this.batchWork) return;
+    const pending = this.batches.pending().filter((job) => job.state === 'submitted');
+    const work = Promise.allSettled(pending.map((job) => this.batches!.poll(job.localId)))
+      .then(() => {})
+      .finally(() => {
+        if (this.batchWork === work) this.batchWork = undefined;
+      });
+    this.batchWork = work;
   }
   private async bindings(snapshot?: { profiles: Profile[]; table: Cli[] }): Promise<Binding[]> {
     const profiles = snapshot?.profiles ?? this.options.keys.profiles();
@@ -210,7 +254,11 @@ export class Application {
   ): Promise<boolean> {
     const parts = url.pathname.split('/').filter(Boolean),
       method = req.method;
-    if (!['projects', 'tasks', 'artifacts', 'context', 'memories', 'messages', 'features'].includes(parts[0] ?? ''))
+    if (
+      !['projects', 'tasks', 'artifacts', 'context', 'memories', 'messages', 'features', 'text-batches'].includes(
+        parts[0] ?? '',
+      )
+    )
       return false;
     const reply = (code: number, value: unknown) => {
       res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -224,9 +272,62 @@ export class Application {
           dynamicRouting: this.options.config.dynamicRouting,
           delegation: this.options.config.delegation,
           memory: this.options.config.memory,
-          concurrency: { coordinators: 1, children: 1, maxDepth: 1 },
+          batch: this.options.config.batch,
+          concurrency: {
+            coordinators: Math.max(1, this.options.config.fleetConcurrency / 2),
+            children: this.options.config.fleetConcurrency > 1 ? this.options.config.fleetConcurrency / 2 : 0,
+            maxDepth: 1,
+          },
+          fleet: this.engine.fleetStatus(),
           costs: 'CLI execution cost is unknown; estimates are admission guards, not hard caps',
         });
+      if (parts[0] === 'text-batches') {
+        if (this.stopping) return reply(503, { error: 'runner is stopping; existing batch jobs are preserved' });
+        if (!this.batches) return reply(403, { error: 'text batches are disabled; set RUNNER_BATCH=1 to opt in' });
+        if (parts.length === 1 && method === 'GET') return reply(200, { jobs: this.batches.list(pageQuery(url)) });
+        if (parts.length === 1 && method === 'POST') {
+          const input = z
+            .object({
+              idempotencyKey: z.string().min(1).max(80),
+              operation: z.enum(['summarize', 'extract', 'rewrite']),
+              model: z.string().min(1).max(256),
+              items: z
+                .array(z.object({ id: z.string().min(1).max(80), text: z.string().min(1).max(8000) }).strict())
+                .min(1)
+                .max(16),
+              allowPaid: z.literal(true),
+              budgetEstimateUsd: z.number().finite().positive().max(this.options.config.batchMaxEstimatedUsd),
+            })
+            .strict()
+            .parse(await body());
+          if (this.stopping) return reply(503, { error: 'runner is stopping; existing batch jobs are preserved' });
+          if (!this.options.keys.key('openrouter'))
+            return reply(400, { error: 'add an OpenRouter API key before submitting a text batch' });
+          try {
+            return reply(202, await this.batches.submit(input));
+          } catch (error) {
+            if (error instanceof BatchSubmissionUnknownError)
+              return reply(502, {
+                error: 'provider submission outcome unknown; do not resubmit with another key',
+                job: this.batches.read(error.localId),
+              });
+            throw error;
+          }
+        }
+        if (parts.length === 2 && method === 'GET') {
+          const job = this.batches.read(parts[1]!);
+          return job ? reply(200, job) : reply(404, { error: 'unknown text batch' });
+        }
+        if (parts.length === 3 && parts[2] === 'poll' && method === 'POST') {
+          if (!this.batches.read(parts[1]!)) return reply(404, { error: 'unknown text batch' });
+          try {
+            return reply(200, await this.batches.poll(parts[1]!));
+          } catch {
+            return reply(503, { error: 'batch status unavailable; the existing job is preserved' });
+          }
+        }
+        return reply(404, { error: 'unknown text batch route' });
+      }
       if (url.pathname === '/projects' && method === 'GET') return reply(200, { projects: this.projects.list() });
       if (parts[0] === 'projects' && parts.length === 2 && method === 'PUT') {
         const b = z
@@ -261,10 +362,13 @@ export class Application {
         }
         return reply(202, { tasks: this.engine.submitBatch(b.tasks as EngineSubmission[]) });
       }
-      if (url.pathname === '/tasks' && method === 'GET')
-        return reply(200, {
-          tasks: this.tasks.listTasks({ projectId: url.searchParams.get('projectId') ?? undefined, limit: 100 }),
-        });
+      if (url.pathname === '/tasks' && method === 'GET') {
+        const { limit, offset } = pageQuery(url);
+        const projectId = url.searchParams.get('projectId') ?? undefined;
+        if (projectId !== undefined) this.projects.get(id.parse(projectId));
+        const tasks = this.tasks.listTasks({ projectId, limit: limit + 1, offset });
+        return reply(200, { tasks: tasks.slice(0, limit), nextOffset: tasks.length > limit ? offset + limit : null });
+      }
       if (parts[0] === 'tasks' && parts[1]) {
         const task = this.tasks.getTask(parts[1]);
         if (!task) return reply(404, { error: 'unknown task' });
@@ -358,12 +462,16 @@ export class Application {
       if (url.pathname === '/messages' && method === 'GET') {
         const projectId = id.parse(url.searchParams.get('projectId'));
         this.projects.get(projectId);
+        const { limit, offset } = pageQuery(url);
+        const messages = this.tasks.listMessages({
+          projectId,
+          recipient: url.searchParams.get('recipient') ?? undefined,
+          limit: limit + 1,
+          offset,
+        });
         return reply(200, {
-          messages: this.tasks.listMessages({
-            projectId,
-            recipient: url.searchParams.get('recipient') ?? undefined,
-            limit: 100,
-          }),
+          messages: messages.slice(0, limit),
+          nextOffset: messages.length > limit ? offset + limit : null,
         });
       }
       return reply(404, { error: 'unknown application route' });
@@ -374,9 +482,13 @@ export class Application {
       });
     }
   }
-  async stop(): Promise<void> {
-    await this.engine.stop();
-    this.tasks.close();
-    this.context.close();
+  stop(): Promise<void> {
+    return (this.stopWork ??= (async () => {
+      this.stopping = true;
+      clearInterval(this.batchTimer);
+      await Promise.all([this.batchWork, this.engine.stop(), this.batches?.shutdown()]);
+      this.tasks.close();
+      this.context.close();
+    })());
   }
 }

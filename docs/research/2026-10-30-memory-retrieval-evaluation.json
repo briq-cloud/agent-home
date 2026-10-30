@@ -1,0 +1,144 @@
+{
+  "kind": "agent-home-memory-retrieval-evaluation",
+  "recordedAt": "2026-10-30T16:18:35.670Z",
+  "node": "v22.19.0",
+  "liveCallsEnabled": false,
+  "fixture": {
+    "facts": 8,
+    "queries": 10,
+    "dev": 4,
+    "heldout": 6,
+    "freshCorpusFacts": 8,
+    "staleOrOtherProjectSentToProvider": false,
+    "sourceHash": "652535f18b59701a77cc59a1f5f74db635a081240736eaf7a08b71a23edca110"
+  },
+  "sourceCode": {
+    "contextStoreSha256": "d2012296eef53355d3d4fa966912d10c248ec0c1a30776c1e42bee2218d1eef5",
+    "benchmarkSha256": "d724a2e6e578e1ddeea9366c687bc7ee40b10aec64ae6171980c80048a7087bb",
+    "fixtureSha256": "8a7aa93e7608323848cf55eb7dd853f32c2b6a1da4c4881d9435413445692a83"
+  },
+  "arms": {
+    "fts": {
+      "model": null,
+      "latencyMs": 0.93,
+      "dev": {
+        "n": 4,
+        "precisionAt3": 0,
+        "mrr": 0,
+        "knownAnswerAccuracy": 0,
+        "unknownFalsePositiveRate": 0,
+        "abstentionRate": 1
+      },
+      "heldout": {
+        "n": 6,
+        "precisionAt3": 0,
+        "mrr": 0,
+        "knownAnswerAccuracy": 0,
+        "unknownFalsePositiveRate": 0,
+        "abstentionRate": 1
+      },
+      "rows": [
+        {
+          "id": "d1",
+          "split": "dev",
+          "query": "Where does production run?",
+          "gold": "region",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "d2",
+          "split": "dev",
+          "query": "What tool installs JavaScript workspace dependencies?",
+          "gold": "package-manager",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "d3",
+          "split": "dev",
+          "query": "Which database persists event records?",
+          "gold": "database",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "d4",
+          "split": "dev",
+          "query": "Which messaging broker delivers outbound customer email?",
+          "gold": null,
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h1",
+          "split": "heldout",
+          "query": "When does the data snapshot job execute?",
+          "gold": "backup",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h2",
+          "split": "heldout",
+          "query": "How long does audit history stay available?",
+          "gold": "retention",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h3",
+          "split": "heldout",
+          "query": "What token lifetime pattern is used between services?",
+          "gold": "auth",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h4",
+          "split": "heldout",
+          "query": "Who must sign off on a production rollout?",
+          "gold": "release",
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h5",
+          "split": "heldout",
+          "query": "Where are customer-facing images hosted?",
+          "gold": null,
+          "ranked": [],
+          "chosen": null
+        },
+        {
+          "id": "h6",
+          "split": "heldout",
+          "query": "What datastore does the beta-only analytics project use?",
+          "gold": null,
+          "ranked": [],
+          "chosen": null
+        }
+      ]
+    },
+    "embeddings": null,
+    "typedDecision": null
+  },
+  "providerInputGuard": {
+    "passed": true,
+    "rule": "Only searchPromptMemories results with sourceCurrent=true for project alpha are provided; no stale or beta text is sent."
+  },
+  "limits": [
+    "Small hand-authored fixture; heldout is not representative of production queries.",
+    "Gold labels never enter provider requests. No automatic memory writes occur.",
+    "Embedding precision/MRR reports ranking only; no heldout-tuned selection threshold is applied.",
+    "Cost is reported only when provider returns numeric cost. Estimated embedding cost is separate and uses a public catalog rate if supplied.",
+    "No model or tokenizer quality claims are inferred from this microbenchmark."
+  ],
+  "calls": {
+    "paid": 0,
+    "embedding": 0,
+    "typedDecision": 0,
+    "publicCatalog": 0,
+    "costReconciliation": 0
+  }
+}

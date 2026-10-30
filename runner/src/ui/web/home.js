@@ -1,3 +1,4 @@
+import { createFleet } from './fleet.js';
 const $ = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -1152,129 +1153,10 @@ loadUsage().catch(report);
 setInterval(load, 5000);
 setInterval(() => loadUsage().catch(report), 30000);
 
+let fleetView;
 async function loadTasks() {
-  if (!features.orchestrator) {
-    byId('task-list').replaceChildren($('p', { class: 'muted' }, 'Orchestrator disabled'));
-    return;
-  }
-  const r = await call('GET', '/tasks?projectId=home');
-  if (!r.ok) return;
-  const cards = await Promise.all(
-    r.body.tasks
-      .slice(-12)
-      .reverse()
-      .map(async (t) => {
-        const box = $(
-          'article',
-          { class: 'card' },
-          $(
-            'div',
-            { class: 'row' },
-            $('strong', {}, (t.parentId ? 'Child · ' : '') + t.id.slice(0, 8)),
-            $('span', { class: 'tag' }, t.status),
-          ),
-          $(
-            'p',
-            { class: 'muted' },
-            (t.route.agentId || 'Auto') +
-              ' · ' +
-              (t.costMicros == null ? 'Cost unknown' : '$' + (t.costMicros / 1e6).toFixed(4)),
-          ),
-        );
-        if (['queued', 'running'].includes(t.status))
-          box.append(
-            $(
-              'button',
-              {
-                onclick: async () => {
-                  await call('POST', '/tasks/' + t.id + '/cancel');
-                  loadTasks().catch(report);
-                },
-              },
-              'Cancel',
-            ),
-          );
-        if (t.status === 'failed' && t.attempts < t.maxAttempts)
-          box.append(
-            $(
-              'button',
-              {
-                onclick: async () => {
-                  await call('POST', '/tasks/' + t.id + '/retry');
-                  loadTasks().catch(report);
-                },
-              },
-              'Retry',
-            ),
-          );
-        if (t.errorRef)
-          box.append(
-            $(
-              'button',
-              {
-                onclick: async () => {
-                  const a = await call('GET', '/artifacts/home/' + t.errorRef);
-                  if (a.ok) {
-                    try {
-                      box.append($('p', {}, JSON.parse(a.body.content).message));
-                    } catch {
-                      box.append($('p', {}, 'Task failed'));
-                    }
-                  }
-                },
-              },
-              'Details',
-            ),
-          );
-        if (t.outputRef)
-          box.append(
-            $(
-              'button',
-              {
-                onclick: async () => {
-                  const a = await call('GET', '/artifacts/home/' + t.outputRef);
-                  if (a.ok) {
-                    try {
-                      const output = JSON.parse(a.body.content);
-                      if (typeof output.verification?.status === 'string')
-                        box.append($('p', { class: 'muted' }, 'Verification · ' + output.verification.status));
-                      box.append($('pre', {}, output.text || a.body.content));
-                    } catch {
-                      box.append($('pre', {}, a.body.content));
-                    }
-                  }
-                },
-              },
-              'Result',
-            ),
-          );
-        if (t.permissionRef && t.status === 'running') {
-          const p = await call('GET', '/tasks/' + t.id + '/permissions');
-          for (const item of p.body.permissions || []) {
-            box.append($('p', {}, item.params.toolCall?.title || 'Permission requested'));
-            for (const option of item.params.options || [])
-              box.append(
-                $(
-                  'button',
-                  {
-                    onclick: async () => {
-                      await call('POST', '/tasks/' + t.id + '/permissions/' + item.requestId, {
-                        optionId: option.optionId,
-                      });
-                      loadTasks().catch(report);
-                    },
-                  },
-                  option.name,
-                ),
-              );
-          }
-        }
-        return box;
-      }),
-  );
-  byId('task-list').replaceChildren(
-    ...(cards.length ? cards : [$('p', { class: 'muted' }, 'Auto conversations appear here.')]),
-  );
+  if (!fleetView) fleetView = createFleet({ root: byId('task-list'), request: call, getAgents: () => agents, getFeatures: () => features });
+  await fleetView.refresh();
 }
 byId('allow-paid').onchange = () => {
   if (!busy) resetChat();

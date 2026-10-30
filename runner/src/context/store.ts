@@ -420,6 +420,18 @@ export class ContextStore implements MemoryBackend {
   }
 
   searchMemories(input: { project: string; query: string; limit?: number }): MemoryRecord[] {
+    return this.searchMemoryRows(input, false);
+  }
+
+  /**
+   * Return only memories whose source still matches this project's current cached snapshot.
+   * `searchMemories` remains available for inspection, including stale provenance records.
+   */
+  searchPromptMemories(input: { project: string; query: string; limit?: number }): MemoryRecord[] {
+    return this.searchMemoryRows(input, true);
+  }
+
+  private searchMemoryRows(input: { project: string; query: string; limit?: number }, currentOnly: boolean): MemoryRecord[] {
     const terms = words(input.query);
     if (!terms.length) return [];
     const limit = boundedLimit(input.limit, this.maxResults);
@@ -432,8 +444,11 @@ export class ContextStore implements MemoryBackend {
       FROM memories_fts f JOIN memories m ON m.project=f.project AND m.key=f.key
       LEFT JOIN projects p ON p.project=m.project
       WHERE memories_fts MATCH ? AND m.project=? AND (m.expires_at IS NULL OR m.expires_at>?)
+        AND (?=0 OR (p.revision=m.source_revision AND EXISTS (
+          SELECT 1 FROM sources s WHERE s.project=m.project AND s.revision=m.source_revision AND s.path=m.source_path AND s.hash=m.source_hash
+        )))
       ORDER BY bm25(memories_fts),m.created_at DESC LIMIT ?`)
-      .all(match, input.project, this.now(), limit) as Array<{
+      .all(match, input.project, this.now(), currentOnly ? 1 : 0, limit) as Array<{
       project: string;
       key: string;
       text: string;

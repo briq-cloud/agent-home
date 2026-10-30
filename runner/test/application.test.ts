@@ -67,7 +67,8 @@ async function startRunner(): Promise<void> {
   };
   runner.stdout?.on('data', capture);
   runner.stderr?.on('data', capture);
-  for (let attempt = 0; attempt < 100; attempt++) {
+  const healthDeadline = Date.now() + 15_000;
+  while (Date.now() < healthDeadline) {
     if (runner.exitCode !== null) throw new Error(`runner exited before health check: ${output}`);
     try {
       const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(300) });
@@ -390,4 +391,84 @@ test('named API profiles coexist while automatic catalog eligibility stays off',
   assert.ok(profiles.some((profile) => profile.name === 'openrouter-claude'));
   assert.ok(profiles.some((profile) => profile.name === 'openrouter-codex'));
   assert.ok(profiles.every((profile) => profile.autoEligible !== true));
+});
+
+test('task and message pagination reaches records beyond the first hundred without crossing projects', async () => {
+  assert.equal(
+    (await api('PUT', '/projects/paged', { root: join(cwd, 'project-one'), revision: 'page-v1' })).status,
+    200,
+  );
+  const tasks = Array.from({ length: 103 }, (_, i) => ({
+    id: `page-${i}`,
+    projectId: 'paged',
+    prompt: `Deferred paging fixture ${i}`,
+    route: explicit,
+    notBefore: Date.now() + 3_600_000,
+  }));
+  for (const part of [tasks.slice(0, 100), tasks.slice(100)])
+    assert.equal((await api('POST', '/tasks/batch', { tasks: part })).status, 202);
+  const seen: string[] = [];
+  let offset: number | null = 0;
+  while (offset !== null) {
+    const response = await api('GET', `/tasks?projectId=paged&limit=37&offset=${offset}`);
+    assert.equal(response.status, 200);
+    const page = (await response.json()) as {
+      tasks: Array<{ id: string; projectId: string }>;
+      nextOffset: number | null;
+    };
+    assert.ok(page.tasks.every((task) => task.projectId === 'paged'));
+    seen.push(...page.tasks.map((task) => task.id));
+    offset = page.nextOffset;
+  }
+  assert.equal(seen.length, 103);
+  assert.equal(new Set(seen).size, 103);
+  for (let i = 0; i < 103; i++)
+    assert.equal(
+      (
+        await api('POST', '/messages', {
+          projectId: 'paged',
+          recipient: 'coordinator',
+          text: `Message ${i}`,
+          idempotencyKey: `page-message-${i}`,
+        })
+      ).status,
+      201,
+    );
+  const messages = new Set<string>();
+  offset = 0;
+  while (offset !== null) {
+    const page = (await (await api('GET', `/messages?projectId=paged&limit=37&offset=${offset}`)).json()) as {
+      messages: Array<{ id: string; projectId: string }>;
+      nextOffset: number | null;
+    };
+    assert.ok(page.messages.every((message) => message.projectId === 'paged'));
+    page.messages.forEach((message) => messages.add(message.id));
+    offset = page.nextOffset;
+  }
+  assert.equal(messages.size, 103);
+  for (const query of ['limit=0', 'limit=101', 'limit=NaN', 'offset=-1', 'offset=1.2', 'offset=1000001']) {
+    assert.equal((await api('GET', `/tasks?projectId=paged&${query}`)).status, 400);
+    assert.equal((await api('GET', `/messages?projectId=paged&${query}`)).status, 400);
+  }
+  assert.equal((await api('GET', '/tasks?projectId=')).status, 400);
+  await Promise.all(tasks.map((task) => api('POST', `/tasks/${task.id}/cancel`)));
+});
+
+test('provider batch processing requires a separate opt-in and cannot run through the default API', async () => {
+  const features = (await (await api('GET', '/features')).json()) as { batch: boolean };
+  assert.equal(features.batch, false);
+  assert.equal((await api('GET', '/text-batches')).status, 403);
+  assert.equal(
+    (
+      await api('POST', '/text-batches', {
+        idempotencyKey: 'no-implicit-batch',
+        model: 'anthropic/claude-haiku-5.5',
+        operation: 'summarize',
+        items: [{ id: 'doc', text: 'A synthetic document.' }],
+        allowPaid: true,
+        budgetEstimateUsd: 0.01,
+      })
+    ).status,
+    403,
+  );
 });

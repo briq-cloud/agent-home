@@ -5,6 +5,7 @@ export const PAGE = readFileSync(new URL('./web/index.html', import.meta.url), '
 export const ASSETS = new Map<string, { type: string; body: Buffer }>();
 for (const [file, type] of [
   ['home.js', 'text/javascript'],
+  ['fleet.js', 'text/javascript'],
   ['home.css', 'text/css'],
 ] as const)
   ASSETS.set(`/assets/${file}`, { type, body: readFileSync(new URL(`./web/${file}`, import.meta.url)) });
