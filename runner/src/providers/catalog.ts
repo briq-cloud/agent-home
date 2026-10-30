@@ -96,7 +96,12 @@ export const CLIS: Cli[] = [
     login: ['agent', 'login'],
     status: ['agent', 'status'],
   },
-  { name: 'grok', acp: ['grok', 'agent', 'stdio'], login: ['grok', 'login', '--device-auth'] },
+  {
+    name: 'grok',
+    acp: ['grok', 'agent', 'stdio'],
+    login: ['grok', 'login', '--device-auth'],
+    status: ['grok', 'models'],
+  },
   {
     name: 'vibe',
     acp: ['vibe-acp'],

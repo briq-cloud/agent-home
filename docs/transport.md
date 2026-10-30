@@ -273,7 +273,8 @@ and model profiles. See the [profile API](../runner/README.md#profiles).
 
 Sign-in progress polls `GET /connect/<cli>` independently every 500 ms while active. Browser/code
 steps and completion update without waiting for slower overall account checks. Vibe uses its
-read-only ACP `_auth/status`; no prompt or model call is needed.
+read-only ACP `_auth/status`. Grok uses the explicit authentication message from `grok models`;
+its model list alone proves nothing. Neither check needs a prompt or model call.
 
 A CLI with no status command reports a recorded successful sign-in (`statusSource: "sign-in"`),
 not a live check. Only its completion date is stored in `.runner/sign-ins.json`; a vendor token
