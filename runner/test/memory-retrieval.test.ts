@@ -100,12 +100,13 @@ test('embedding data.index restores out-of-order vectors deterministically', asy
     model: 'baai/bge-base-en-v1.5', data: requestBody.input.map((text: string, index: number) => ({ index, embedding: vector(text) })),
   }) };
   const reversed = { generate: async ({ requestBody }: any) => ({
-    model: 'baai/bge-base-en-v1.5', data: requestBody.input.map((text: string, index: number) => ({ index, embedding: vector(text) })).reverse(),
+    model: 'BAAI/bge-base-en-v1.5', data: requestBody.input.map((text: string, index: number) => ({ index, embedding: vector(text) })).reverse(),
   }) };
   const a = await benchmark.runMemoryRetrievalBenchmark({ embeddingClient: normal });
   const b = await benchmark.runMemoryRetrievalBenchmark({ embeddingClient: reversed });
   assert.deepEqual(a.arms.embeddings.heldout, b.arms.embeddings.heldout);
   assert.deepEqual(a.arms.embeddings.rows.map((x: any) => x.chosen), b.arms.embeddings.rows.map((x: any) => x.chosen));
+  assert.equal(b.arms.embeddings.responseIdentity, 'BAAI/bge-base-en-v1.5');
 });
 
 test('FTS timing excludes a deliberately slow provider call', async () => {
@@ -146,4 +147,47 @@ test('non-finite embedding vector values are rejected', async () => {
       return { model: 'baai/bge-base-en-v1.5', data: requestBody.input.map((_: string, index: number) => ({ index, embedding: [Number.NaN, 1] })) };
     } },
   }), /invalid values/);
+});
+
+test('confirmation benchmark uses twelve new held-out queries and fixed thresholds for three repeats', async () => {
+  const decisionRequests: any[] = [];
+  const embeddingClient = { async generate({ requestBody }: any) {
+    return { model: 'BAAI/bge-base-en-v1.5', data: requestBody.input.map((text: string, index: number) => ({ index, embedding: vector(text) })), usage: { promptTokens: 300, cost: 0.000001 } };
+  } };
+  const decisionClient = { async create(request: any) {
+    decisionRequests.push(request);
+    return { model: 'cloudflare/clef-flash', usage: { cost: 0.0001 }, answers: {} };
+  } };
+  const report = await benchmark.runMemoryRetrievalConfirmation({ embeddingClient, decisionClient, repetitions: 3 });
+  assert.equal(report.queries.total, 12);
+  assert.equal(report.queries.repetitionsCompleted, 3);
+  assert.equal(report.thresholds.heldoutTuning, false);
+  assert.equal(report.thresholds.bgeTopCosine, 0.5576353937357739);
+  assert.equal(report.thresholds.clefConfidence, 0.8498);
+  assert.equal(report.arms.fts5Bm25Or.queryExpansion, false);
+  assert.equal(report.arms.fts5Bm25Or.threshold.method, 'maximize exact-choice accuracy on original development queries only');
+  assert.equal(decisionRequests.length, 3);
+  for (const request of decisionRequests) {
+    const state = request.decisionsRequest.state;
+    assert.equal(state.queries.length, 12);
+    assert.equal(state.queries[0].gold, undefined);
+    assert.equal(state.queries[0].kind, undefined);
+    assert.equal(JSON.stringify(state).includes('Beta-only analytics uses Snowflake'), false);
+    assert.equal(JSON.stringify(state).includes('old beta analytics store used Cassandra'), false);
+  }
+});
+
+test('confirmation stops before Clef when a live BGE charge is unresolved', async () => {
+  let decisionCalls = 0;
+  const report = await benchmark.runMemoryRetrievalConfirmation({
+    live: true, repetitions: 3, onPaidCall: () => {},
+    embeddingClient: { async generate({ requestBody }: any) {
+      return { id: 'gen-emb-abcdefgh', model: 'BAAI/bge-base-en-v1.5', data: requestBody.input.map((text: string, index: number) => ({ index, embedding: vector(text) })), usage: { promptTokens: 300 } };
+    } },
+    decisionClient: { async create() { decisionCalls++; return { answers: {} }; } },
+  });
+  assert.equal(decisionCalls, 0);
+  assert.match(report.stopReason, /cost unknown/);
+  assert.equal(report.queries.repetitionsCompleted, 0);
+  assert.equal(report.arms.embeddings.repetitions, 1);
 });

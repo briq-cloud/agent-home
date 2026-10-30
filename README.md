@@ -65,7 +65,9 @@ flowchart LR
 Research: [T3 Code, Tencent memory and alternatives](docs/research/2026-10-30-architecture.html).
 Tencent memory remains an evaluated integration. OpenRouter batches use the existing SDK and require a separate opt-in.
 Evaluations: [memory](docs/research/2026-10-30-memory-evaluation.html) ·
-[fleet](docs/research/2026-10-30-fleet-evaluation.html) · [batch](docs/research/2026-10-30-batch-evaluation.html).
+[fleet](docs/research/2026-10-30-fleet-evaluation.html) · [batch](docs/research/2026-10-30-batch-evaluation.html) ·
+[semantic retrieval confirmation](docs/research/2026-10-30-memory-retrieval-confirmation.html).
+Semantic retrieval remains experimental: the held-out ambiguity checks do not justify automatic recall.
 
 ## Configure and develop
 
