@@ -265,6 +265,7 @@ const application = new Application({
   table: () => table,
   signedIn: signedInCached,
   authEnv: childEnv,
+  extensionEnv: () => env,
   providerSnapshot: () => providerMutations.run(() => ({ profiles: keys.profiles(), table: [...table] })),
 });
 const server = createServer(async (req, res) => {
@@ -388,6 +389,8 @@ const server = createServer(async (req, res) => {
           dynamicRouting: config.dynamicRouting,
           delegation: config.delegation,
           memory: config.memory,
+          semanticMemory: Boolean(application.semantic),
+          extensions: Boolean(application.extensions),
         },
       });
     }

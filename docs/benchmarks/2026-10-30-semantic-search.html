@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Semantic candidate search: bounded live evaluation</title>
+<style>
+:root{color-scheme:light dark;--bg:#101820;--panel:#182631;--fg:#e7edf1;--muted:#aab9c4;--line:#354955;--accent:#79d5b0}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}main{max-width:900px;margin:0 auto;padding:36px 22px 60px}h1{font-size:clamp(28px,5vw,42px);line-height:1.12;margin:8px 0 12px}h2{font-size:21px;margin:30px 0 8px}p{margin:8px 0;color:var(--muted)}strong{color:var(--fg)}.lead{font-size:18px;color:var(--fg);max-width:760px}.stamp{color:var(--accent);font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin:22px 0}.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}.value{font-size:23px;font-weight:700;color:var(--fg)}.label{font-size:13px;color:var(--muted)}table{width:100%;border-collapse:collapse;margin:14px 0;background:var(--panel);font-size:14px}th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid var(--line)}th{color:var(--accent);font-weight:650}code{font-size:.9em;overflow-wrap:anywhere}ul{color:var(--muted);padding-left:22px}li{margin:6px 0}.note{border-left:3px solid var(--accent);padding:9px 14px;margin:16px 0;background:var(--panel)}footer{border-top:1px solid var(--line);margin-top:32px;padding-top:14px;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body><main>
+<div class="stamp">Agent-home · 30 October 2026</div>
+<h1>Semantic search: bounded candidate evaluation</h1>
+<p class="lead">A small, synthetic English/French evaluation checked whether a pinned BGE-M3 embedding search can rank factual memory references while preserving project and revision checks. It evaluates candidate ranking only; it does not establish answers or general retrieval quality.</p>
+
+<div class="cards">
+  <div class="card"><div class="value">8</div><div class="label">paid cold requests</div></div>
+  <div class="card"><div class="value">$0.00000556</div><div class="label">provider-reported total</div></div>
+  <div class="card"><div class="value">5 / 5</div><div class="label">final pinned-provider warm checks passed</div></div>
+  <div class="card"><div class="value">$0</div><div class="label">provider cost on warm checks</div></div>
+</div>
+
+<h2>What ran</h2>
+<table>
+<thead><tr><th>Run</th><th>Cold calls</th><th>Verified provider / model</th><th>Charge</th><th>Outcome</th></tr></thead>
+<tbody>
+<tr><td>Initial identity check</td><td>2</td><td>DeepInfra and Parasail; both generation records identify canonical <code>baai/bge-m3-20251117</code>.</td><td>$0.00000176</td><td>Response model labels differed (<code>BAAI/bge-m3</code>, <code>parasail-bge-m3</code>); the run stopped when the provider alias changed.</td></tr>
+<tr><td>Identity retry check</td><td>1</td><td>Parasail; canonical model confirmed by generation metadata.</td><td>$0.00000172</td><td>Stopped on unverified response identity. This paid call was not replayed.</td></tr>
+<tr><td>DeepInfra-pinned evaluation</td><td>5</td><td>DeepInfra for all 5; canonical model confirmed by generation metadata. Requests specified <code>provider.only=["deepinfra"]</code> and <code>allow_fallbacks=false</code>.</td><td>$0.00000208</td><td>Completed. Five exact-query warm checks with fresh idempotency keys hit cache and made zero provider calls.</td></tr>
+</tbody>
+</table>
+<p>The three earlier paid query cases were skipped by later runs; no completed query case was submitted again. Each isolated paid run had a fresh cache and therefore re-embedded its synthetic fact inventory. Costs above are summed from provider usage receipts and were independently checked against generation metadata. The $0.05 admission estimate was a budgeting hint, not a hard spend cap.</p>
+
+<h2>Observed ranking and cache behavior</h2>
+<ul>
+<li>In the final five-case set, the two known queries retrieved a gold fact within the top three twice (recall@3 2/2; recall@1 1/2).</li>
+<li>For the two ambiguous queries, at least one acceptable reference appeared in the top three once (coverage@3 1/2). No threshold was tuned or treated as confidence.</li>
+<li>The unknown query returned a ranked candidate. There is no abstention rule; the candidate is not asserted as an answer.</li>
+<li>On the final live run, warm-cache checks had median latency 3.36 ms and p95 4.45 ms, with zero provider dispatches. A free deterministic mock run measured median 1.50 ms and p95 2.56 ms across five warm checks. These are single-run environment timings, not a latency-gain claim.</li>
+<li>The free checks covered project isolation, same-revision correction invalidation, restart persistence, deletion and stale-revision rejection. They did not use real user memories.</li>
+</ul>
+<div class="note"><strong>Interpretation:</strong> provider pinning plus post-request generation metadata resolved the alias ambiguity in the final run. The eight paid calls and eight synthetic query cases are too small to support a general quality claim. Keep semantic search as opt-in candidate retrieval; keep freshness and scope filtering before provider submission, and do not auto-inject candidates as trusted facts.</div>
+
+<h2>Reproducibility</h2>
+<p>Node v24.22.1. The corpus has 12 synthetic facts and SHA-256 <code>8bfd3877bf5076f938a8ff4452807f9e475df6a740d7427a58472b27891120dd</code>. The final benchmark, semantic module and source-store hashes are <code>fe2a10dfede4dc9fd8cb77fdfe10e8b5eda0047b6130186a6752c8de6e8fe391</code>, <code>7596bb17a9a0fbc69b684c656317247dbf5aabc93ddf2fd1631d629e62755757</code> and <code>c7719a047a103dfce21c0f452dffee4c1589b6bf69ddf70370ebae14d8a9b49b</code>.</p>
+<p>Private report artifact hashes: initial run <code>18d63fbf581b21f85b3302b379173e27a6157d979b5d3ff2954ca237d645edc8</code>; identity retry <code>41ddd88be373d5d1cf955b1fc01670451c894d8aecdb746c0f64b30070483fb0</code>; final pinned run <code>d4267f1440636901fb4c45d15f8e2c48f18db0578d6e0729a151775634e255a8</code>. Mock warm-cache measurement used the same source hashes as the final run. Raw provider receipts remain on the evaluation home; no keys, prompts with user data, or provider generation IDs are published here.</p>
+<footer>All corpus facts and gold labels were synthetic. Embeddings only; no generated answer was requested. Provider costs are listed to the precision returned by the billing usage fields.</footer>
+</main></body></html>

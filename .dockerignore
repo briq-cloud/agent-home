@@ -1,6 +1,8 @@
 .git
 .github
 *.md
+# Bundled skills are runtime instructions.
+!runner/skills/**
 runner/node_modules
 
 benchmarks

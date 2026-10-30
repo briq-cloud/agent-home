@@ -1,4 +1,5 @@
 import { createFleet } from './fleet.js';
+import { createExtensions } from './extensions.js';
 const $ = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -60,9 +61,11 @@ const call = async (method, path, body, signal) => {
     body: body ? JSON.stringify(body) : undefined,
     signal,
   });
-  return { ok: r.ok, body: await r.json().catch(() => ({})) };
+  return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
 };
+let refreshNotice = '';
 function report(error) {
+  refreshNotice = '';
   byId('notice').textContent = error instanceof Error ? error.message : String(error);
 }
 async function copy(text, confirmation = 'Link copied') {
@@ -79,6 +82,7 @@ async function copy(text, confirmation = 'Link copied') {
       return false;
     }
   }
+  refreshNotice = '';
   byId('notice').textContent = confirmation;
   return true;
 }
@@ -756,7 +760,14 @@ async function load() {
   const requestedAt = Date.now();
   try {
     const [status, keys] = await Promise.all([call('GET', '/status'), call('GET', '/keys')]);
-    if (!status.ok || !keys.ok) throw new Error('Open this home with its private link to connect.');
+    if (!status.ok || !keys.ok) {
+      const unauthorized = [status, keys].some((response) => !response.ok && [401, 403].includes(response.status));
+      throw new Error(
+        unauthorized
+          ? 'Open this home with its private link to connect.'
+          : 'Home status is temporarily unavailable. Retrying…',
+      );
+    }
     agents = status.body.clis;
     limited = status.body.limited || {};
     features = status.body.features || {};
@@ -772,8 +783,17 @@ async function load() {
       }
     }
     render();
+    if (refreshNotice && byId('notice').textContent === refreshNotice) byId('notice').textContent = '';
+    refreshNotice = '';
   } catch (e) {
-    report(e);
+    const notice = byId('notice');
+    if (!notice.textContent || notice.textContent === refreshNotice) {
+      refreshNotice =
+        e instanceof Error && e.message === 'Open this home with its private link to connect.'
+          ? e.message
+          : 'Home status is temporarily unavailable. Retrying…';
+      notice.textContent = refreshNotice;
+    }
   } finally {
     loading = false;
   }
@@ -1153,10 +1173,21 @@ loadUsage().catch(report);
 setInterval(load, 5000);
 setInterval(() => loadUsage().catch(report), 30000);
 
-let fleetView;
+let fleetView, extensionsView;
 async function loadTasks() {
-  if (!fleetView) fleetView = createFleet({ root: byId('task-list'), request: call, getAgents: () => agents, getFeatures: () => features });
-  await fleetView.refresh();
+  if (!fleetView)
+    fleetView = createFleet({
+      root: byId('task-list'),
+      request: call,
+      getAgents: () => agents,
+      getFeatures: () => features,
+    });
+  if (!extensionsView) {
+    const root = document.createElement('section');
+    byId('task-list').closest('section').after(root);
+    extensionsView = createExtensions({ root, request: call, getFeatures: () => features });
+  }
+  await Promise.all([fleetView.refresh(), extensionsView.refresh()]);
 }
 byId('allow-paid').onchange = () => {
   if (!busy) resetChat();

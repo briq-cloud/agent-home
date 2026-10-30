@@ -6,9 +6,10 @@ runner/src/
   acp/             vendor processes, sessions, direct and Auto transports
   providers/       CLI catalog, keys and isolated profiles
   auth/            vendor sign-in and non-secret status metadata
+  extensions/      shared MCP definitions, skill ownership, additive home context
   orchestration/   executor, project registry, scoped delegation
   tasks/           SQLite migrations, DAGs, leases, messages
-  context/         source snapshots, artifacts, explicit factual memory
+  context/         source snapshots, factual memory, optional embedding candidate cache
   routing/         metadata adapters, candidates, typed decisions
   scheduling/      UTC admission policies, opt-in persistent text batches
   verification/    caller-owned command and artifact acceptance
@@ -37,7 +38,7 @@ Root identities are immutable. New checkouts need new project IDs.
 Source freshness means the selected snapshot; callers must refresh changed files/revisions.
 Prompt recall excludes memories whose source hash or revision is no longer current. Inspection keeps those records visible.
 Cancelled native prompts keep workspace slots until they settle. Cancellation alone does not prove the vendor stopped writing.
-Provider caches remain vendor-managed. No semantic response cache serves stale code answers.
+Provider caches remain vendor-managed. Optional embedding search caches vectors in its own private SQLite database; it returns current cited candidates and never substitutes cached answers.
 Standalone launches persist vendor homes beneath `RUNNER_LOGINS` unless an operator supplies explicit home paths.
 
 Persistence uses Node SQLite. ACP and MCP use their protocol SDKs. The OpenRouter SDK handles

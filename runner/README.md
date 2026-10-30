@@ -148,3 +148,22 @@ explicit home-variable overrides. The writable terminal runs in `tmux` so it sur
 disconnects.
 
 [ACP, sign-in and usage reference](../docs/transport.md) · [Architecture](../docs/architecture.md)
+
+## Optional semantic memory search
+
+Set `RUNNER_SEMANTIC_MEMORY=1` alongside `RUNNER_MEMORY=1` and an OpenRouter key.
+`POST /memories/search` accepts `{projectId,revision,query,allowPaid:true,budgetEstimateUsd,idempotencyKey}`.
+The default estimate ceiling is $0.01; `RUNNER_SEMANTIC_MEMORY_MAX_ESTIMATED_USD` can raise it to $0.10.
+Estimates are admission checks, not provider billing caps.
+
+The pinned BGE-M3 model on DeepInfra ranks up to 64 current project facts. Provider fallback is disabled.
+Results include source citations,
+coverage, similarity scores and nullable provider cost. Scores are not confidence or factual answers.
+Source and query vectors are cached; new cache-only requests cost zero. No automatic prompt injection occurs.
+Completed idempotency keys replay only while citations remain current; unknown requests never resubmit.
+The private cache retains up to 1,024 intents, then refuses new ones to preserve replay protection.
+
+## Shared skills and tools
+
+The owner page and `/extensions` API manage shared skills and MCP connections.
+`RUNNER_EXTENSIONS=0` disables this feature. See [configuration and compatibility](../docs/extensions.md).

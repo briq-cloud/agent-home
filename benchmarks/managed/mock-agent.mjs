@@ -36,7 +36,11 @@ async function handle(message) {
   if (message.method !== "session/prompt") throw Error("unexpected mock method");
   const session = sessions.get(message.params.sessionId),
     text = message.params.prompt[0].text;
-  if (text === "__BENCH_REPORT_NATIVE_ENV__") {
+  // Fixture-only commands follow the task after the production context prefix.
+  const taskMarker = "\n\n[CURRENT TASK]\n";
+  const taskStart = text.lastIndexOf(taskMarker);
+  const taskText = taskStart < 0 ? text : text.slice(taskStart + taskMarker.length);
+  if (taskText === "__BENCH_REPORT_NATIVE_ENV__") {
     send({
       method: "session/update",
       params: {

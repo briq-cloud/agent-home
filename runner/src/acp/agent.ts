@@ -57,6 +57,7 @@ export class Agent {
   private ready: Promise<unknown> | undefined;
   private next = 1;
   private startGeneration = 0;
+  private hideCrashDetails = false;
   private readonly pending = new Map<Id, { resolve(v: unknown): void; reject(e: Error): void }>();
 
   constructor(cli: Cli, env: Record<string, string>, cwd: string, events: AgentEvents) {
@@ -68,6 +69,12 @@ export class Agent {
 
   get running(): boolean {
     return this.child !== undefined;
+  }
+
+  /** Once credential-bearing MCP parameters have reached this Agent, retain a
+   * conservative no-tail policy across process restarts. No secret is retained. */
+  protectCrashDetails(): void {
+    this.hideCrashDetails = true;
   }
 
   /** Its `initialize` answer, starting the process first if needed. */
@@ -129,12 +136,17 @@ export class Agent {
     // Kept short and only for a crash: what an adapter prints is its own business.
     let tail = '';
     child.stderr?.on('data', (b: Buffer) => {
-      tail = (tail + b.toString()).slice(-400);
+      tail = this.hideCrashDetails ? '' : (tail + b.toString()).slice(-400);
     });
     child.on('error', (err) => log.warn('agent did not start', { cli: this.cli.name, err: err.message }));
     child.on('exit', (code, signal) => {
       if (this.child !== child) return;
-      log.info('agent exited', { cli: this.cli.name, code, signal, ...(code ? { tail } : {}) });
+      log.info('agent exited', {
+        cli: this.cli.name,
+        code,
+        signal,
+        ...(code && !this.hideCrashDetails ? { tail } : {}),
+      });
       this.child = undefined;
       this.writer = undefined;
       this.ready = undefined;

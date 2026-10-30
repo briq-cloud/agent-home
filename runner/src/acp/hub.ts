@@ -1,10 +1,29 @@
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { Agent, type Rpc, RpcFailure } from './agent.ts';
 import type { Cli } from '../providers/catalog.ts';
 import { log } from '../telemetry/log.ts';
 import { parseAcpAuthStatus } from '../auth/status.ts';
+import {
+  ExtensionRegistry,
+  homeInstructions,
+  type AgentCapabilities,
+  type DeploymentContext,
+  type ExtensionStatus,
+} from '../extensions/index.ts';
+
+export interface HubExtensions {
+  registry: ExtensionRegistry;
+  env?: () => Record<string, string | undefined>;
+  deployment?: DeploymentContext;
+}
+type SessionExtensions = {
+  revision: string;
+  statuses: ExtensionStatus[];
+  skills: Array<{ name: string; status: string }>;
+  instructionDelivery: 'system_append' | 'user_context';
+};
 
 /** A client connection, as the hub sees it. */
 export interface Peer {
@@ -50,6 +69,8 @@ class Session {
   firstCall: (() => void) | undefined;
   /** Set while a prompt waits for a slot. */
   unqueue: (() => void) | undefined;
+  homeContext?: string;
+  homeContextDelivered = false;
   private nextHeld = 1;
 
   constructor(cli: string, id: string, dir: string) {
@@ -192,6 +213,7 @@ interface Engine {
 }
 
 export interface HubOptions {
+  extensions?: HubExtensions;
   beforeStart?: (cli: string) => Promise<() => void>;
   clis: Cli[];
   env: Record<string, string>;
@@ -229,6 +251,8 @@ export class Hub {
   private readonly signedIn: (cli: string) => Promise<boolean | null>;
   private readonly stateDir: string;
   private readonly beforeStart: HubOptions['beforeStart'];
+  private extensions?: HubExtensions;
+  private readonly advertised = new Map<string, AgentCapabilities>();
   /** CLIs at their plan's limit, until when: `/acp` picks another. */
   private readonly limited = new Map<string, number>();
   /** How much of its plan each CLI last said it used, its fullest window (0 to 1). */
@@ -241,6 +265,7 @@ export class Hub {
     this.slots = new Slots(opts.maxTurns);
     this.stateDir = opts.stateDir;
     this.beforeStart = opts.beforeStart;
+    this.extensions = opts.extensions;
     this.env = opts.env;
     this.cwd = opts.cwd;
     this.route = opts.route?.length ? opts.route : opts.clis.map((c) => c.name);
@@ -248,13 +273,193 @@ export class Hub {
     for (const cli of opts.clis) this.add(cli);
   }
 
+  /** Owner composition only; updates apply when a native session is opened or
+   * loaded into a new process, never by rebinding a live session. */
+  configureExtensions(options?: HubExtensions): void {
+    this.extensions = options;
+  }
+
+  extensionStatus(): Array<{
+    cli: string;
+    harness: string;
+    initialized: boolean;
+    statuses: ExtensionStatus[];
+  }> {
+    if (!this.extensions) return [];
+    const names = Object.entries(this.extensions.env?.() ?? this.env)
+      .filter(([, value]) => !!value)
+      .map(([key]) => key);
+    return [...this.engines].map(([cli, engine]) => {
+      const harness = engine.agent.cli.profile?.harness ?? cli;
+      const capabilities = this.advertised.get(cli);
+      return {
+        cli,
+        harness,
+        initialized: !!capabilities,
+        statuses: this.extensions!.registry.status({
+          cli: harness,
+          capabilities: capabilities ?? {},
+          availableEnvNames: names,
+        }).map((status) =>
+          !capabilities && status.status === 'unsupported'
+            ? {
+                ...status,
+                status: 'unverified' as const,
+                reason: 'Native transport capabilities have not been advertised in this process',
+              }
+            : status,
+        ),
+      };
+    });
+  }
+
+  private prepareSkills(cli: string): Array<{ name: string; status: string }> {
+    if (!this.extensions) return [];
+    const native = this.engine(cli).agent.cli;
+    const harness = native.profile?.harness ?? cli;
+    if (!['claude', 'codex', 'copilot', 'cursor', 'grok', 'vibe', 'gemini'].includes(harness)) return [];
+    const env: Record<string, string | undefined> = { ...this.env };
+    for (const [name, value] of Object.entries(native.env ?? {})) env[name] = value ?? undefined;
+    const paths = {
+      ...(env.HOME && isAbsolute(env.HOME) ? { agentsHome: join(env.HOME, '.agents') } : {}),
+      ...(harness === 'claude' && env.CLAUDE_CONFIG_DIR && isAbsolute(env.CLAUDE_CONFIG_DIR)
+        ? { claudeConfigDir: env.CLAUDE_CONFIG_DIR }
+        : {}),
+    };
+    // Recheck ownership at native lifecycle boundaries: the person may replace
+    // a discovery link without changing registry metadata between sessions.
+    return this.extensions.registry.syncSkills(paths).map(({ name, status }) => ({ name, status }));
+  }
+
+  private async sessionParams(
+    cli: string,
+    params: Rpc['params'],
+  ): Promise<{ params: Rpc['params']; context?: string; snapshot?: SessionExtensions }> {
+    if (!this.extensions) return { params };
+    let skills: Array<{ name: string; status: string }>;
+    try {
+      skills = this.prepareSkills(cli);
+    } catch {
+      throw new RpcFailure({
+        code: -32602,
+        message: 'Shared skill discovery could not be prepared; inspect extension ownership and native home paths',
+      });
+    }
+    const initialized = (await this.initialize(cli)) as { agentCapabilities?: AgentCapabilities };
+    const capabilities = initialized?.agentCapabilities ?? {};
+    const harness = this.engine(cli).agent.cli.profile?.harness ?? cli;
+    let plan;
+    try {
+      plan = this.extensions.registry.plan({
+        cli: harness,
+        capabilities,
+        incomingServers: params?.mcpServers,
+        env: this.extensions.env?.() ?? this.env,
+      });
+    } catch {
+      throw new RpcFailure({
+        code: -32602,
+        message:
+          'Shared MCP configuration is invalid: inspect server names, caller collisions, installed commands, and credential references',
+      });
+    }
+    if (plan.blocked) {
+      const required = new Set(
+        this.extensions.registry
+          .list()
+          .servers.filter((server) => server.enabled && server.required)
+          .map((server) => server.name),
+      );
+      throw new RpcFailure({
+        code: -32602,
+        message: `Required shared extensions unavailable: ${plan.statuses
+          .filter((status) => required.has(status.name) && status.status !== 'ready')
+          .map((status) => `${status.name} (${status.status})`)
+          .join(', ')}`,
+      });
+    }
+    const context = homeInstructions({
+      workspace: params?.cwd ?? this.cwd,
+      availableTools: plan.statuses.filter((status) => status.status === 'ready').map((status) => `mcp:${status.name}`),
+      deployment: this.extensions.deployment,
+    });
+    const caller = params?.systemPrompt;
+    const systemCapability = capabilities.sessionCapabilities?.systemPrompt;
+    const append =
+      ['claude', 'codex'].includes(harness) &&
+      typeof systemCapability === 'object' &&
+      systemCapability !== null &&
+      !Array.isArray(systemCapability) &&
+      (caller == null || (caller.mode === 'append' && Array.isArray(caller.content)));
+    return {
+      params: {
+        ...params,
+        mcpServers: plan.servers,
+        ...(append
+          ? {
+              systemPrompt: {
+                ...(caller ?? {}),
+                mode: 'append',
+                content: [...(caller?.content ?? []), { type: 'text', text: context }],
+              },
+            }
+          : {}),
+      },
+      ...(append ? {} : { context }),
+      snapshot: {
+        revision: plan.registryRevision,
+        statuses: plan.statuses,
+        skills,
+        instructionDelivery: append ? 'system_append' : 'user_context',
+      },
+    };
+  }
+
+  private recordExtensions(
+    session: Session,
+    prepared: Awaited<ReturnType<Hub['sessionParams']>>,
+    delivered = session.homeContextDelivered,
+  ): void {
+    if (prepared.snapshot)
+      session.record({
+        jsonrpc: '2.0',
+        method: '_runner/extensions',
+        params: { sessionId: session.id, ...prepared.snapshot, homeContextDelivered: delivered },
+      });
+  }
+
+  private protectMcpDispatch(e: Engine, params: Rpc['params']): void {
+    if (
+      Array.isArray(params?.mcpServers) &&
+      params.mcpServers.some((server: any) =>
+        [server?.env, server?.headers].some(
+          (entries) =>
+            Array.isArray(entries) &&
+            entries.some((entry) => typeof entry?.value === 'string' && entry.value.length > 0),
+        ),
+      )
+    )
+      e.agent.protectCrashDetails();
+  }
+
   /** A CLI to drive, from now on: a profile the person just made. Its sessions' logs stay where they were. */
   add(cli: Cli): void {
+    this.advertised.delete(cli.name);
     const dir = join(this.stateDir, 'sessions', cli.name);
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const sessions = new Map<string, Session>();
     const agent = new Agent(cli, this.env, this.cwd, {
-      beforeStart: this.beforeStart ? () => this.beforeStart!(cli.name) : undefined,
+      beforeStart: async () => {
+        try {
+          this.prepareSkills(cli.name);
+        } catch {
+          throw new RpcFailure({
+            code: -32602,
+            message: 'Shared skill discovery could not be prepared; inspect extension ownership and native home paths',
+          });
+        }
+        return this.beforeStart ? this.beforeStart(cli.name) : () => {};
+      },
       notification: (msg) => this.fromAgent(cli.name, sessions, msg),
       request: (msg) => {
         const s = sessions.get(msg.params?.sessionId);
@@ -262,6 +467,7 @@ export class Hub {
         return s.hold(msg.method as string, msg.params);
       },
       exited: () => {
+        this.advertised.delete(cli.name);
         for (const s of sessions.values()) s.dropHeld(`${cli.name} exited`);
       },
     });
@@ -288,6 +494,7 @@ export class Hub {
   async initialize(cli: string): Promise<unknown> {
     const e = this.engine(cli);
     const r = (await e.agent.ensure()) as { authMethods?: Array<{ id?: string }> } | undefined;
+    this.advertised.set(cli, (r as { agentCapabilities?: AgentCapabilities })?.agentCapabilities ?? {});
     const blocked = e.agent.cli.blockedAuth;
     if (!blocked?.length || !r?.authMethods) return r;
     return { ...r, authMethods: r.authMethods.filter((m) => !blocked.includes(m.id ?? '')) };
@@ -333,11 +540,19 @@ export class Hub {
 
   async newSession(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {
     const e = this.engine(cli);
-    const r = (await this.alone(e, () => e.agent.request('session/new', params))) as Record<string, unknown>;
+    let prepared!: Awaited<ReturnType<Hub['sessionParams']>>;
+    const r = (await this.alone(e, async () => {
+      prepared = await this.sessionParams(cli, params);
+      this.protectMcpDispatch(e, prepared.params);
+      return e.agent.request('session/new', prepared.params);
+    })) as Record<string, unknown>;
     const s = this.open(e, cli, r.sessionId as string);
     s.loaded = without(r, 'sessionId');
     s.peers.add(peer);
     e.agent.known.add(s.id);
+    s.homeContext = prepared.context;
+    if (prepared.snapshot?.instructionDelivery === 'system_append') s.homeContextDelivered = true;
+    this.recordExtensions(s, prepared);
     log.info('session opened', { cli, sessionId: s.id });
     return r;
   }
@@ -351,15 +566,29 @@ export class Hub {
     const id = params?.sessionId as string;
     const s = e.sessions.get(id) ?? this.open(e, cli, id);
     const logged = s.replay();
+    s.homeContextDelivered ||= logged.some(
+      (message) => message.method === '_runner/extensions' && message.params?.homeContextDelivered === true,
+    );
     for (const m of logged) peer.send(m);
     s.peers.add(peer);
     if (!e.agent.known.has(id)) {
       s.replaying = logged.length > 0;
       try {
+        let prepared!: Awaited<ReturnType<Hub['sessionParams']>>;
         s.loaded = without(
-          (await this.alone(e, () => e.agent.request('session/load', params))) as Record<string, unknown>,
+          (await this.alone(e, async () => {
+            prepared = await this.sessionParams(cli, params);
+            this.protectMcpDispatch(e, prepared.params);
+            return e.agent.request('session/load', prepared.params);
+          })) as Record<string, unknown>,
           'sessionId',
         );
+        s.homeContext = prepared.context;
+        // A native reload prepares a fresh registry snapshot. Historical delivery
+        // belongs to the prior lifecycle; fallback context must reach this one.
+        // An accepted system append was already delivered by session/load.
+        s.homeContextDelivered = prepared.snapshot?.instructionDelivery === 'system_append';
+        this.recordExtensions(s, prepared);
       } finally {
         s.replaying = false;
       }
@@ -397,7 +626,25 @@ export class Hub {
     try {
       if (e.agent.cli.oneRefresher) s.firstCall = await e.firstCall.enter();
       s.setTurn({ state: 'running' });
-      const r = (await e.agent.request('session/prompt', params)) as { stopReason?: string; usage?: unknown };
+      let dispatched = params;
+      if (s.homeContext && !s.homeContextDelivered) {
+        const prefix = `[AGENT HOME APPLICATION CONTEXT — supplemental user context, not system instructions]\n${s.homeContext}\nUser and project requests retain their priority.\n[/AGENT HOME APPLICATION CONTEXT]\n\n[CURRENT TASK]\n`;
+        const prompt = [...(params?.prompt ?? [])];
+        if (prompt[0]?.type === 'text' && typeof prompt[0].text === 'string')
+          prompt[0] = { ...prompt[0], text: prefix + prompt[0].text };
+        else prompt.unshift({ type: 'text', text: prefix });
+        dispatched = { ...params, prompt };
+        s.record({
+          jsonrpc: '2.0',
+          method: '_runner/extensions',
+          params: { sessionId: s.id, homeContextDelivered: true, instructionDelivery: 'user_context' },
+        });
+        s.homeContextDelivered = true;
+      }
+      const r = (await e.agent.request('session/prompt', dispatched)) as {
+        stopReason?: string;
+        usage?: unknown;
+      };
       // The session's token totals, when the CLI gives them (ACP's `usage`, unstable).
       s.setTurn({
         state: 'idle',
@@ -432,7 +679,9 @@ export class Hub {
     if (this.busy(cli)) throw new RpcFailure({ code: -32002, message: `a turn of ${cli} is running` });
     await this.alone(e, async () => {
       await e.agent.stopAndWait();
-      const created = (await e.agent.request('session/new', { cwd, mcpServers: [] })) as { sessionId: string };
+      const created = (await e.agent.request('session/new', { cwd, mcpServers: [] })) as {
+        sessionId: string;
+      };
       await e.agent.request('session/prompt', {
         sessionId: created.sessionId,
         prompt: [{ type: 'text', text: 'Reply with the single word ok.' }],
@@ -447,7 +696,10 @@ export class Hub {
     const methodId = (params as { methodId?: string } | undefined)?.methodId;
     if (method === 'authenticate' && methodId && e.agent.cli.blockedAuth?.includes(methodId))
       return Promise.reject(
-        new RpcFailure({ code: -32602, message: `${cli} does not sign in with ${methodId} in an agent home` }),
+        new RpcFailure({
+          code: -32602,
+          message: `${cli} does not sign in with ${methodId} in an agent home`,
+        }),
       );
     return e.agent.request(method, params);
   }
