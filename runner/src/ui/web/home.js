@@ -11,6 +11,58 @@ const $ = (tag, attrs = {}, ...kids) => {
   return el;
 };
 const byId = (id) => document.getElementById(id);
+// Panels stay mounted: changing tabs never resets a form or an ACP session.
+const homeTabs = ['chat', 'fleet', 'connections', 'tools'];
+const tabFromHash = () =>
+  location.hash === '#keys-section' ? 'connections' : homeTabs.find((name) => location.hash === '#' + name);
+function showTab(name, navigate = true) {
+  if (!homeTabs.includes(name)) return;
+  for (const tab of homeTabs) {
+    const active = tab === name;
+    byId('panel-' + tab).hidden = !active;
+    byId('tab-' + tab).setAttribute('aria-selected', String(active));
+    byId('tab-' + tab).tabIndex = active ? 0 : -1;
+  }
+  try {
+    localStorage.setItem('agent-home-tab', name);
+  } catch {}
+  if (navigate) history.pushState(null, '', '#' + name);
+}
+for (const [index, name] of homeTabs.entries()) {
+  const button = byId('tab-' + name);
+  button.onclick = () => showTab(name);
+  button.onkeydown = (event) => {
+    const next =
+      event.key === 'ArrowRight'
+        ? (index + 1) % homeTabs.length
+        : event.key === 'ArrowLeft'
+          ? (index + homeTabs.length - 1) % homeTabs.length
+          : event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? homeTabs.length - 1
+              : -1;
+    if (next < 0) return;
+    event.preventDefault();
+    showTab(homeTabs[next]);
+    byId('tab-' + homeTabs[next]).focus();
+  };
+}
+let rememberedTab;
+try {
+  rememberedTab = localStorage.getItem('agent-home-tab');
+} catch {}
+const initialTab = tabFromHash() || (homeTabs.includes(rememberedTab) ? rememberedTab : 'chat');
+showTab(initialTab, false);
+if (!tabFromHash()) history.replaceState(null, '', '#' + initialTab);
+window.addEventListener('hashchange', () => {
+  const name = tabFromHash();
+  if (name) showTab(name, false);
+});
+window.addEventListener('popstate', () => showTab(tabFromHash() || 'chat', false));
+function updateChatAttention() {
+  byId('chat-attention').hidden = byId('permissions').childElementCount === 0;
+}
 const names = {
   claude: 'Claude Code',
   codex: 'Codex',
@@ -1037,6 +1089,7 @@ function permission(m) {
     sendWire({ id: m.id, result: { outcome } });
     permissions.delete(m.id);
     item.remove();
+    updateChatAttention();
   };
   permissions.set(m.id, answer);
   for (const o of m.params.options || [])
@@ -1044,6 +1097,7 @@ function permission(m) {
   actions.append($('button', { onclick: () => answer({ outcome: 'cancelled' }) }, 'Cancel'));
   item.append(actions);
   byId('permissions').append(item);
+  updateChatAttention();
   chatStatus('Waiting for your permission');
 }
 function receive(m) {
@@ -1116,6 +1170,7 @@ async function connection() {
     rejectPending('Connection closed. Send again to reconnect.');
     byId('permissions').replaceChildren();
     permissions.clear();
+    updateChatAttention();
     chatStatus('Disconnected · your session stays on the home');
   };
   ready = (async () => {
@@ -1180,6 +1235,7 @@ function resetChat(force = false) {
   byId('chat-messages').replaceChildren();
   byId('permissions').replaceChildren();
   permissions.clear();
+  updateChatAttention();
   try {
     localStorage.removeItem('agent-home-chat');
   } catch {}
@@ -1189,6 +1245,7 @@ function selectAgent(name) {
   if (busy) return;
   resetChat();
   byId('chat-agent').value = name;
+  showTab('chat');
   byId('chat').scrollIntoView({ behavior: 'smooth', block: 'center' });
   byId('prompt').focus();
 }
@@ -1269,6 +1326,7 @@ setInterval(() => loadUsage().catch(report), 30000);
 
 let fleetView, extensionsView;
 async function loadTasks() {
+  byId('tools-disabled').hidden = features.extensions !== false;
   if (!fleetView)
     fleetView = createFleet({
       root: byId('task-list'),
@@ -1277,9 +1335,9 @@ async function loadTasks() {
       getFeatures: () => features,
     });
   if (!extensionsView) {
-    const root = document.createElement('section');
-    byId('task-list').closest('section').after(root);
+    const root = byId('extensions-root');
     extensionsView = createExtensions({ root, request: call, getFeatures: () => features });
+    root.querySelector('details').open = true;
   }
   await Promise.all([fleetView.refresh(), extensionsView.refresh()]);
 }

@@ -142,6 +142,7 @@ test(
       return fulfill({ error: 'unexpected mocked route' }, 404);
     });
     await page.goto('http://signin.test/');
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
     const claude = page.locator('[data-agent="claude"]');
     await page
       .locator('[data-agent="vibe"]')
@@ -306,6 +307,7 @@ test(
       return reply({ error: 'unexpected fixture route' }, 404);
     });
     await page.goto('http://recovery.test/');
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
     await page
       .locator('#notice')
       .getByText('Home status is temporarily unavailable. Retrying…', { exact: true })

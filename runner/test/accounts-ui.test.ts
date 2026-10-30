@@ -149,6 +149,7 @@ test(
       return reply({ error: 'unexpected fixture route' }, 404);
     });
     await page.goto('http://accounts.test/');
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
     await page.locator('[data-agent="claude"]').waitFor();
     await page.locator('[data-agent="claude"]').getByText('Claude Code · API key', { exact: true }).waitFor();
     assert.equal(
@@ -156,6 +157,17 @@ test(
       0,
       'default API-key authentication must not be called a subscription',
     );
+    // Navigation keeps the same mounted form/session state and supports keyboard tabs.
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await page.getByLabel('Message', { exact: true }).fill('Keep this chat draft');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).press('ArrowRight');
+    assert.equal(await page.getByRole('tab', { name: 'Fleet', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#panel-chat').isVisible(), false);
+    await page.getByRole('tab', { name: 'Fleet', exact: true }).press('End');
+    assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), 'Keep this chat draft');
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
     await page.getByText('Add a Claude subscription account', { exact: true }).click();
     const label = 'Work <img src=x onerror=window.compromised=true>';
     await page.getByLabel('Claude account label').fill(label);
@@ -236,10 +248,23 @@ test(
         .count(),
       1,
     );
+    await page.getByRole('tab', { name: 'Fleet', exact: true }).click();
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
+    assert.equal(await page.getByLabel('Claude account label').inputValue(), 'Keep another account draft');
+    assert.equal(await page.getByLabel('OpenRouter key').inputValue(), 'keep-owner-key-draft');
     accounts[1].label = 'Q'.repeat(80);
     await card.getByText('Q'.repeat(80), { exact: true }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.goto('http://accounts.test/#keys-section');
+    assert.equal(await page.getByRole('tab', { name: 'Connections', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByLabel('OpenRouter key').waitFor({ state: 'visible' });
+    await page.getByRole('tab', { name: 'Tools', exact: true }).click();
+    await page.goto('http://accounts.test/');
+    assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await page.goBack();
+    assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, []);
   },
 );

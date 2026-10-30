@@ -24,7 +24,7 @@ Auto considers subscriptions first. API execution and decision-model calls requi
 Dynamic decisions are available by default, but never run without an OpenRouter key and a positive
 per-task `decisionBudgetUsd`; set `RUNNER_DYNAMIC_ROUTING=0` to disable them globally. Without both
 gates, Auto uses its configured subscription/default route without a decision-model call.
-The page includes chat, project registration, a task fleet inspector, permission requests, provider profiles, shared skills/MCP setup and a terminal.
+The page has Chat, Fleet, Connections and Tools tabs. The terminal opens separately.
 Raw `/acp/<cli-or-profile>` remains available for full vendor ACP capabilities.
 `/acp` remains the compatibility endpoint for subscription load balancing.
 
