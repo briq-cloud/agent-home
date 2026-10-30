@@ -110,12 +110,14 @@ export async function resumeComparison({
     result.routing.every((d) => known(d.costUsd)),
     "decision cost unknown",
   );
+  assert(!result.untrackedTrial, "untracked interrupted trial requires manual reconciliation");
   await backup(path);
   const save = async () => {
     result.spentUsd =
       result.routing.reduce((n, d) => n + d.costUsd, 0) +
       result.runs.reduce((n, r) => n + (known(r.costUsd) ? r.costUsd : 0), 0);
-    result.unknownCosts = result.runs.filter((r) => !known(r.costUsd)).length;
+    result.unknownCosts =
+      result.runs.filter((r) => !known(r.costUsd)).length + (result.untrackedTrial ? 1 : 0);
     await writeFile(path, JSON.stringify(result, null, 2), { mode: 0o600 });
     await writeComparisonReport(root, result);
   };
@@ -179,7 +181,15 @@ export async function resumeComparison({
       } catch (error) {
         childError = error.killed ? "runner-timeout" : "runner-exit";
       }
-      const measured = await json(join(runRoot, "results.json"));
+      let measured;
+      try {
+        measured = await json(join(runRoot, "results.json"));
+      } catch {
+        result.stopped = "execution measurement unavailable";
+        result.untrackedTrial = { taskId: task.id, profile: profile.id, childError, costUsd: null };
+        await save();
+        return result;
+      }
       assert.equal(measured.records.length, 1);
       const record = measured.records[0];
       assert.equal(record.taskId, task.id);

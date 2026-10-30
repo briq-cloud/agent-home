@@ -177,3 +177,22 @@ test("changed model versions or frozen choices fail before paid work", async (t)
   await assert.rejects(resumeComparison({ ...h, key: "fixture" }), /frozen decisions changed/);
   assert.equal(h.executions.length, 0);
 });
+
+test("an interrupted trial without measurements is checkpointed and cannot be silently repeated", async (t) => {
+  const h = await fixture(t);
+  let executions = 0;
+  const result = await resumeComparison({
+    ...h,
+    key: "fixture",
+    executeTrial: async () => {
+      executions++;
+      throw Error("interrupted");
+    },
+  });
+  assert.equal(executions, 1);
+  assert.equal(result.stopped, "execution measurement unavailable");
+  assert.equal(result.unknownCosts, 1);
+  assert.equal(result.untrackedTrial.costUsd, null);
+  await assert.rejects(resumeComparison({ ...h, key: "fixture" }), /manual reconciliation/);
+  assert.equal(h.executions.length, 0);
+});
