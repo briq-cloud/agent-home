@@ -31,8 +31,7 @@ out of the CLI's `initialize` answer and refuses an `authenticate` with it. Gemi
 image's enforced API-key setting.
 
 The runner is the home's front door: one URL for the person (`/`, the sign-in page, and
-`/terminal/`) and for apps (`/acp/<cli>`). The decision and its research: ADR 0021 in briq's
-repository.
+`/terminal/`) and for apps (`/acp/<cli>`). Its endpoints are documented below.
 
 ## Run it
 

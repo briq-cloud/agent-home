@@ -17,7 +17,6 @@ runner/src/
 ```
 
 TypeScript runs on Node 22.18+. SQLite needs no database service.
-Rust components can sit behind backend interfaces when their measured benefit justifies another runtime.
 
 | Rule | Enforcement |
 | --- | --- |
@@ -41,9 +40,7 @@ Cancelled native prompts keep workspace slots until they settle. Cancellation al
 Provider caches remain vendor-managed. No semantic response cache serves stale code answers.
 Standalone launches persist vendor homes beneath `RUNNER_LOGINS` unless an operator supplies explicit home paths.
 
-The local baseline deliberately avoids mandatory Postgres, Redis and vector services.
-T3 Code informs command/effect separation; its private packages are not imported.
-Tencent memory and external durable engines remain evaluated alternatives.
-The OpenRouter SDK batch adapter is opt-in, text-only, and separate from interactive ACP execution.
+Persistence uses Node SQLite. ACP and MCP use their protocol SDKs. The OpenRouter SDK handles
+provider metadata, typed decisions and opt-in text batches; interactive CLI execution stays on ACP.
 
-[Research decisions](research/2026-10-30-architecture.html) · [API](../runner/README.md)
+[API](../runner/README.md) · [Task benchmarks](benchmarks/2026-10-30-managed-evaluation.html)
