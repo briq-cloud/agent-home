@@ -99,3 +99,50 @@ not a public report. Never publish the provider-key file.
 BENCH_PAID=1 BENCH_KEYS_FILE=/private/provider/keys.json \
 BENCH_RESULTS=/private/managed-discovery node managed/run.mjs settle
 ```
+
+After every existing attempt is terminal and its billing is known, `continue`
+can execute only plan entries that have never started. It verifies the original
+arms, fixtures, canonical models, grader, relay, host, runtime and recorded runner
+core hashes; prior successes and failures are skipped. Past charges are loaded
+into the admission meter and the original total budget remains immutable.
+Uncertain/interrupted or infrastructure attempts block continuation.
+
+The resume driver is the sole permitted source change. When it differs, provide
+the preserved original `run.mjs`; its bytes must match the original result hash.
+Old experiments that did not record execution limits require the operator to
+attest their original limits explicitly. New runs store limits directly.
+
+```sh
+BENCH_PAID=1 BENCH_KEYS_FILE=/private/provider/keys.json \
+BENCH_RESULTS=/private/managed-discovery \
+BENCH_RUNNER_SOURCE=/private/unchanged-original-runner \
+BENCH_ORIGINAL_RUN_SOURCE=/private/preserved/managed/run.mjs \
+BENCH_LEGACY_LIMITS_JSON='{"timeoutMs":180000,"perTrialUsd":0.2,"maxCallsPerTrial":20,"maxOutputTokens":4096}' \
+node managed/run.mjs continue
+```
+
+Continuation records both driver hashes and its protocol without replacing the
+original source manifest. Each continuation writes a separate metadata/preflight
+snapshot. Billing settlement restores observed provider/model/token fields and
+refreshes eligibility from frozen outcomes; it never reroutes or regrades an old
+attempt. A process lock prevents overlapping continuation commands. A leftover
+lock requires inspection of the old process before the operator removes it.
+
+The revised remaining-fixture experiment records `BENCH_FIXTURE_OFFSET=1` so its
+coalesced-request seed (18) and rotated arm order match the original second-case
+plan. It has a separate results directory and revision manifest; it does not
+erase or retry the original zero-paid startup failure. Benchmark HTTP GETs may
+retry at most three transport attempts; POST/PUT mutations never replay. Host
+lifecycle diagnostics and a bounded 45-second startup allowance are private.
+Frozen model identity checks require the exact recorded canonical revision when
+one is available. `report.mjs` publishes only allowlisted measurements and raw
+provenance hashes, excluding prompts, configs, logs and generation IDs.
+
+`functional.mjs` is a separate, explicitly forced two-file root/child lifecycle
+check. It pins Haiku and DeepSeek profiles, requires one succeeded durable child,
+exact canonical identities and distinct settled provider names, and uses an
+external exact-byte grader. It makes no quality, speed or savings comparison.
+Its $0.15 admission target uses a $0.03 unsettled-call allowance and at most 20
+calls; the shared relay's default $0.20 allowance remains unchanged. A result
+directory is never rerun. `functional.mjs settle` only reconciles existing IDs
+and refreshes proof from frozen task outcomes. No subscription auth is used.

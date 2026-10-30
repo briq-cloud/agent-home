@@ -67,7 +67,11 @@ export async function startManagedRuntime({
   mode = "mock",
   maxOutputTokens = 4096,
   runnerSource = resolve(fileURLToPath(new URL("../../runner", import.meta.url))),
+  startupMs = 45_000,
+  entryPath = fileURLToPath(new URL("./entry.mjs", import.meta.url)),
 }) {
+  if (!Number.isSafeInteger(startupMs) || startupMs < 100 || startupMs > 60_000)
+    throw Error("invalid managed startup deadline");
   const portServer = createServer();
   await new Promise((r) => portServer.listen(0, "127.0.0.1", r));
   const port = portServer.address().port;
@@ -106,23 +110,31 @@ export async function startManagedRuntime({
   };
   const configPath = join(root, "private-runtime.json");
   await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+  const logs = join(root, "private-runner.log"),
+    lifecyclePath = join(root, "private-lifecycle.json");
+  await writeFile(logs, "", { mode: 0o600 });
+  const lifecycle = {
+    startedAt: new Date().toISOString(),
+    startupMs,
+    pid: null,
+    ready: false,
+    exitCode: null,
+    signal: null,
+    spawnError: null,
+  };
   // Deliberate allowlist: no BENCH_KEYS_FILE, provider keys, subscription auth dirs,
   // preloaded Node hooks or ambient API credentials reach the runner/harness.
-  const child = spawn(
-    process.execPath,
-    [fileURLToPath(new URL("./entry.mjs", import.meta.url)), configPath],
-    {
-      env: {
-        PATH: process.env.PATH ?? "",
-        HOME: profileHome,
-        TMPDIR: profileHome,
-        LANG: "C.UTF-8",
-      },
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
+  const child = spawn(process.execPath, [entryPath, configPath], {
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: profileHome,
+      TMPDIR: profileHome,
+      LANG: "C.UTF-8",
     },
-  );
-  const logs = join(root, "private-runner.log");
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  lifecycle.pid = child.pid ?? null;
   let logBytes = 0;
   const log = (chunk) => {
     if (logBytes < 256_000) {
@@ -135,9 +147,18 @@ export async function startManagedRuntime({
   child.stdout.on("data", log);
   child.stderr.on("data", log);
   const exited = new Promise((r) => {
-    child.once("exit", r);
-    child.once("error", r);
+    child.once("exit", (code, signal) => {
+      lifecycle.exitCode = code;
+      lifecycle.signal = signal;
+      lifecycle.exitedAt = new Date().toISOString();
+      r();
+    });
+    child.once("error", (error) => {
+      lifecycle.spawnError = error.code ?? error.name;
+      r();
+    });
   });
+  await writeFile(lifecyclePath, JSON.stringify(lifecycle), { mode: 0o600 });
   let closed;
   const close = () =>
     (closed ??= (async () => {
@@ -158,10 +179,12 @@ export async function startManagedRuntime({
         } catch {}
         await exited;
       }
+      await writeFile(lifecyclePath, JSON.stringify(lifecycle), { mode: 0o600 });
     })());
   let ready = false;
-  for (let i = 0; i < 150; i++) {
-    if (child.exitCode !== null || child.signalCode !== null) break;
+  const startupDeadline = Date.now() + startupMs;
+  while (Date.now() < startupDeadline) {
+    if (child.exitCode !== null || child.signalCode !== null || lifecycle.spawnError) break;
     try {
       await readFile(readyFile);
       ready = true;
@@ -171,23 +194,54 @@ export async function startManagedRuntime({
   }
   if (!ready) {
     await close();
-    throw Error("managed runtime did not start (private-runner.log)");
+    throw Error(
+      `managed runtime did not start: exit=${lifecycle.exitCode} signal=${lifecycle.signal} error=${lifecycle.spawnError} (private-lifecycle.json/private-runner.log)`,
+    );
   }
+  lifecycle.ready = true;
+  lifecycle.readyAt = new Date().toISOString();
+  await writeFile(lifecyclePath, JSON.stringify(lifecycle), { mode: 0o600 });
   const url = `http://127.0.0.1:${port}`;
-  const api = async (method, path, input) => {
-    const response = await fetch(url + path, {
-      method,
-      headers: {
-        authorization: `Bearer ${adminToken}`,
-        ...(input === undefined ? {} : { "content-type": "application/json" }),
-      },
-      ...(input === undefined ? {} : { body: JSON.stringify(input) }),
-      signal: AbortSignal.timeout(15000),
-    });
-    const value = await response.json();
+  const api = (method, path, input) => managedApiRequest(url, adminToken, method, path, input);
+  return { api, close, stateDir, profileHome, url };
+}
+
+/** Retry bounded local GET transport failures only. A mutation is never replayed
+ * after an uncertain response. Avoid keepalive sockets across process churn. */
+export async function managedApiRequest(
+  url,
+  token,
+  method,
+  path,
+  input,
+  { fetcher = fetch, retryDelayMs = 100 } = {},
+) {
+  const attempts = method === "GET" ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let response, value;
+    try {
+      response = await fetcher(url + path, {
+        method,
+        headers: {
+          authorization: `Bearer ${token}`,
+          connection: "close",
+          ...(input === undefined ? {} : { "content-type": "application/json" }),
+        },
+        ...(input === undefined ? {} : { body: JSON.stringify(input) }),
+        signal: AbortSignal.timeout(15000),
+      });
+      value = await response.json();
+    } catch (error) {
+      if (attempt + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        continue;
+      }
+      throw Error(
+        `managed API transport ${method} ${path}: ${error.cause?.code ?? error.code ?? error.name}`,
+      );
+    }
     if (!response.ok)
       throw Error(`managed API ${response.status}: ${JSON.stringify(value).slice(0, 400)}`);
     return value;
-  };
-  return { api, close, stateDir, profileHome, url };
+  }
 }

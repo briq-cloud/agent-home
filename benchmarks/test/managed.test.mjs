@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, readFile, rm, writeFile, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import {
   managedFixtures,
   prepareManaged,
@@ -12,8 +13,18 @@ import {
   fixtureHash,
 } from "../managed/fixtures.mjs";
 import { ManagedMeter, mockManagedFetcher } from "../managed/meter.mjs";
-import { runManaged, selectArms, settledTotal, settleManaged } from "../managed/run.mjs";
-import { preflightManagedRuntime, startManagedRuntime } from "../managed/runtime.mjs";
+import {
+  runManaged,
+  selectArms,
+  settledTotal,
+  settleManaged,
+  continueManaged,
+} from "../managed/run.mjs";
+import {
+  preflightManagedRuntime,
+  startManagedRuntime,
+  managedApiRequest,
+} from "../managed/runtime.mjs";
 
 async function directory(t, prefix) {
   const root = await mkdtemp(join(tmpdir(), prefix));
@@ -246,6 +257,7 @@ test("billing-only resume deduplicates request updates, preserves grades/routes/
         grade: { pass: true },
         route: { source: "decision", cli: "chosen" },
         featuresExercised: true,
+        graderUnchanged: true,
         generations: [],
       },
     ],
@@ -262,6 +274,7 @@ test("billing-only resume deduplicates request updates, preserves grades/routes/
     managedRequestId: "execution",
     trialId: "trial",
     kind: "execution",
+    model: "vendor/fixed",
     generationId: "gen-late",
     costUsd: null,
   };
@@ -274,7 +287,16 @@ test("billing-only resume deduplicates request updates, preserves grades/routes/
     key: "secret",
     fetcher: async (url) => {
       urls.push(url);
-      return Response.json({ data: { total_cost: 0.02 } });
+      return Response.json({
+        data: {
+          total_cost: 0.02,
+          model: "vendor/fixed",
+          provider_name: "mock-provider",
+          native_tokens_prompt: 12,
+          native_tokens_completion: 7,
+          native_tokens_cached: 3,
+        },
+      });
     },
   });
   assert.deepEqual(urls, ["https://openrouter.ai/api/v1/generation?id=gen-late"]);
@@ -283,6 +305,11 @@ test("billing-only resume deduplicates request updates, preserves grades/routes/
   assert.equal(reconciled.trials[0].totalMs, 1234);
   assert.deepEqual(reconciled.trials[0].route, original.trials[0].route);
   assert.equal(reconciled.trials[0].grade.pass, true);
+  assert.equal(reconciled.trials[0].modelsPinned, true);
+  assert.equal(reconciled.trials[0].comparisonEligible, true);
+  const observed = reconciled.trials[0].generations.find((record) => record.kind === "execution");
+  assert.equal(observed.provider, "mock-provider");
+  assert.deepEqual(observed.nativeTokens, { input: 12, output: 7, cached: 3 });
   assert.equal(reconciled.resume.newPaidRequests, 0);
   assert.equal(reconciled.resume.mayExecute, false);
   const again = await settleManaged(root, {
@@ -292,6 +319,127 @@ test("billing-only resume deduplicates request updates, preserves grades/routes/
     },
   });
   assert.equal(again.totalCostUsd, 0.021);
+});
+
+test("ledger canonical identities match frozen model pins without accepting other revisions", async (t) => {
+  const root = await directory(t, "managed-model-canonical-");
+  const base = {
+    arms: [{ id: "baseline" }],
+    profiles: [{ id: "pin", model: "vendor/alias", canonical: "vendor/exact-20261007" }],
+    trials: [
+      {
+        id: "case",
+        arm: "baseline",
+        phase: "complete",
+        taskStatus: "succeeded",
+        grade: { pass: true },
+        featuresExercised: true,
+        graderUnchanged: true,
+        generations: [
+          {
+            managedRequestId: "known",
+            trialId: "case",
+            kind: "execution",
+            profile: "pin",
+            model: "vendor/alias",
+            actualModel: "vendor/exact-20261007",
+            costUsd: 0.01,
+          },
+        ],
+      },
+    ],
+  };
+  await writeFile(join(root, "results.json"), JSON.stringify(base));
+  const settled = await settleManaged(root, {
+    fetcher: async () => assert.fail("no billing needed"),
+  });
+  assert.equal(settled.trials[0].modelsPinned, true);
+  assert.equal(settled.trials[0].comparisonEligible, true);
+  settled.trials[0].generations[0].actualModel = "vendor/exact-20261008";
+  await writeFile(join(root, "results.json"), JSON.stringify(settled));
+  const changed = await settleManaged(root, {
+    fetcher: async () => assert.fail("no billing needed"),
+  });
+  assert.equal(changed.trials[0].modelsPinned, false);
+  assert.equal(changed.trials[0].comparisonEligible, false);
+  changed.trials[0].generations[0].actualModel = "vendor/alias";
+  await writeFile(join(root, "results.json"), JSON.stringify(changed));
+  assert.equal(
+    (await settleManaged(root, { fetcher: async () => assert.fail("no billing needed") })).trials[0]
+      .modelsPinned,
+    false,
+  );
+});
+
+test("local polling retries transport resets while uncertain mutations and HTTP errors never replay", async () => {
+  let calls = 0;
+  const fetcher = async (_url, options) => {
+    calls++;
+    assert.equal(options.headers.connection, "close");
+    if (calls < 3) throw Object.assign(new Error("closed"), { cause: { code: "UND_ERR_SOCKET" } });
+    return Response.json({ ok: true });
+  };
+  assert.deepEqual(
+    await managedApiRequest("http://127.0.0.1", "fake", "GET", "/tasks", undefined, {
+      fetcher,
+      retryDelayMs: 0,
+    }),
+    { ok: true },
+  );
+  assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(
+    managedApiRequest(
+      "http://127.0.0.1",
+      "fake",
+      "POST",
+      "/tasks",
+      {},
+      { fetcher, retryDelayMs: 0 },
+    ),
+    /UND_ERR_SOCKET/,
+  );
+  assert.equal(calls, 1);
+  calls = 0;
+  await assert.rejects(
+    managedApiRequest("http://127.0.0.1", "fake", "GET", "/tasks", undefined, {
+      fetcher: async () => {
+        calls++;
+        return Response.json({ error: "denied" }, { status: 403 });
+      },
+      retryDelayMs: 0,
+    }),
+    /403/,
+  );
+  assert.equal(calls, 1);
+});
+
+test("host startup failure preserves exit diagnostics without invoking a model", async (t) => {
+  const root = await directory(t, "managed-host-exit-");
+  const entry = join(root, "exit.mjs"),
+    workspace = join(root, "workspace");
+  await mkdir(workspace);
+  await writeFile(entry, "process.exit(23);\n");
+  await assert.rejects(
+    startManagedRuntime({
+      root: join(root, "host"),
+      workspace,
+      profiles,
+      arm: factorialArms[0],
+      meter: { token: "fake", tokens: {} },
+      relayUrl: "http://127.0.0.1:1",
+      fixtureId: "invoice-rollup",
+      entryPath: entry,
+      startupMs: 1000,
+    }),
+    /exit=23/,
+  );
+  const lifecycle = JSON.parse(
+    await readFile(join(root, "host", "private-lifecycle.json"), "utf8"),
+  );
+  assert.equal(lifecycle.exitCode, 23);
+  assert.equal(lifecycle.ready, false);
+  assert.equal(lifecycle.signal, null);
 });
 
 test("resume leaves missing generation IDs, unknown decision charges and incomplete intents unknown", async (t) => {
@@ -455,4 +603,188 @@ test("isolated actual host forwards production cliEnv native resolution and excl
     if (priorKey === undefined) delete process.env.OPENROUTER_API_KEY;
     else process.env.OPENROUTER_API_KEY = priorKey;
   }
+});
+
+test("validated execution continuation skips completed attempts, preserves frozen failures and includes past spend", async (t) => {
+  const seedRoot = await directory(t, "managed-continuation-seed-");
+  const finished = await runManaged({
+    mode: "mock",
+    root: seedRoot,
+    armFilter: "baseline,context-only",
+    taskFilter: "invoice-rollup",
+  });
+  const paused = structuredClone(finished);
+  delete paused.root;
+  paused.trials = paused.trials.slice(0, 1);
+  paused.trials[0].generations.forEach((record, index) => {
+    record.costUsd = index ? 0 : 0.05;
+  });
+  paused.trials[0].costUsd = 0.05;
+  paused.totalCostUsd = 0.05;
+  paused.stopped = "unknown total cost; settle existing generation IDs only";
+  const writePaused = async (name, mutate = () => {}) => {
+    const root = await directory(t, `managed-continue-${name}-`);
+    const snapshot = structuredClone(paused);
+    mutate(snapshot);
+    await writeFile(join(root, "results.json"), JSON.stringify(snapshot));
+    await writeFile(
+      join(root, "meter.jsonl"),
+      snapshot.trials
+        .flatMap((trial) => trial.generations)
+        .map(JSON.stringify)
+        .join("\n") + "\n",
+    );
+    return { root, snapshot };
+  };
+  const noBilling = async () =>
+    assert.fail("known observations must not request new billing or decisions");
+  const { root, snapshot } = await writePaused("known-failure", (result) => {
+    result.trials[0].taskStatus = "failed";
+    result.trials[0].grade = { pass: false, reason: "frozen-failure" };
+    result.trials[0].comparisonEligible = false;
+  });
+  const frozen = JSON.parse(JSON.stringify(snapshot.trials[0]));
+  const continued = await continueManaged(root, { fetcher: noBilling });
+  assert.equal(continued.trials.length, 2);
+  assert.deepEqual(continued.trials[0], frozen);
+  assert.equal(continued.trials[1].taskStatus, "succeeded");
+  assert.equal(continued.totalCostUsd, 0.05);
+  assert.equal(continued.continuations[0].priorCostUsd, 0.05);
+  assert.deepEqual(continued.continuations[0].skippedTrialIds, [frozen.id]);
+  assert.equal(continued.budgetTargetUsd, finished.budgetTargetUsd);
+  assert.equal(
+    new Set(
+      continued.trials.flatMap((trial) =>
+        trial.generations.map((record) => record.managedRequestId),
+      ),
+    ).size,
+    2,
+  );
+
+  const allowance = await writePaused("past-budget", (result) => {
+    result.trials[0].generations[0].costUsd = 1.85;
+    result.trials[0].costUsd = result.totalCostUsd = 1.85;
+  });
+  const stopped = await continueManaged(allowance.root, { fetcher: noBilling });
+  assert.equal(stopped.stopped, "remaining admission allowance exhausted");
+  assert.equal(stopped.trials[1].phase, "not-admitted");
+  assert.equal(stopped.totalCostUsd, 1.85);
+  assert.equal(stopped.trials.flatMap((trial) => trial.generations).length, 1);
+
+  for (const [name, mutate, expected] of [
+    [
+      "unknown",
+      (result) => {
+        const record = result.trials[0].generations[0];
+        record.costUsd = null;
+        record.generationId = null;
+      },
+      /unknown costs/,
+    ],
+    [
+      "profile",
+      (result) => {
+        result.profiles[0].model = "changed/model";
+      },
+      /model plan changed/,
+    ],
+    [
+      "canonical",
+      (result) => {
+        result.profiles[0].canonical = "changed-version";
+      },
+      /canonical identity changed/,
+    ],
+    [
+      "fixture",
+      (result) => {
+        result.fixtures[0].sha256 = "changed";
+      },
+      /fixture identity changed/,
+    ],
+    [
+      "grader",
+      (result) => {
+        result.sourceHashes["grade-worker.mjs"] = "changed";
+      },
+      /source identity changed/,
+    ],
+    [
+      "entry",
+      (result) => {
+        result.sourceHashes["entry.mjs"] = "changed";
+      },
+      /source identity changed/,
+    ],
+    [
+      "runtime",
+      (result) => {
+        result.sourceHashes["runtime.mjs"] = "changed";
+      },
+      /source identity changed/,
+    ],
+    [
+      "runner-core",
+      (result) => {
+        result.sourceHashes["runner/src/orchestration/engine.ts"] = "changed";
+      },
+      /source identity changed/,
+    ],
+    [
+      "intent",
+      (result) => {
+        result.trials[0].phase = "intent-recorded";
+      },
+      /uncertain or infrastructure/,
+    ],
+    [
+      "infrastructure",
+      (result) => {
+        result.trials[0].phase = "infrastructure-failed";
+      },
+      /uncertain or infrastructure/,
+    ],
+    [
+      "interrupted",
+      (result) => {
+        result.stopped = "interrupted; settle existing generations only";
+      },
+      /uncertain or interrupted/,
+    ],
+  ]) {
+    const attempt = await writePaused(name, mutate);
+    await assert.rejects(continueManaged(attempt.root, { fetcher: noBilling }), expected, name);
+    await assert.rejects(
+      readFile(join(attempt.root, "invoice-rollup-context-only", "private-runtime.json")),
+      /ENOENT/,
+    );
+  }
+
+  const originalBytes = "// preserved original driver bytes; never executed\n";
+  const originalSha = createHash("sha256").update(originalBytes).digest("hex");
+  const legacy = await writePaused("driver-exception", (result) => {
+    result.sourceHashes["run.mjs"] = originalSha;
+    delete result.limits;
+  });
+  const originalPath = join(legacy.root, "original-run.mjs");
+  await writeFile(originalPath, originalBytes);
+  await assert.rejects(
+    continueManaged(legacy.root, { fetcher: noBilling }),
+    /matching original run.mjs bytes/,
+  );
+  await assert.rejects(
+    continueManaged(legacy.root, { fetcher: noBilling, originalRunSource: originalPath }),
+    /explicit valid original limits/,
+  );
+  const migrated = await continueManaged(legacy.root, {
+    fetcher: noBilling,
+    originalRunSource: originalPath,
+    legacyLimits: finished.limits,
+  });
+  assert.equal(migrated.trials.length, 2);
+  assert.equal(migrated.sourceHashes["run.mjs"], originalSha);
+  assert.equal(migrated.continuations[0].originalRunSha256, originalSha);
+  assert.notEqual(migrated.continuations[0].continuationRunSha256, originalSha);
+  assert.equal(migrated.continuations[0].legacyLimitsAttested, true);
+  assert.deepEqual(migrated.limits, finished.limits);
 });

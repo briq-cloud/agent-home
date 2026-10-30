@@ -10,6 +10,7 @@ export class Meter {
     perTrialUsd = 0.15,
     maxCallsPerTrial = 12,
     maxOutputTokens = 2048,
+    unsettledCallAllowanceUsd = 0.2,
     fetcher = fetch,
     onRecord = () => {},
   }) {
@@ -21,7 +22,9 @@ export class Meter {
       !Number.isInteger(maxCallsPerTrial) ||
       maxCallsPerTrial < 1 ||
       !Number.isInteger(maxOutputTokens) ||
-      maxOutputTokens < 1
+      maxOutputTokens < 1 ||
+      !Number.isFinite(unsettledCallAllowanceUsd) ||
+      unsettledCallAllowanceUsd <= 0
     )
       throw Error("invalid benchmark limits");
     Object.assign(this, {
@@ -31,6 +34,7 @@ export class Meter {
       perTrialUsd,
       maxCallsPerTrial,
       maxOutputTokens,
+      unsettledCallAllowanceUsd,
       fetcher,
       onRecord,
     });
@@ -135,7 +139,9 @@ export class Meter {
     // Reconcile off the agent's critical path. Reserve conservatively for unsettled calls.
     // This is an admission allowance, not a provider-price guarantee.
     while (
-      this.spent + this.records.filter((r) => r.costUsd === null).length * 0.2 + 0.2 >
+      this.spent +
+        (this.records.filter((r) => r.costUsd === null).length + 1) *
+          this.unsettledCallAllowanceUsd >
         this.budgetUsd &&
       this.pendingBilling.size &&
       !this.blocked
@@ -144,7 +150,9 @@ export class Meter {
     }
     if (
       this.blocked ||
-      this.spent + this.records.filter((r) => r.costUsd === null).length * 0.2 + 0.2 >
+      this.spent +
+        (this.records.filter((r) => r.costUsd === null).length + 1) *
+          this.unsettledCallAllowanceUsd >
         this.budgetUsd
     ) {
       this.blocked = true;

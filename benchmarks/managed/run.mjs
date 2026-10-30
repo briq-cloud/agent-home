@@ -1,5 +1,5 @@
 import { appendFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, open, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
@@ -19,6 +19,74 @@ const exec = promisify(execFile),
   here = fileURLToPath(new URL(".", import.meta.url));
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const continuationAuthority = Symbol("validated continuation");
+const defaultLimits = {
+  timeoutMs: 180_000,
+  perTrialUsd: 0.2,
+  maxCallsPerTrial: 20,
+  maxOutputTokens: 4096,
+};
+const coreSources = [
+  "src/orchestration/engine.ts",
+  "src/orchestration/delegation.ts",
+  "src/context/store.ts",
+  "src/routing/index.ts",
+  "src/app/services.ts",
+];
+async function sourceSnapshot(runnerSource) {
+  const files = [
+    "fixtures.mjs",
+    "grade-worker.mjs",
+    "meter.mjs",
+    "entry.mjs",
+    "runtime.mjs",
+    "run.mjs",
+    "mock-agent.mjs",
+    "../meter.mjs",
+  ];
+  const snapshot = Object.fromEntries(
+    await Promise.all(files.map(async (file) => [file, hash(await readFile(join(here, file)))])),
+  );
+  for (const file of coreSources)
+    snapshot[`runner/${file}`] = hash(await readFile(join(runnerSource, file)));
+  return snapshot;
+}
+function validLimits(value) {
+  return (
+    value &&
+    Object.keys(value).sort().join() === Object.keys(defaultLimits).sort().join() &&
+    Number.isSafeInteger(value.timeoutMs) &&
+    value.timeoutMs >= 1000 &&
+    value.timeoutMs <= 300_000 &&
+    Number.isFinite(value.perTrialUsd) &&
+    value.perTrialUsd > 0 &&
+    value.maxCallsPerTrial === 20 &&
+    value.maxOutputTokens === 4096
+  );
+}
+function refreshEligibility(trial, profiles = []) {
+  const execution = (trial.generations ?? []).filter((record) => record.kind === "execution");
+  trial.modelsPinned =
+    execution.length > 0 &&
+    execution.every((record) => {
+      if (typeof record.model !== "string" || typeof record.actualModel !== "string") return false;
+      const profile = profiles.find(
+        (profile) =>
+          profile.model === record.model && (!record.profile || profile.id === record.profile),
+      );
+      return (
+        (!profiles.length || !!profile) &&
+        record.actualModel === (profile?.canonical ?? record.model)
+      );
+    });
+  trial.comparisonEligible =
+    trial.taskStatus === "succeeded" &&
+    !!trial.grade?.pass &&
+    !!trial.featuresExercised &&
+    !!trial.graderUnchanged &&
+    trial.modelsPinned &&
+    trial.costUsd !== null;
+}
 export const managedProfiles = [
   { id: "bench-haiku", model: "anthropic/claude-haiku-5.5" },
   { id: "bench-deepseek", model: "deepseek/deepseek-v4.1-flash-1017" },
@@ -109,13 +177,26 @@ export async function runManaged({
   budgetUsd = Number(process.env.BENCH_BUDGET_USD ?? 2),
   timeoutMs = Number(process.env.BENCH_TIMEOUT_MS ?? 180_000),
   chooser = process.env.BENCH_CHOOSER ?? decisionModels[0],
+  fixtureOffset = Number(process.env.BENCH_FIXTURE_OFFSET ?? 0),
+  continuation,
 } = {}) {
+  if (continuation && continuation[continuationAuthority] !== true)
+    throw Error("unvalidated continuation");
+  const limits = continuation?.limits ?? {
+    ...defaultLimits,
+    timeoutMs,
+    perTrialUsd: Number(process.env.BENCH_PER_TRIAL_USD ?? 0.2),
+  };
   if (
     !["mock", "live"].includes(mode) ||
     !decisionModels.includes(chooser) ||
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 1000 ||
-    timeoutMs > 300_000
+    timeoutMs > 300_000 ||
+    !validLimits(limits) ||
+    !Number.isSafeInteger(fixtureOffset) ||
+    fixtureOffset < 0 ||
+    fixtureOffset > 1000
   )
     throw Error("invalid managed benchmark options");
   const arms = selectArms(armFilter),
@@ -128,11 +209,18 @@ export async function runManaged({
   await mkdir(root, { recursive: true, mode: 0o700 });
   try {
     await readFile(join(root, "results.json"));
-    throw Error("results already exist; settle-only resume never repeats paid trials");
+    if (!continuation)
+      throw Error(
+        "results already exist; use settle or validated continue, never repeat paid trials",
+      );
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   const runnerSource = resolve(process.env.BENCH_RUNNER_SOURCE ?? join(here, "../../runner"));
+  const preflightPath = join(
+    root,
+    continuation ? `preflight-continuation-${continuation.id}.json` : "preflight.json",
+  );
   let preflight;
   try {
     preflight = await preflightManagedRuntime({
@@ -140,18 +228,19 @@ export async function runManaged({
       runnerSource,
       profileHome: join(root, "preflight-api-profile"),
     });
-    await writeFile(join(root, "preflight.json"), JSON.stringify(preflight, null, 2) + "\n", {
+    await writeFile(preflightPath, JSON.stringify(preflight, null, 2) + "\n", {
       mode: 0o600,
     });
   } catch (error) {
     await writeFile(
-      join(root, "preflight.json"),
+      preflightPath,
       JSON.stringify({ status: "failed", error: error.message, modelCalls: 0 }, null, 2) + "\n",
       { mode: 0o600 },
     );
     throw error;
   }
-  const key = mode === "live" ? await providerKey() : "mock-provider-no-real-key";
+  const key =
+    continuation?.key ?? (mode === "live" ? await providerKey() : "mock-provider-no-real-key");
   let profiles = managedProfiles.map((profile) => ({
     ...profile,
     canonical: `${profile.model}-mock-canonical`,
@@ -168,7 +257,12 @@ export async function runManaged({
       return { ...profile, canonical: card.canonical_slug };
     });
     await writeFile(
-      join(root, "model-snapshot.json"),
+      join(
+        root,
+        continuation
+          ? `model-snapshot-continuation-${continuation.id}.json`
+          : "model-snapshot.json",
+      ),
       JSON.stringify(
         {
           checkedAt: new Date().toISOString(),
@@ -183,32 +277,14 @@ export async function runManaged({
       { mode: 0o600 },
     );
   }
-  const sourcePaths = [
-    "fixtures.mjs",
-    "grade-worker.mjs",
-    "meter.mjs",
-    "entry.mjs",
-    "runtime.mjs",
-    "run.mjs",
-    "mock-agent.mjs",
-    "../meter.mjs",
-  ];
-  const sourceHashes = Object.fromEntries(
-    await Promise.all(
-      sourcePaths.map(async (file) => [file, hash(await readFile(join(here, file)))]),
-    ),
-  );
-  for (const file of [
-    "src/orchestration/engine.ts",
-    "src/orchestration/delegation.ts",
-    "src/context/store.ts",
-    "src/routing/index.ts",
-    "src/app/services.ts",
-  ])
-    sourceHashes[`runner/${file}`] = hash(await readFile(join(runnerSource, file)));
+  if (continuation && JSON.stringify(profiles) !== JSON.stringify(continuation.result.profiles))
+    throw Error("continuation model canonical identity changed");
+  const sourceHashes = await sourceSnapshot(runnerSource);
+  if (continuation && JSON.stringify(sourceHashes) !== JSON.stringify(continuation.currentHashes))
+    throw Error("continuation source changed during admission");
   const graderBefore = hash(await readFile(join(here, "grade-worker.mjs"))),
     fixtureBefore = hash(await readFile(join(here, "fixtures.mjs")));
-  const result = {
+  const result = continuation?.result ?? {
     protocol: "managed-production-v1",
     mode,
     startedAt: new Date().toISOString(),
@@ -218,6 +294,8 @@ export async function runManaged({
     arms,
     profiles,
     chooser,
+    fixtureOffset,
+    limits,
     sourceHashes,
     preflight,
     fixtures: fixtures.map((fixture) => ({
@@ -236,6 +314,38 @@ export async function runManaged({
       "Provider cache state is not reset; mock runs prove plumbing only.",
     ],
   };
+  const priorMetadata = [...(result.metadata ?? [])];
+  if (continuation) {
+    result.limits ??= limits;
+    result.continuations ??= [];
+    result.continuations.push({
+      protocol: "managed-continuation-v1",
+      id: continuation.id,
+      startedAt: new Date().toISOString(),
+      originalRunSha256: result.sourceHashes["run.mjs"],
+      continuationRunSha256: sourceHashes["run.mjs"],
+      sourceHashes,
+      priorCostUsd: result.totalCostUsd,
+      skippedTrialIds: result.trials.map((trial) => trial.id),
+      originalBudgetUsd: budgetUsd,
+      limits,
+      legacyLimitsAttested: continuation.legacyLimitsAttested,
+      originalRunSource: continuation.originalRunSource,
+      preflight,
+      previousStopped: result.stopped,
+      previousFinishedAt: result.finishedAt,
+      billingReconciliation: result.resume,
+    });
+    result.resume = {
+      mode: "execution-continuation",
+      protocol: "managed-continuation-v1",
+      continuationId: continuation.id,
+      observedAt: new Date().toISOString(),
+      mayExecute: true,
+      skippedTrialIds: result.trials.map((trial) => trial.id),
+    };
+    result.stopped = null;
+  }
   const save = () =>
     writeFile(
       join(root, "results.json"),
@@ -247,13 +357,15 @@ export async function runManaged({
     profiles,
     chooser,
     budgetUsd,
-    perTrialUsd: Number(process.env.BENCH_PER_TRIAL_USD ?? 0.2),
-    maxCallsPerTrial: 20,
-    maxOutputTokens: 4096,
+    perTrialUsd: limits.perTrialUsd,
+    maxCallsPerTrial: limits.maxCallsPerTrial,
+    maxOutputTokens: limits.maxOutputTokens,
     ...(mode === "mock" ? { fetcher: mockManagedFetcher(profiles) } : {}),
     onRecord: (record) =>
       appendFileSync(join(root, "meter.jsonl"), JSON.stringify(record) + "\n", { mode: 0o600 }),
   });
+  if (continuation)
+    meter.records.push(...structuredClone(result.trials.flatMap((trial) => trial.generations)));
   const relayUrl = await meter.start();
   let activeRuntime;
   const interrupt = async () => {
@@ -267,11 +379,12 @@ export async function runManaged({
     for (let fi = 0; fi < fixtures.length && !result.stopped; fi++)
       for (let ai = 0; ai < arms.length && !result.stopped; ai++) {
         const fixture = fixtures[fi],
-          arm = arms[(ai + fi) % arms.length],
+          arm = arms[(ai + fi + fixtureOffset) % arms.length],
           trialId = `${fixture.id}-${arm.id}`,
           trialRoot = join(root, trialId),
           workspace = join(trialRoot, "workspace"),
-          seed = 17 + fi;
+          seed = 17 + fi + fixtureOffset;
+        if (result.trials.some((trial) => trial.id === trialId)) continue;
         const acceptance = {
           commands: [
             {
@@ -473,21 +586,12 @@ export async function runManaged({
         trial.telemetryIncomplete =
           !!task?.attempts && !trial.generations.some((record) => record.kind === "execution");
         if (trial.telemetryIncomplete) trial.costUsd = null;
-        trial.modelsPinned = trial.generations
-          .filter((record) => record.kind === "execution")
-          .every((record) => record.actualModel === record.model);
         trial.phase = !runtime ? "infrastructure-failed" : "complete";
         trial.costProvenance =
           mode === "mock"
             ? "synthetic-provider-ledger-no-model-calls"
             : "execution-generation-total_cost-plus-typed-decision-usage.cost";
-        trial.comparisonEligible =
-          trial.taskStatus === "succeeded" &&
-          trial.grade.pass &&
-          trial.featuresExercised &&
-          trial.graderUnchanged &&
-          trial.modelsPinned &&
-          trial.costUsd !== null;
+        refreshEligibility(trial, profiles);
         if (trial.costUsd === null)
           result.stopped = "unknown total cost; settle existing generation IDs only";
         if (!runtime) result.stopped ??= "infrastructure failed; no automatic trial replay";
@@ -504,7 +608,7 @@ export async function runManaged({
         );
       }
     result.finishedAt = new Date().toISOString();
-    result.metadata = meter.metadata;
+    result.metadata = [...priorMetadata, ...meter.metadata];
     result.totalCostUsd = result.trials.some((trial) => trial.telemetryIncomplete)
       ? null
       : settledTotal(meter.records);
@@ -551,9 +655,9 @@ export async function settleManaged(root, { fetcher = fetch, key, save = true } 
   }
   for (const record of records.values())
     if (
-      record.costUsd === null &&
       record.kind === "execution" &&
-      record.generationId?.startsWith("gen-")
+      record.generationId?.startsWith("gen-") &&
+      (record.costUsd === null || typeof record.actualModel !== "string")
     ) {
       try {
         const response = await fetcher(
@@ -567,8 +671,16 @@ export async function settleManaged(root, { fetcher = fetch, key, save = true } 
           Number.isFinite(value.total_cost) &&
           value.total_cost >= 0
         ) {
-          record.costUsd = value.total_cost;
+          if (record.costUsd === null) record.costUsd = value.total_cost;
           record.costSource = "openrouter-generation-total_cost";
+          record.provider = value.provider_name;
+          record.actualModel = value.model;
+          record.providerMs = value.generation_time;
+          record.nativeTokens = {
+            input: value.native_tokens_prompt,
+            output: value.native_tokens_completion,
+            cached: value.native_tokens_cached,
+          };
         }
       } catch {
         /* Missing billing stays unknown, never zero. */
@@ -582,6 +694,7 @@ export async function settleManaged(root, { fetcher = fetch, key, save = true } 
       !["complete", "infrastructure-failed", "not-admitted"].includes(trial.phase)
         ? null
         : settledTotal(trial.generations);
+    refreshEligibility(trial, result.profiles);
   }
   result.resume = {
     mode: "billing-only",
@@ -589,8 +702,11 @@ export async function settleManaged(root, { fetcher = fetch, key, save = true } 
     newPaidRequests: 0,
     mayExecute: false,
   };
+  const trialIds = new Set(result.trials.map((trial) => trial.id));
+  const orphanedRecords = [...records.values()].some((record) => !trialIds.has(record.trialId));
+  result.reconciliation = { untrackedRecords: untracked, orphanedRecords };
   result.totalCostUsd =
-    untracked || result.trials.some((trial) => trial.costUsd === null)
+    untracked || orphanedRecords || result.trials.some((trial) => trial.costUsd === null)
       ? null
       : settledTotal([...records.values()]);
   result.summary = summarizeManaged(result);
@@ -599,6 +715,203 @@ export async function settleManaged(root, { fetcher = fetch, key, save = true } 
       mode: 0o600,
     });
   return result;
+}
+
+/** Continue only never-started plan entries. A settled terminal attempt is never
+ * replayed, including failures. Old source identities remain the authority;
+ * only this resume driver may differ, with its original bytes attested. */
+export async function continueManaged(
+  root,
+  {
+    key,
+    fetcher = fetch,
+    originalRunSource = process.env.BENCH_ORIGINAL_RUN_SOURCE,
+    legacyLimits = process.env.BENCH_LEGACY_LIMITS_JSON
+      ? JSON.parse(process.env.BENCH_LEGACY_LIMITS_JSON)
+      : undefined,
+  } = {},
+) {
+  root = resolve(root);
+  const lockPath = join(root, "continuation.lock");
+  const lock = await open(lockPath, "wx", 0o600).catch(() => {
+    throw Error("continuation lock exists; inspect the existing process before removing it");
+  });
+  try {
+    const original = JSON.parse(await readFile(join(root, "results.json"), "utf8"));
+    if (
+      original.protocol !== "managed-production-v1" ||
+      !["mock", "live"].includes(original.mode) ||
+      !Number.isFinite(original.budgetTargetUsd) ||
+      original.budgetTargetUsd <= 0 ||
+      !decisionModels.includes(original.chooser)
+    )
+      throw Error("invalid original continuation plan");
+    if (
+      process.env.BENCH_BUDGET_USD !== undefined &&
+      Number(process.env.BENCH_BUDGET_USD) !== original.budgetTargetUsd
+    )
+      throw Error("original continuation budget is immutable");
+    if (process.env.BENCH_CHOOSER !== undefined && process.env.BENCH_CHOOSER !== original.chooser)
+      throw Error("original continuation chooser is immutable");
+    const arms = selectArms(original.arms?.map((arm) => arm.id).join(","));
+    if (JSON.stringify(arms) !== JSON.stringify(original.arms))
+      throw Error("original continuation arm plan changed");
+    if (
+      process.env.BENCH_ARMS &&
+      JSON.stringify(selectArms(process.env.BENCH_ARMS)) !== JSON.stringify(arms)
+    )
+      throw Error("original continuation arm plan is immutable");
+    const fixtures = original.fixtures?.map((saved) =>
+      managedFixtures.find((fixture) => fixture.id === saved.id),
+    );
+    if (
+      !fixtures?.length ||
+      fixtures.some(
+        (fixture, index) =>
+          !fixture ||
+          fixture.version !== original.fixtures[index].version ||
+          fixtureHash(fixture) !== original.fixtures[index].sha256,
+      ) ||
+      new Set(fixtures.map((fixture) => fixture.id)).size !== fixtures.length
+    )
+      throw Error("original continuation fixture identity changed");
+    if (
+      process.env.BENCH_TASK_IDS &&
+      process.env.BENCH_TASK_IDS !== fixtures.map((fixture) => fixture.id).join(",")
+    )
+      throw Error("original continuation fixture plan is immutable");
+    const profileIdentities = original.profiles?.map(({ id, model }) => ({ id, model }));
+    if (
+      JSON.stringify(profileIdentities) !== JSON.stringify(managedProfiles) ||
+      original.profiles.some(
+        (profile) => typeof profile.canonical !== "string" || !profile.canonical,
+      )
+    )
+      throw Error("original continuation model plan changed");
+    const runnerSource = resolve(process.env.BENCH_RUNNER_SOURCE ?? join(here, "../../runner"));
+    const currentHashes = await sourceSnapshot(runnerSource);
+    if (
+      !original.sourceHashes ||
+      Object.keys(currentHashes).sort().join() !== Object.keys(original.sourceHashes).sort().join()
+    )
+      throw Error("original continuation source manifest changed");
+    for (const [file, digest] of Object.entries(currentHashes)) {
+      if (file !== "run.mjs" && digest !== original.sourceHashes[file])
+        throw Error(`continuation source identity changed: ${file}`);
+    }
+    if (
+      currentHashes["run.mjs"] !== original.sourceHashes["run.mjs"] &&
+      (!originalRunSource ||
+        hash(await readFile(originalRunSource)) !== original.sourceHashes["run.mjs"])
+    )
+      throw Error("changed continuation driver requires matching original run.mjs bytes");
+    const limits = original.limits ?? legacyLimits;
+    if (!validLimits(limits))
+      throw Error(
+        "continuation requires explicit valid original limits (legacy attestation when absent)",
+      );
+    if (
+      original.limits &&
+      legacyLimits &&
+      JSON.stringify(original.limits) !== JSON.stringify(legacyLimits)
+    )
+      throw Error("original continuation limits are immutable");
+    if (
+      (process.env.BENCH_TIMEOUT_MS !== undefined &&
+        Number(process.env.BENCH_TIMEOUT_MS) !== limits.timeoutMs) ||
+      (process.env.BENCH_PER_TRIAL_USD !== undefined &&
+        Number(process.env.BENCH_PER_TRIAL_USD) !== limits.perTrialUsd)
+    )
+      throw Error("original continuation limits are immutable");
+    const fixtureOffset = original.fixtureOffset ?? 0;
+    if (
+      !Number.isSafeInteger(fixtureOffset) ||
+      fixtureOffset < 0 ||
+      fixtureOffset > 1000 ||
+      (process.env.BENCH_FIXTURE_OFFSET !== undefined &&
+        Number(process.env.BENCH_FIXTURE_OFFSET) !== fixtureOffset)
+    )
+      throw Error("original continuation fixture offset is immutable");
+    const planned = fixtures.flatMap((fixture, fi) =>
+      arms.map((_, ai) => ({
+        fixture,
+        arm: arms[(ai + fi + fixtureOffset) % arms.length],
+        seed: 17 + fi + fixtureOffset,
+      })),
+    );
+    if (
+      !Array.isArray(original.trials) ||
+      original.trials.length > planned.length ||
+      /interrupted|integrity changed|infrastructure failed/.test(original.stopped ?? "")
+    )
+      throw Error("uncertain or interrupted experiment cannot continue");
+    for (let index = 0; index < original.trials.length; index++) {
+      const trial = original.trials[index],
+        { fixture, arm, seed } = planned[index];
+      if (
+        trial.id !== `${fixture.id}-${arm.id}` ||
+        trial.fixtureId !== fixture.id ||
+        trial.fixtureSha256 !== fixtureHash(fixture) ||
+        trial.fixtureVersion !== fixture.version ||
+        trial.arm !== arm.id ||
+        trial.order !== index ||
+        trial.acceptanceSha256 !==
+          hash(
+            JSON.stringify({
+              fixtureId: fixture.id,
+              seed,
+              graderBefore: currentHashes["grade-worker.mjs"],
+              fixtureBefore: currentHashes["fixtures.mjs"],
+            }),
+          )
+      )
+        throw Error("original continuation trial identity changed");
+      if (
+        trial.phase !== "complete" ||
+        !["succeeded", "failed", "cancelled", "blocked"].includes(trial.taskStatus) ||
+        trial.telemetryIncomplete ||
+        !trial.graderUnchanged
+      )
+        throw Error("uncertain or infrastructure attempt cannot continue");
+    }
+    const billingKey =
+      key ?? (original.mode === "live" ? await providerKey() : "mock-provider-no-real-key");
+    const result = await settleManaged(root, { key: billingKey, fetcher });
+    if (result.totalCostUsd === null || result.trials.some((trial) => trial.costUsd === null))
+      throw Error("unknown costs block continuation; reconcile existing IDs only");
+    const records = result.trials.flatMap((trial) => trial.generations);
+    if (
+      new Set(records.map((record) => record.managedRequestId)).size !== records.length ||
+      records.some(
+        (record) =>
+          !record.managedRequestId || !Number.isFinite(record.costUsd) || record.costUsd < 0,
+      )
+    )
+      throw Error("untracked or duplicate accounting blocks continuation");
+    return await runManaged({
+      mode: result.mode,
+      root,
+      armFilter: arms.map((arm) => arm.id).join(","),
+      taskFilter: fixtures.map((fixture) => fixture.id).join(","),
+      budgetUsd: result.budgetTargetUsd,
+      timeoutMs: limits.timeoutMs,
+      chooser: result.chooser,
+      fixtureOffset,
+      continuation: {
+        [continuationAuthority]: true,
+        id: randomUUID(),
+        key: billingKey,
+        result,
+        limits,
+        legacyLimitsAttested: !original.limits,
+        originalRunSource,
+        currentHashes,
+      },
+    });
+  } finally {
+    await lock.close();
+    await unlink(lockPath);
+  }
 }
 if (process.argv[1] && import.meta.url === pathToFileURLSafe(process.argv[1])) {
   const mode = process.argv[2] ?? "mock";
@@ -613,6 +926,9 @@ if (process.argv[1] && import.meta.url === pathToFileURLSafe(process.argv[1])) {
         summary: result.summary,
       }),
     );
+  } else if (mode === "continue") {
+    const result = await continueManaged(resolve(process.env.BENCH_RESULTS));
+    console.log(JSON.stringify({ totalCostUsd: result.totalCostUsd, summary: result.summary }));
   } else await runManaged({ mode });
 }
 function pathToFileURLSafe(path) {

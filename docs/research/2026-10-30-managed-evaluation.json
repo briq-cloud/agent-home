@@ -1,0 +1,987 @@
+{
+  "kind": "agent-home-managed-production-evaluation",
+  "recordedAt": "2026-10-30T16:40:52.135Z",
+  "protocol": "Two held-out repair fixtures; five discovery arms; real production /tasks, native Claude ACP, declared deterministic command/artifact acceptance. The second fixture is a separately revised transport experiment.",
+  "accounting": {
+    "settledManagedCostUsd": 0.15100799800000003,
+    "invalidContractCostUsd": 0.03559479999999999,
+    "inconclusiveCorrectedCostUsd": 0.030533150000000002,
+    "acceptedCorrectedTasks": 7,
+    "correctedModelAttempts": 10,
+    "targetPhaseBudgetUsd": 2,
+    "includesOtherBatchOrRetrievalExperiments": false
+  },
+  "findings": [
+    "Exploratory per-case observations only. No causal, statistical, routing, memory or delegation improvement claim.",
+    "Both Auto trials abstained and used the default Haiku route; this does not demonstrate routing benefit.",
+    "Original invoice memory/delegation polling failed; external grader pass does not establish successful task completion or exercised features.",
+    "Revised coalesced delegation used no child and its declared command timed out under the resource-constrained run; a later external check passed. Treat the outcome as inconclusive, not a model-quality failure.",
+    "Curated context is an injection upper bound; a single accepted case does not establish retrieval improvement.",
+    "Revised second-fixture transport, run order and provider cache state prevent a neutral pooled treatment comparison.",
+    "All policy memory facts also exist in baseline workspace files. Gold/graders are outside workspaces; same-UID access is not an OS sandbox.",
+    "The provider key stayed on the home; native API profiles received relay credentials only. No subscription prompt was used."
+  ],
+  "experiments": [
+    {
+      "id": "native-setup-failure",
+      "role": "setup-failure",
+      "protocol": "managed-production-v1",
+      "budgetTargetUsd": 2,
+      "settledCostUsd": 0,
+      "costNote": "Operator reconciliation verified no provider request before native setup failure.",
+      "stopped": "unknown total cost; settle existing generation IDs only",
+      "fixtureOffset": 0,
+      "sourceHashes": {
+        "fixtures.mjs": "a7c6631739bcd04f5a20f9fc192a0b4d92a47b6c00de7f62fc17a489e87464af",
+        "grade-worker.mjs": "52585b1a353b2d823f5e62a37a631c0f2f8ee3395d7bb37de2d7da17a7ea8af8",
+        "meter.mjs": "502fa7c3f7b9ad3ed61d82dfd048c9f555e1785cda09378a19d041701dbc70cc",
+        "entry.mjs": "fef0c31dcc7cfb3b2315f498a90eb446078dc1f656db42842f30f2c8883c7a2e",
+        "runtime.mjs": "6c4f5d3db837c66fc3d9269b59acc2719d5781ac31294828eb041ee1772c6bb2",
+        "run.mjs": "900155a2c03b11c731e36fd02ea11d4df329d9a470589d3d2e0423578c29873a",
+        "mock-agent.mjs": "5844e5901611b7786e64c5431386dcbeaac97c8e2064802a2deaf2584453a0a4",
+        "../meter.mjs": "53b2d160c6bedfef58be3c85413bbb9dfa499580339a81aafa983ce247c28504",
+        "runner/src/orchestration/engine.ts": "61b92585accb27a6e657b5544ff5744806600d133ae680b2353fffb6d65c0660",
+        "runner/src/orchestration/delegation.ts": "f90930c64e5ef3d2ea347e8be4f290a6474154f899f446fc74c9061bd9bc28c9",
+        "runner/src/context/store.ts": "d2012296eef53355d3d4fa966912d10c248ec0c1a30776c1e42bee2218d1eef5",
+        "runner/src/routing/index.ts": "9d3983825667f86be96a240dd3bff0256304f354a26617855378d08e0547fd2b",
+        "runner/src/app/services.ts": "86ff6e3aa63642ee2707a5aef04dd6368f0ba0f09a252c1affda652640183079"
+      },
+      "provenance": {
+        "resultsSha256": "fc818717c7040b98d91603715da3cd615ffa789d6ab58de7eb3c02c9f85ff598",
+        "ledgerSha256": null,
+        "setupReconciliationSha256": "b771cfdaf4df08827f7897f6dcfb82b6f127173277a6078959d2e8dd0cd1bfcf"
+      },
+      "trials": [
+        {
+          "id": "invoice-rollup-baseline",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": null,
+          "fixtureSha256": "241592f1dfbdc8dea86c9b69ff7193735edb6a3018f739f07ffad4d0974c9062",
+          "arm": "baseline",
+          "phase": "complete",
+          "taskStatus": "failed",
+          "externalGradePass": false,
+          "verification": "unavailable",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "inconclusive",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": null,
+          "modelIdentities": [],
+          "modelsPinned": false,
+          "elapsedMs": 2211.0470330000003,
+          "accountingWaitMs": 0.04184899999972913,
+          "settledCostUsd": null,
+          "executionGenerations": 0,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        }
+      ]
+    },
+    {
+      "id": "underspecified-contract",
+      "role": "invalid-contract",
+      "protocol": "managed-production-v1",
+      "budgetTargetUsd": 2,
+      "settledCostUsd": 0.03559479999999999,
+      "costNote": "Settled generation ledger plus typed decision usage.cost; all attempts retained.",
+      "stopped": "interrupted; settle existing generations only",
+      "fixtureOffset": 0,
+      "sourceHashes": {
+        "fixtures.mjs": "a7c6631739bcd04f5a20f9fc192a0b4d92a47b6c00de7f62fc17a489e87464af",
+        "grade-worker.mjs": "52585b1a353b2d823f5e62a37a631c0f2f8ee3395d7bb37de2d7da17a7ea8af8",
+        "meter.mjs": "502fa7c3f7b9ad3ed61d82dfd048c9f555e1785cda09378a19d041701dbc70cc",
+        "entry.mjs": "5c96eff0ee30ab3868c051c7f4f66aaf13b7b16a802f8d4fe0c05d2563191048",
+        "runtime.mjs": "6c4f5d3db837c66fc3d9269b59acc2719d5781ac31294828eb041ee1772c6bb2",
+        "run.mjs": "900155a2c03b11c731e36fd02ea11d4df329d9a470589d3d2e0423578c29873a",
+        "mock-agent.mjs": "5844e5901611b7786e64c5431386dcbeaac97c8e2064802a2deaf2584453a0a4",
+        "../meter.mjs": "53b2d160c6bedfef58be3c85413bbb9dfa499580339a81aafa983ce247c28504",
+        "runner/src/orchestration/engine.ts": "61b92585accb27a6e657b5544ff5744806600d133ae680b2353fffb6d65c0660",
+        "runner/src/orchestration/delegation.ts": "f90930c64e5ef3d2ea347e8be4f290a6474154f899f446fc74c9061bd9bc28c9",
+        "runner/src/context/store.ts": "d2012296eef53355d3d4fa966912d10c248ec0c1a30776c1e42bee2218d1eef5",
+        "runner/src/routing/index.ts": "9d3983825667f86be96a240dd3bff0256304f354a26617855378d08e0547fd2b",
+        "runner/src/app/services.ts": "86ff6e3aa63642ee2707a5aef04dd6368f0ba0f09a252c1affda652640183079"
+      },
+      "provenance": {
+        "resultsSha256": "e8e4123975fc5737abdacdafffff43758b08a6ea4d546bb21b49108fe70b4d67",
+        "ledgerSha256": "4293a642c8ae26798648fb8890165dae0a70c829b5f34820309a7e1b0eb359ce"
+      },
+      "trials": [
+        {
+          "id": "invoice-rollup-baseline",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": null,
+          "fixtureSha256": "241592f1dfbdc8dea86c9b69ff7193735edb6a3018f739f07ffad4d0974c9062",
+          "arm": "baseline",
+          "phase": "complete",
+          "taskStatus": "failed",
+          "externalGradePass": false,
+          "verification": "failed",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "invalid-contract",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 55321.939404000004,
+          "accountingWaitMs": 5947.925229,
+          "settledCostUsd": 0.012102465,
+          "executionGenerations": 9,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        },
+        {
+          "id": "invoice-rollup-auto-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": null,
+          "fixtureSha256": "241592f1dfbdc8dea86c9b69ff7193735edb6a3018f739f07ffad4d0974c9062",
+          "arm": "auto-only",
+          "phase": "complete",
+          "taskStatus": "failed",
+          "externalGradePass": false,
+          "verification": "failed",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "invalid-contract",
+          "issue": null,
+          "featuresRequested": {
+            "auto": true,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": false,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "default",
+            "reason": "default route: decision abstained or unavailable"
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 60564.74868599999,
+          "accountingWaitMs": 12419.747438000006,
+          "settledCostUsd": 0.00866557,
+          "executionGenerations": 7,
+          "routingDecisions": 1,
+          "comparisonEligible": false
+        },
+        {
+          "id": "invoice-rollup-context-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": null,
+          "fixtureSha256": "241592f1dfbdc8dea86c9b69ff7193735edb6a3018f739f07ffad4d0974c9062",
+          "arm": "context-only",
+          "phase": "complete",
+          "taskStatus": "failed",
+          "externalGradePass": false,
+          "verification": "failed",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "invalid-contract",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": true,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": true,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 48717.840832999995,
+          "accountingWaitMs": 8771.917860999994,
+          "settledCostUsd": 0.00876345,
+          "executionGenerations": 9,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        },
+        {
+          "id": "invoice-rollup-memory-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": null,
+          "fixtureSha256": "241592f1dfbdc8dea86c9b69ff7193735edb6a3018f739f07ffad4d0974c9062",
+          "arm": "memory-only",
+          "phase": "complete",
+          "taskStatus": null,
+          "externalGradePass": false,
+          "verification": "unavailable",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "invalid-contract",
+          "issue": "benchmark-observation-or-execution-error",
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": true,
+            "delegation": false
+          },
+          "featuresExercised": null,
+          "featureEvidence": null,
+          "route": null,
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 46889.52492600001,
+          "accountingWaitMs": 5227.377585999988,
+          "settledCostUsd": 0.006063315,
+          "executionGenerations": 6,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        }
+      ]
+    },
+    {
+      "id": "corrected-invoice-original",
+      "role": "original-corrected",
+      "protocol": "managed-production-v1",
+      "budgetTargetUsd": 1.9,
+      "settledCostUsd": 0.056116430000000016,
+      "costNote": "Settled generation ledger plus typed decision usage.cost; all attempts retained.",
+      "stopped": "infrastructure failed; no automatic trial replay",
+      "fixtureOffset": 0,
+      "sourceHashes": {
+        "fixtures.mjs": "7ab6c6d21218f2624f9b7d6b50704749932b3c6eb84b18b42d3554369cf2d4da",
+        "grade-worker.mjs": "52585b1a353b2d823f5e62a37a631c0f2f8ee3395d7bb37de2d7da17a7ea8af8",
+        "meter.mjs": "502fa7c3f7b9ad3ed61d82dfd048c9f555e1785cda09378a19d041701dbc70cc",
+        "entry.mjs": "5c96eff0ee30ab3868c051c7f4f66aaf13b7b16a802f8d4fe0c05d2563191048",
+        "runtime.mjs": "5443ef1a4982c1fba205529757dec88b5a52ae662ae3d920e186efdb3dc2ac91",
+        "run.mjs": "40898f24ee83279f7ace71494745d05fbf8a90de3f05ba9e4fa6b49cafced2fd",
+        "mock-agent.mjs": "3f07b63df45000a613e75889bdb14f2ac75cffe6832c1f1f5e4ae88bac0081ae",
+        "../meter.mjs": "53b2d160c6bedfef58be3c85413bbb9dfa499580339a81aafa983ce247c28504",
+        "runner/src/orchestration/engine.ts": "effabeab8955f6a9c3a46d5eea630e8c6d867d0e73e2e97e378b309e137b15ed",
+        "runner/src/orchestration/delegation.ts": "f90930c64e5ef3d2ea347e8be4f290a6474154f899f446fc74c9061bd9bc28c9",
+        "runner/src/context/store.ts": "d2012296eef53355d3d4fa966912d10c248ec0c1a30776c1e42bee2218d1eef5",
+        "runner/src/routing/index.ts": "9d3983825667f86be96a240dd3bff0256304f354a26617855378d08e0547fd2b",
+        "runner/src/app/services.ts": "51013fe7b7af479804ad93a221bd94f0ea1df9db52e2d25af9f80d1f5b5946af"
+      },
+      "provenance": {
+        "resultsSha256": "b51f393cac12e8052f490a6c977ea2c3b116dfe4f8e22330ec375f467a1b3046",
+        "ledgerSha256": "d88d7044a8ae13468b7bc645925cd3f6103bb8bd36ee5662e0fe0f9026e452b1"
+      },
+      "trials": [
+        {
+          "id": "invoice-rollup-baseline",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": 2,
+          "fixtureSha256": "46139bbf058b5ba4a8b29839172f33d5c422f69c27d46fdae80d518ca39ca975",
+          "arm": "baseline",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 77823.2148,
+          "accountingWaitMs": 91523.61202599999,
+          "settledCostUsd": 0.014023260000000003,
+          "executionGenerations": 10,
+          "routingDecisions": 0,
+          "comparisonEligible": true
+        },
+        {
+          "id": "invoice-rollup-auto-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": 2,
+          "fixtureSha256": "46139bbf058b5ba4a8b29839172f33d5c422f69c27d46fdae80d518ca39ca975",
+          "arm": "auto-only",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": true,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": false,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "default",
+            "reason": "default route: decision abstained or unavailable"
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 49400.076418,
+          "accountingWaitMs": 68719.046306,
+          "settledCostUsd": 0.011821749999999999,
+          "executionGenerations": 7,
+          "routingDecisions": 1,
+          "comparisonEligible": false
+        },
+        {
+          "id": "invoice-rollup-context-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": 2,
+          "fixtureSha256": "46139bbf058b5ba4a8b29839172f33d5c422f69c27d46fdae80d518ca39ca975",
+          "arm": "context-only",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": true,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": true,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 62934.143,
+          "accountingWaitMs": 9892.280686999991,
+          "settledCostUsd": 0.010973765,
+          "executionGenerations": 11,
+          "routingDecisions": 0,
+          "comparisonEligible": true
+        },
+        {
+          "id": "invoice-rollup-memory-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": 2,
+          "fixtureSha256": "46139bbf058b5ba4a8b29839172f33d5c422f69c27d46fdae80d518ca39ca975",
+          "arm": "memory-only",
+          "phase": "complete",
+          "taskStatus": null,
+          "externalGradePass": true,
+          "verification": "unavailable",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "inconclusive",
+          "issue": "benchmark-observation-or-execution-error",
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": true,
+            "delegation": false
+          },
+          "featuresExercised": null,
+          "featureEvidence": null,
+          "route": null,
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 64312.199292000005,
+          "accountingWaitMs": 0.01886499999091029,
+          "settledCostUsd": 0.008293070000000001,
+          "executionGenerations": 7,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        },
+        {
+          "id": "invoice-rollup-delegation-only",
+          "fixture": "invoice-rollup",
+          "fixtureVersion": 2,
+          "fixtureSha256": "46139bbf058b5ba4a8b29839172f33d5c422f69c27d46fdae80d518ca39ca975",
+          "arm": "delegation-only",
+          "phase": "complete",
+          "taskStatus": null,
+          "externalGradePass": true,
+          "verification": "unavailable",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "inconclusive",
+          "issue": "benchmark-observation-or-execution-error",
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": true
+          },
+          "featuresExercised": null,
+          "featureEvidence": null,
+          "route": null,
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 66605.24807099998,
+          "accountingWaitMs": 0.0143269999534823,
+          "settledCostUsd": 0.011004585,
+          "executionGenerations": 8,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        },
+        {
+          "id": "coalesced-requests-auto-only",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "auto-only",
+          "phase": "infrastructure-failed",
+          "taskStatus": null,
+          "externalGradePass": false,
+          "verification": "unavailable",
+          "verificationTimedOut": false,
+          "accepted": false,
+          "classification": "inconclusive",
+          "issue": "benchmark-observation-or-execution-error",
+          "featuresRequested": {
+            "auto": true,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": null,
+          "featureEvidence": null,
+          "route": null,
+          "modelIdentities": [],
+          "modelsPinned": false,
+          "elapsedMs": 15605.183129000012,
+          "accountingWaitMs": 0.014416999998502433,
+          "settledCostUsd": 0,
+          "executionGenerations": 0,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        }
+      ]
+    },
+    {
+      "id": "remaining-coalesced-revised",
+      "role": "remaining-revised",
+      "protocol": "managed-production-v1",
+      "budgetTargetUsd": 1.75,
+      "settledCostUsd": 0.051418011000000007,
+      "costNote": "Settled generation ledger plus typed decision usage.cost; all attempts retained.",
+      "stopped": null,
+      "fixtureOffset": 1,
+      "sourceHashes": {
+        "fixtures.mjs": "7ab6c6d21218f2624f9b7d6b50704749932b3c6eb84b18b42d3554369cf2d4da",
+        "grade-worker.mjs": "52585b1a353b2d823f5e62a37a631c0f2f8ee3395d7bb37de2d7da17a7ea8af8",
+        "meter.mjs": "502fa7c3f7b9ad3ed61d82dfd048c9f555e1785cda09378a19d041701dbc70cc",
+        "entry.mjs": "5c96eff0ee30ab3868c051c7f4f66aaf13b7b16a802f8d4fe0c05d2563191048",
+        "runtime.mjs": "c460d7b521e27501245af581ce38bf8f1cc67250c5d048687da75fca1a9e5663",
+        "run.mjs": "573fda0b159cc5e3521cd980a3c548b16c761457e957351b350b354129786247",
+        "mock-agent.mjs": "3f07b63df45000a613e75889bdb14f2ac75cffe6832c1f1f5e4ae88bac0081ae",
+        "../meter.mjs": "53b2d160c6bedfef58be3c85413bbb9dfa499580339a81aafa983ce247c28504",
+        "runner/src/orchestration/engine.ts": "effabeab8955f6a9c3a46d5eea630e8c6d867d0e73e2e97e378b309e137b15ed",
+        "runner/src/orchestration/delegation.ts": "f90930c64e5ef3d2ea347e8be4f290a6474154f899f446fc74c9061bd9bc28c9",
+        "runner/src/context/store.ts": "d2012296eef53355d3d4fa966912d10c248ec0c1a30776c1e42bee2218d1eef5",
+        "runner/src/routing/index.ts": "9d3983825667f86be96a240dd3bff0256304f354a26617855378d08e0547fd2b",
+        "runner/src/app/services.ts": "51013fe7b7af479804ad93a221bd94f0ea1df9db52e2d25af9f80d1f5b5946af"
+      },
+      "provenance": {
+        "resultsSha256": "e6232e2b28bf078971b58ab7967874f83b0d5272ed776345be1948ae78b26103",
+        "ledgerSha256": "8c9f3db518e32bbabe22fb73d2e6f7b8751e23c859fb1f7477c5c4b4be62583e"
+      },
+      "trials": [
+        {
+          "id": "coalesced-requests-auto-only",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "auto-only",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": true,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": false,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "default",
+            "reason": "default route: decision abstained or unavailable"
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 69100.45516000001,
+          "accountingWaitMs": 80426.105828,
+          "settledCostUsd": 0.012420436000000002,
+          "executionGenerations": 9,
+          "routingDecisions": 1,
+          "comparisonEligible": false
+        },
+        {
+          "id": "coalesced-requests-context-only",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "context-only",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": true,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": true,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 84495.371095,
+          "accountingWaitMs": 59114.491698,
+          "settledCostUsd": 0.009963005,
+          "executionGenerations": 9,
+          "routingDecisions": 0,
+          "comparisonEligible": true
+        },
+        {
+          "id": "coalesced-requests-memory-only",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "memory-only",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": true,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": true,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 49336.39463600001,
+          "accountingWaitMs": 50119.662026000005,
+          "settledCostUsd": 0.009232520000000001,
+          "executionGenerations": 10,
+          "routingDecisions": 0,
+          "comparisonEligible": true
+        },
+        {
+          "id": "coalesced-requests-delegation-only",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "delegation-only",
+          "phase": "complete",
+          "taskStatus": "failed",
+          "externalGradePass": true,
+          "verification": "failed",
+          "verificationTimedOut": true,
+          "accepted": false,
+          "classification": "inconclusive",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": true
+          },
+          "featuresExercised": false,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 71445.25773100002,
+          "accountingWaitMs": 8379.315882999974,
+          "settledCostUsd": 0.011235495,
+          "executionGenerations": 7,
+          "routingDecisions": 0,
+          "comparisonEligible": false
+        },
+        {
+          "id": "coalesced-requests-baseline",
+          "fixture": "coalesced-requests",
+          "fixtureVersion": 2,
+          "fixtureSha256": "ef4f5c928e57b836e8e321bba7dc6cec86c0d15c57efc71b41bc946569ea2211",
+          "arm": "baseline",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": false
+          },
+          "featuresExercised": true,
+          "featureEvidence": {
+            "curatedContextInjected": false,
+            "currentMemoryInjected": false,
+            "chosenRouteDispatched": false,
+            "childAttempts": 0
+          },
+          "route": {
+            "profile": "bench-haiku",
+            "model": "anthropic/claude-haiku-5.5",
+            "source": "explicit",
+            "reason": null
+          },
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 91252.32454200002,
+          "accountingWaitMs": 58440.847243,
+          "settledCostUsd": 0.008566555,
+          "executionGenerations": 9,
+          "routingDecisions": 0,
+          "comparisonEligible": true
+        }
+      ]
+    },
+    {
+      "id": "forced-cross-provider-functional",
+      "role": "functional",
+      "protocol": "managed-functional-v1",
+      "budgetTargetUsd": 0.15,
+      "settledCostUsd": 0.007878757,
+      "costNote": "Settled generation ledger plus typed decision usage.cost; all attempts retained.",
+      "stopped": null,
+      "fixtureOffset": 0,
+      "sourceHashes": {
+        "functional.mjs": "64b7b1822e533c3f9687b81f15565746f0b191079e5d488a35218cfbb2b52fed",
+        "functional-grade.mjs": "064e63e24d34c0298b210df37182f0481a9605528515e33f06dcdf6b785613ee",
+        "entry.mjs": "5c96eff0ee30ab3868c051c7f4f66aaf13b7b16a802f8d4fe0c05d2563191048",
+        "runtime.mjs": "c460d7b521e27501245af581ce38bf8f1cc67250c5d048687da75fca1a9e5663",
+        "meter.mjs": "9969f5217f4593d87459fedde3780b0ec5c01cfeb6aea294735c21d377601df8"
+      },
+      "provenance": {
+        "resultsSha256": "9444635f93ce49f2f30fd3db444df3fe5d87bad69b81ff4cd408f4d238e2129e",
+        "ledgerSha256": "9b08ef0e0fe18935f974dcbdc5daa3d042b444c24434af96f6b106753fe5e60d"
+      },
+      "trials": [
+        {
+          "id": "forced-cross-provider-delegation",
+          "fixture": "two-file-functional",
+          "fixtureVersion": null,
+          "fixtureSha256": null,
+          "arm": "forced-delegation",
+          "phase": "complete",
+          "taskStatus": "succeeded",
+          "externalGradePass": true,
+          "verification": "passed",
+          "verificationTimedOut": false,
+          "accepted": true,
+          "classification": "accepted",
+          "issue": null,
+          "featuresRequested": {
+            "auto": false,
+            "context": false,
+            "memory": false,
+            "delegation": true
+          },
+          "featuresExercised": null,
+          "featureEvidence": null,
+          "route": null,
+          "modelIdentities": [
+            {
+              "profile": "bench-haiku",
+              "requested": "anthropic/claude-haiku-5.5",
+              "canonical": "anthropic/claude-haiku-5.5-20261007",
+              "actual": "anthropic/claude-haiku-5.5-20261007",
+              "provider": "Anthropic"
+            },
+            {
+              "profile": "bench-deepseek",
+              "requested": "deepseek/deepseek-v4.1-flash-1017",
+              "canonical": "deepseek/deepseek-v4.1-flash-20261017",
+              "actual": "deepseek/deepseek-v4.1-flash-20261017",
+              "provider": "DigitalOcean"
+            }
+          ],
+          "modelsPinned": true,
+          "elapsedMs": 92143.70704000001,
+          "accountingWaitMs": null,
+          "settledCostUsd": 0.007878757,
+          "executionGenerations": 11,
+          "routingDecisions": 0,
+          "functionalPass": true,
+          "functionalProof": {
+            "rootSucceeded": true,
+            "childSucceeded": true,
+            "childAttempts": 1,
+            "rootModelPinned": true,
+            "childModelPinned": true,
+            "distinctProviders": true
+          },
+          "functionalTasks": [
+            {
+              "role": "root",
+              "status": "succeeded",
+              "attempts": 1,
+              "requestedProfile": "bench-haiku",
+              "actualProfile": "bench-haiku",
+              "actualModel": "anthropic/claude-haiku-5.5"
+            },
+            {
+              "role": "child",
+              "status": "succeeded",
+              "attempts": 1,
+              "requestedProfile": "bench-deepseek",
+              "actualProfile": "bench-deepseek",
+              "actualModel": "deepseek/deepseek-v4.1-flash-1017"
+            }
+          ],
+          "comparisonEligible": false
+        }
+      ]
+    }
+  ]
+}

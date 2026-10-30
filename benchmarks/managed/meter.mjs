@@ -137,7 +137,9 @@ export class ManagedMeter extends Meter {
     const requestedChooser = input.model;
     input.model = this.chooser;
     while (
-      this.spent + this.records.filter((record) => record.costUsd === null).length * 0.2 + 0.2 >
+      this.spent +
+        (this.records.filter((record) => record.costUsd === null).length + 1) *
+          this.unsettledCallAllowanceUsd >
         this.budgetUsd &&
       this.pendingBilling.size &&
       !this.blocked
@@ -146,7 +148,9 @@ export class ManagedMeter extends Meter {
     const trial = this.records.slice(this.active.start);
     if (
       this.blocked ||
-      this.spent + this.records.filter((record) => record.costUsd === null).length * 0.2 + 0.2 >
+      this.spent +
+        (this.records.filter((record) => record.costUsd === null).length + 1) *
+          this.unsettledCallAllowanceUsd >
         this.budgetUsd ||
       trial.reduce((sum, record) => sum + (record.costUsd ?? 0), 0) >= this.perTrialUsd ||
       trial.length >= this.maxCallsPerTrial
@@ -263,8 +267,10 @@ export function mockManagedFetcher(profiles) {
       return Response.json({
         data: {
           total_cost: 0,
-          model: models.get(parsed.searchParams.get("id")),
-          provider_name: "mock",
+          model:
+            profiles.find((profile) => profile.model === models.get(parsed.searchParams.get("id")))
+              ?.canonical ?? models.get(parsed.searchParams.get("id")),
+          provider_name: `mock-${profiles.find((profile) => profile.model === models.get(parsed.searchParams.get("id")))?.id ?? "provider"}`,
           native_tokens_prompt: 1,
           native_tokens_completion: 1,
         },

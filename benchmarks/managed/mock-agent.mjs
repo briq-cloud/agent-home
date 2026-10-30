@@ -57,7 +57,10 @@ async function handle(message) {
     });
     return { stopReason: "end_turn" };
   }
-  const isChild = text.includes("MANAGED MOCK CHILD");
+  const functional = text.includes("DELEGATION FUNCTIONAL");
+  const isChild =
+    text.includes("MANAGED MOCK CHILD") ||
+    (functional && !text.includes("DELEGATION FUNCTIONAL PROBE."));
   const server = session.mcpServers?.[0];
   let client, transport;
   try {
@@ -91,7 +94,9 @@ async function handle(message) {
       await client.connect(transport);
       const spawned = await client.callTool({
         name: "home_task_spawn",
-        arguments: { prompt: "MANAGED MOCK CHILD: repair only " + fixture.childFile },
+        arguments: functional
+          ? { prompt: "DELEGATION FUNCTIONAL CHILD", agentId: "bench-deepseek" }
+          : { prompt: "MANAGED MOCK CHILD: repair only " + fixture.childFile },
       });
       const child = JSON.parse(spawned.content[0].text);
       const waited = await client.callTool({
@@ -100,10 +105,16 @@ async function handle(message) {
       });
       if (waited.isError) throw Error("mock child failed");
     }
-    for (const [file, content] of Object.entries(fixture.reference))
-      if (isChild ? file === fixture.childFile : !server || file !== fixture.childFile)
-        await writeFile(join(session.cwd, file), content);
-    if (!isChild)
+    if (functional)
+      await writeFile(
+        join(session.cwd, isChild ? "child.txt" : "root.txt"),
+        isChild ? "child:beta\n" : "root:alpha\n",
+      );
+    else
+      for (const [file, content] of Object.entries(fixture.reference))
+        if (isChild ? file === fixture.childFile : !server || file !== fixture.childFile)
+          await writeFile(join(session.cwd, file), content);
+    if (!isChild && !functional)
       await writeFile(
         join(session.cwd, "CHANGELOG.md"),
         "Implemented exact contract behavior and checked boundaries.\n",
