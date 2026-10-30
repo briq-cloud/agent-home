@@ -13,7 +13,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | Copilot CLI (`copilot`) | 1.0.105 | `COPILOT_HOME` |
 | Cursor (`agent`) | 2026.10.22-27dcf5f | `XDG_CONFIG_HOME`/cursor |
 | Grok Build (`grok`) | 1.0.70 | `GROK_HOME` |
-| Mistral Vibe (`vibe`) | 3.0.3 | `VIBE_HOME` |
+| Mistral Vibe (`vibe`) | 3.0.4 | `VIBE_HOME` |
 | Gemini CLI (`gemini`), API key only | 0.66.0 | `GEMINI_CLI_HOME`/.gemini |
 
 ## Terminal
@@ -22,7 +22,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 
 ## Runner
 
-`agent-home-runner` 0.2.2 drives the CLIs over ACP for apps ([runner/README.md](runner/README.md)), with `claude-agent-acp` 0.98.0 and `codex-acp` 2.3.0, on `@agentclientprotocol/sdk` 2.1.0.
+`agent-home-runner` 0.2.3 drives the CLIs over ACP for apps ([runner/README.md](runner/README.md)), with `claude-agent-acp` 0.98.0 and `codex-acp` 2.3.0, on `@agentclientprotocol/sdk` 2.1.0.
 
 ## Downloads
 
@@ -35,10 +35,10 @@ Each one checked against its publisher's checksum at build, or recorded where no
 | Copilot CLI | `aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2` | the GitHub release digest |
 | Cursor | `85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294` | none published: recorded |
 | Grok Build | `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9` | none published: recorded |
-| Mistral Vibe | `28a2b1f6ae8580853492f2d1aca883901fc4dc062ce484a6057acc0a0bf38521` | the PyPI digest of its wheel |
+| Mistral Vibe | `fa201f53a8f7574435c1b911218a4a537e3678831f9cbd7791e5fb32658de956` | the PyPI digest of its wheel |
 | Gemini CLI | `269734d35287fbd8ed2982534258ecf4a95f184b6e06e6732e0d6850c28701d9` | the npm registry integrity |
 | ttyd | `8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55` | its SHA256SUMS |
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-10-30.3`, 1437 MB compressed, digest `sha256:56351f8fe1cc7af1d5f6a5825e263a85577a196b67b7789d396458bfc8533e1b`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-30.3 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-10-30.4`, 1435 MB compressed, digest `sha256:ebed62d6acf42b299d20dcce8fbdf840de93411102284c562a8f818677a60c74`, on `ghcr.io/briq-cloud/sandbox@sha256:b3de0c6a50bdceea0c95d346c6b3cbc996c74741748bd9d28ec5bd13e8eecdd9`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-10-30.4 --repo briq-cloud/agent-home`.
