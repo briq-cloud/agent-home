@@ -33,9 +33,13 @@ Raw `/acp/<cli>` remains available without managed task services.
 | `GET /tasks/:id/permissions` | Live permission requests. |
 | `POST /tasks/:id/permissions/:requestId` | `{optionId}`; only offered options are accepted. |
 
-A task supports `id`, `parentId`, `dependencyIds`, `inputRefs`, `deadline`, `notBefore`,
+A task supports optional `title` (up to 160 characters), `id`, `parentId`, `dependencyIds`, `inputRefs`, `deadline`, `notBefore`,
 `maxAttempts`, `maxRuntimeMs`, `modeId`, `acceptance`, and explicit routing/context options.
 Dependency failure blocks queued dependents. Crashed attempts require review before retry.
+Task listings include the bounded title and a live `waitReason` when the runner can prove it:
+prerequisites, scheduled start, approval, yielded coordinator, draining vendor request, capacity or workspace.
+Titles default to the first nonempty instruction line; older rows are backfilled in bounded batches.
+Unknown wait states stay null. Historical permission records alone do not imply a live approval request.
 `modeId` must be advertised by the chosen CLI. No unattended permission mode is selected implicitly.
 
 For API execution, pass `allowPaidApi:true`. Priced routing also needs `maxEstimatedUsd`.

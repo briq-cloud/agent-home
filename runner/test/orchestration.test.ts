@@ -128,6 +128,7 @@ function fixture(t: TestContext, extra: Partial<EngineOptions> = {}) {
     context,
     hub,
     selections,
+    options,
     get engine() {
       return engine;
     },
@@ -204,6 +205,7 @@ test('retains permissions until an explicit scoped valid answer, with durable re
   const answer = f.hub.permission('session-1');
   const pending = f.engine.pendingPermissions('project', task.id)[0]!;
   assert.ok(pending);
+  assert.deepEqual(f.engine.projectTasks([f.tasks.getTask(task.id)!])[0]!.waitReason, { code: 'approval' });
   assert.equal(f.engine.pendingPermissions('other').length, 0);
   const ref = f.tasks.getTask(task.id)!.permissionRef!;
   assert.equal(artifact(f.context, 'project', ref)[0].requestId, pending.requestId);
@@ -215,6 +217,7 @@ test('retains permissions until an explicit scoped valid answer, with durable re
   assert.deepEqual((await answer).result, { outcome: { outcome: 'selected', optionId: 'allow' } });
   assert.equal(f.engine.answerPermission('project', task.id, pending.requestId, 'allow'), false);
   assert.equal(f.tasks.getTask(task.id)?.permissionRef, null);
+  assert.equal(f.engine.projectTasks([f.tasks.getTask(task.id)!])[0]!.waitReason, null);
   const cancelled = f.hub.permission('session-1');
   f.engine.cancel(task.id);
   assert.deepEqual((await cancelled).result, { outcome: { outcome: 'cancelled' } });
@@ -291,6 +294,10 @@ test('one child executes only while its parent yields; other roots serialize and
   assert.equal(f.hub.calls.filter((call) => call.method === 'session/new').length, 1);
   const waiting = f.engine.wait(child.id, { parentTaskId: parent.id });
   await until(() => f.hub.prompts.has('session-2'));
+  assert.deepEqual(f.engine.projectTasks([f.tasks.getTask(parent.id)!])[0]!.waitReason, {
+    code: 'yielded',
+    taskIds: [child.id],
+  });
   assert.equal(f.tasks.getTask(other.id)?.status, 'queued');
   assert.equal(f.hub.calls.filter((call) => call.method === 'session/new')[1]!.params.mcpServers[0]?.name, 'delegate');
   assert.equal(delegates, 2); // Child inbox/context tools remain available; server refuses nested spawn.
@@ -301,6 +308,7 @@ test('one child executes only while its parent yields; other roots serialize and
   assert.match(prompts[1]!.params.prompt[0].text, /home_task_send/);
   f.hub.finish('session-2', 'child result');
   assert.equal((await waiting).status, 'succeeded');
+  assert.equal(f.engine.projectTasks([f.tasks.getTask(parent.id)!])[0]!.waitReason, null);
   f.hub.finish('session-1', 'parent result');
   await f.engine.wait(parent.id);
   await until(() => f.hub.prompts.has('session-3'));
@@ -399,11 +407,15 @@ test('cancelled native prompts retain their workspace until the vendor actually 
   await until(() => f.hub.detached.length === 1);
   assert.equal(f.tasks.getTask('second')?.status, 'queued', 'cancel request is not proof the vendor stopped writing');
   assert.deepEqual(f.engine.fleetStatus().draining, [{ taskId: 'first', projectId: 'project' }]);
+  const held = f.engine.projectTasks([f.tasks.getTask('first')!, f.tasks.getTask('second')!]);
+  assert.deepEqual(held[0]!.waitReason, { code: 'draining' });
+  assert.deepEqual(held[1]!.waitReason, { code: 'workspace', taskIds: ['first'] });
   f.hub.finish('session-1', 'late result');
   await until(() => f.hub.prompts.has('session-2'));
   f.hub.finish('session-2');
   assert.equal((await f.engine.wait('second')).status, 'succeeded');
   assert.deepEqual(f.engine.fleetStatus().draining, []);
+  assert.equal(f.engine.projectTasks([f.tasks.getTask('first')!])[0]!.waitReason, null);
 });
 
 test('a coordinator keeps yielding while a cancelled child or prerequisite native prompt drains', async (t) => {
@@ -793,4 +805,130 @@ test('a verifier exception preserves output as a failed verification rather than
   assert.equal(output.text, 'model output');
   assert.equal(output.verification.status, 'failed');
   assert.equal(output.verification.reason, 'Verifier unavailable');
+});
+
+test('persists explicit or first nonempty prompt-line titles, bounded without splitting a surrogate pair', (t) => {
+  const f = fixture(t);
+  const derived = f.engine.submit(
+    submission('derived-title', { prompt: '\n\r\n  Repair\tinvoice behavior  \nNever include this later line' }),
+  );
+  assert.equal(derived.title, 'Repair invoice behavior');
+  const named = f.engine.submit(submission('explicit-title', { title: '  Operator\nchosen summary  ' }));
+  assert.equal(named.title, 'Operator chosen summary');
+  assert.equal(artifact(f.context, named.projectId, named.promptRef).submission.title, named.title);
+  const long = f.engine.submit(submission('long-title', { prompt: 'a'.repeat(159) + '😀 trailing' }));
+  assert.equal(long.title, 'a'.repeat(159));
+  for (const title of ['', '  ', '\0', 'x'.repeat(161), 10])
+    assert.throws(() => f.engine.submit(submission('invalid-title', { title: title as string })));
+});
+
+test('legacy title backfill is indexed, scoped, ten per second and does not read prompt artifacts during projection', async (t) => {
+  let now = Date.now();
+  const f = fixture(t, { now: () => now });
+  for (let i = 0; i < 25; i++) {
+    const projectId = i === 24 ? 'other' : 'project';
+    const promptRef = f.context.putArtifact({
+      project: 'project',
+      content: JSON.stringify({
+        version: 1,
+        projectRoot: f.root,
+        submission: { prompt: `\nLegacy task ${i}\nDo not use this second line` },
+      }),
+    }).id;
+    f.tasks.createTask({
+      id: `legacy-${String(i).padStart(2, '0')}`,
+      projectId,
+      promptRef: i === 23 ? 'missing' : promptRef,
+      route: { mode: 'auto' },
+      notBefore: now + 60_000,
+    });
+  }
+  const before = f.tasks.listTasks().map(({ updatedAt, leaseToken }) => ({ updatedAt, leaseToken }));
+  const read = f.context.readArtifact.bind(f.context);
+  let reads = 0;
+  f.context.readArtifact = (input) => {
+    reads++;
+    return read(input);
+  };
+  f.engine.start();
+  assert.equal(reads, 10);
+  f.engine.projectTasks(f.tasks.listTasks());
+  await sleep(30);
+  assert.equal(reads, 10, 'fast polls and list projection must not accelerate migration');
+  now += 1000;
+  await until(() => reads === 20);
+  now += 1000;
+  await until(() => reads === 25);
+  assert.equal(f.tasks.getTask('legacy-00')!.title, 'Legacy task 0');
+  assert.equal(f.tasks.getTask('legacy-23')!.title, 'Untitled task');
+  assert.equal(f.tasks.getTask('legacy-24')!.title, 'Untitled task', 'cross-project prompt artifact is never read');
+  assert.deepEqual(
+    f.tasks.listTasks().map(({ updatedAt, leaseToken }) => ({ updatedAt, leaseToken })),
+    before,
+  );
+  await f.engine.stop();
+  f.replaceEngine().start();
+  await sleep(20);
+  assert.equal(reads, 25, 'completed title migration must survive engine restart');
+  assert.equal(f.hub.calls.length, 0);
+});
+
+test('dependency and schedule projections use current facts; saved permission metadata cannot imply a live approval', (t) => {
+  let now = Date.now();
+  const f = fixture(t, { now: () => now });
+  const until = now + 60_000;
+  const [after, before, scheduled] = f.engine.submitBatch([
+    submission('after-wait', { dependencyIds: ['before-wait'] }),
+    submission('before-wait', { notBefore: until }),
+    submission('scheduled-wait', { notBefore: until }),
+  ]);
+  const projected = f.engine.projectTasks([after!, before!, scheduled!]);
+  assert.deepEqual(projected[0]!.waitReason, { code: 'dependencies', taskIds: ['before-wait'] });
+  assert.deepEqual(projected[1]!.waitReason, { code: 'scheduled', until });
+  assert.deepEqual(projected[2]!.waitReason, { code: 'scheduled', until });
+  f.tasks.cancel('before-wait');
+  assert.equal(
+    f.engine.projectTasks([f.tasks.getTask('after-wait')!])[0]!.waitReason,
+    null,
+    'permanently blocked is a status, not a temporary wait',
+  );
+  now = until;
+  assert.equal(
+    f.engine.projectTasks([scheduled!])[0]!.waitReason,
+    null,
+    'stopped engine must not invent capacity or an active wait',
+  );
+  const stale = f.engine.submit(submission('saved-approval'));
+  const claim = f.tasks.claimNext({ taskId: stale.id, workerId: 'old-process', leaseMs: 60_000 })!;
+  f.tasks.heartbeat(claim.id, claim.leaseToken, 60_000, { permissionRef: 'saved-permission-ref' });
+  assert.equal(f.engine.projectTasks([f.tasks.getTask(stale.id)!])[0]!.waitReason, null);
+});
+
+test('capacity and known overlapping-root reasons share scheduler gates without artifact reads or other-project links', async (t) => {
+  const roots: Record<string, string> = {};
+  const f = fixture(t, { maxConcurrent: 4, projectRoot: (id) => roots[id]! });
+  for (const project of ['a', 'b', 'c']) {
+    roots[project] = join(f.root, project);
+    mkdirSync(roots[project]!);
+  }
+  roots.alias = roots.a!;
+  f.engine.submit(submission('root-a', { projectId: 'a' }));
+  f.engine.submit(submission('root-b', { projectId: 'b' }));
+  f.engine.start();
+  await until(() => f.hub.prompts.size === 2);
+  const capacity = f.engine.submit(submission('root-c', { projectId: 'c' }));
+  const workspace = f.engine.submit(submission('alias-a', { projectId: 'alias' }));
+  const read = f.context.readArtifact;
+  f.context.readArtifact = () => {
+    throw Error('Task projection must not inspect prompt artifacts');
+  };
+  try {
+    const views = f.engine.projectTasks([capacity, workspace]);
+    assert.deepEqual(views[0]!.waitReason, { code: 'capacity' });
+    assert.deepEqual(views[1]!.waitReason, { code: 'workspace' });
+  } finally {
+    f.context.readArtifact = read;
+  }
+  assert.equal(f.tasks.getTask(capacity.id)!.status, 'queued');
+  assert.equal(f.tasks.getTask(workspace.id)!.status, 'queued');
 });

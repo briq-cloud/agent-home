@@ -12,7 +12,18 @@ const element = (tag, attrs = {}, ...children) => {
 const encode = encodeURIComponent;
 const working = task => ['queued', 'running'].includes(task.status);
 const short = id => String(id).slice(0, 12);
+const taskTitle = task => typeof task.title === 'string' && task.title.trim() ? task.title.trim() : (task.parentId ? 'Child task' : 'Coordinator task');
 const timestamp = value => value ? new Date(value).toLocaleString() : '—';
+function waitLabel(task) {
+  const reason = task.waitReason;
+  if (!reason || typeof reason !== 'object') return null;
+  const labels = { dependencies: 'Waiting for prerequisites', scheduled: 'Waiting for scheduled start',
+    approval: 'Waiting for approval', yielded: 'Coordinator paused for child work',
+    draining: 'Vendor request still finishing', capacity: 'Waiting for execution capacity', workspace: 'Waiting for shared workspace' };
+  const label = labels[reason.code];
+  return typeof label === 'string' ? label + (reason.code === 'scheduled' && Number.isFinite(reason.until) ? ' · ' + timestamp(reason.until) : '') : null;
+}
+
 const describeRoute = route => route?.cli || route?.agentId || 'Auto';
 const freshId = prefix => prefix + '-' + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
 const textOf = artifact => typeof artifact === 'string' ? artifact : JSON.stringify(artifact, null, 2);
@@ -29,9 +40,9 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   const notice = element('p', { class: 'fleet-notice', role: 'status', 'aria-live': 'polite' });
   const project = element('select', { 'aria-label': 'Fleet project' });
   const filter = element('select', { 'aria-label': 'Task status filter' },
-    ...[['all', 'All states'], ['working', 'Working'], ['attention', 'Needs attention'], ['finished', 'Finished']]
+    ...[['all', 'All states'], ['working', 'Working'], ['waiting', 'Waiting'], ['attention', 'Needs attention'], ['finished', 'Finished']]
       .map(([value, label]) => element('option', { value }, label)));
-  const search = element('input', { 'aria-label': 'Filter loaded tasks', placeholder: 'Filter IDs or routes' });
+  const search = element('input', { 'aria-label': 'Filter loaded tasks', placeholder: 'Filter titles, IDs, routes or waits' });
   const lookup = element('input', { 'aria-label': 'Full task ID', placeholder: 'Inspect a full task ID', maxlength: '256' });
   const capacity = element('p', { class: 'muted fleet-capacity' });
   const draining = element('div', { class: 'fleet-draining', role: 'status', hidden: true });
@@ -173,7 +184,7 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   function drawTree() {
     const tasks = allTasks(), byId = new Map(tasks.map(task => [task.id, task]));
     const signature = JSON.stringify([state.selected, filter.value, search.value, state.nextOffset, state.pages.size,
-      tasks.map(task => [task.id, task.parentId, task.status, task.route, task.permissionRef])]);
+      tasks.map(task => [task.id, task.title, task.parentId, task.status, task.route, task.permissionRef, task.waitReason])]);
     if (tree.dataset.signature === signature) return; tree.dataset.signature = signature;
     const position = tree.scrollTop, childrenByParent = new Map();
     for (const task of tasks) {
@@ -182,9 +193,10 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
     const matches = task => {
       const term = search.value.trim().toLowerCase();
       const stateMatches = filter.value === 'all' || filter.value === 'working' && working(task) ||
-        filter.value === 'attention' && (['failed', 'blocked'].includes(task.status) || task.permissionRef && task.status === 'running') ||
+        filter.value === 'waiting' && !!waitLabel(task) ||
+        filter.value === 'attention' && (['failed', 'blocked'].includes(task.status) || task.waitReason?.code === 'approval' && task.status === 'running') ||
         filter.value === 'finished' && !working(task);
-      return stateMatches && (!term || (task.id + ' ' + describeRoute(task.route) + ' ' + (task.route?.model || '')).toLowerCase().includes(term));
+      return stateMatches && (!term || (taskTitle(task) + ' ' + task.id + ' ' + describeRoute(task.route) + ' ' + (task.route?.model || '') + ' ' + (waitLabel(task) || '')).toLowerCase().includes(term));
     };
     const visible = new Set(tasks.filter(matches).map(task => task.id));
     for (const task of tasks.filter(matches)) {
@@ -196,9 +208,11 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
       if (visited.has(task.id) || !visible.has(task.id)) return null; visited.add(task.id);
       const button = element('button', { type: 'button', class: 'fleet-task' + (task.id === state.selected ? ' selected' : ''),
         'aria-pressed': String(task.id === state.selected), 'data-task-id': task.id, onclick: () => inspect(task.id).catch(showError) },
-        element('span', { class: 'fleet-task-title' }, (task.parentId ? 'Child ' : 'Coordinator ') + short(task.id)),
+        element('span', { class: 'fleet-task-title' }, taskTitle(task)),
         element('span', { class: 'fleet-state ' + task.status }, task.status),
-        element('span', { class: 'muted' }, 'Requested: ' + describeRoute(task.route) + (task.permissionRef && task.status === 'running' ? ' · Permission pending' : '')));
+        element('span', { class: 'muted' }, (task.parentId ? 'Child · ' : 'Coordinator · ') + short(task.id)),
+        element('span', { class: 'muted' }, 'Requested: ' + describeRoute(task.route)),
+        waitLabel(task) ? element('span', { class: 'muted fleet-wait' }, waitLabel(task)) : null);
       const item = element('li', {}, button);
       const children = (childrenByParent.get(task.id) || []).filter(child => visible.has(child.id)).map(branch).filter(Boolean);
       if (children.length) item.append(element('ul', {}, children));
@@ -249,9 +263,10 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
       task.status === 'running' ? api('GET', '/tasks/' + encode(id) + '/permissions') : Promise.resolve({ permissions: [] }),
     ]);
     if (state.selected !== id || state.project !== projectId || generation !== detailGeneration) return;
-    detailTitle.textContent = (task.parentId ? 'Child · ' : 'Coordinator · ') + short(id);
+    detailTitle.textContent = taskTitle(task);
     const actual = session?.route || output?.route;
-    const rows = [ ['Task ID', id], ['State', task.status], ['Requested route', describeRoute(task.route)],
+    const rows = [ ['Task ID', id], ['Role', task.parentId ? 'Child' : 'Coordinator'], ['State', task.status],
+      ['Wait reason', waitLabel(task) || (working(task) ? 'Not reported' : '—')], ['Requested route', describeRoute(task.route)],
       ['Last reported route', session?.cli || actual?.cli || 'Not dispatched'], ['Last reported model', actual?.model || 'Not reported'],
       ['Attempts', task.attempts + ' / ' + task.maxAttempts], ['Runtime', Math.round(task.runtimeMs / 1000) + ' s'],
       ['Runtime limit', task.maxRuntimeMs ? Math.round(task.maxRuntimeMs / 1000) + ' s' : 'Not reported'],
@@ -260,9 +275,10 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
       ['Failure reason', task.failureReason || '—'] ];
     facts.replaceChildren(element('dl', {}, rows.map(([label, value]) => [element('dt', {}, label), element('dd', {}, value)]).flat()));
     const children = allTasks().filter(child => child.parentId === id);
-    paint(links, [id, task.parentId, task.dependencyIds, children.map(child => child.id)], () => [
+    paint(links, [id, task.parentId, task.dependencyIds, task.waitReason, children.map(child => child.id)], () => [
       ...(task.parentId ? [taskLink('Parent', task.parentId)] : []),
       ...(task.dependencyIds || []).map(dependency => taskLink('Depends on', dependency)),
+      ...(waitLabel(task) && Array.isArray(task.waitReason?.taskIds) ? task.waitReason.taskIds : []).map(waitingOn => taskLink('Wait involves', waitingOn)),
       ...children.map(child => taskLink('Child', child.id)),
     ]);
     if (actions.dataset.signature !== JSON.stringify([id, task.status, task.attempts, task.maxAttempts])) {

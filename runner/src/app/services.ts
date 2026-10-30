@@ -37,6 +37,7 @@ const submission = z
     id: id.optional(),
     projectId: id,
     prompt: z.string().min(1).max(128000),
+    title: z.string().min(1).max(160).optional(),
     route: z.object({ mode: z.enum(['auto', 'explicit']), agentId: id.optional(), model: id.optional() }),
     inputRefs: z.array(hash).max(32).optional(),
     parentId: id.optional(),
@@ -367,12 +368,15 @@ export class Application {
         const projectId = url.searchParams.get('projectId') ?? undefined;
         if (projectId !== undefined) this.projects.get(id.parse(projectId));
         const tasks = this.tasks.listTasks({ projectId, limit: limit + 1, offset });
-        return reply(200, { tasks: tasks.slice(0, limit), nextOffset: tasks.length > limit ? offset + limit : null });
+        return reply(200, {
+          tasks: this.engine.projectTasks(tasks.slice(0, limit)),
+          nextOffset: tasks.length > limit ? offset + limit : null,
+        });
       }
       if (parts[0] === 'tasks' && parts[1]) {
         const task = this.tasks.getTask(parts[1]);
         if (!task) return reply(404, { error: 'unknown task' });
-        if (parts.length === 2 && method === 'GET') return reply(200, task);
+        if (parts.length === 2 && method === 'GET') return reply(200, this.engine.projectTasks([task])[0]);
         if (parts[2] === 'cancel' && method === 'POST') return reply(200, this.engine.cancel(task.id));
         if (parts[2] === 'retry' && method === 'POST') {
           const retried = this.tasks.retryTask(task.id);

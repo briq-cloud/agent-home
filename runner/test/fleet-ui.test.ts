@@ -21,14 +21,16 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
     maxAttempts: 2, runtimeMs: 1000, costMicros: null, createdAt: 1_800_000_000_000, updatedAt: 1_800_000_000_000,
     deadline: null, failureReason: null, sessionRef: null, outputRef: null, errorRef: null, permissionRef: null };
   const tasks: Record<string, any> = {
-    root: { ...base, id: 'root', status: 'running', promptRef: 'root-prompt', sessionRef: 'root-session' },
-    child: { ...base, id: 'child', parentId: 'root', dependencyIds: ['failed'], status: 'running', promptRef: 'child-prompt', sessionRef: 'child-session', permissionRef: 'pending' },
+    root: { ...base, id: 'root', title: 'Plan the workspace changes', waitReason: { code: 'yielded', taskIds: ['child'] }, status: 'running', promptRef: 'root-prompt', sessionRef: 'root-session' },
+    child: { ...base, id: 'child', title: 'Inspect <img src=x onerror=window.compromised=true> safely', parentId: 'root', dependencyIds: ['failed'], status: 'running', promptRef: 'child-prompt', sessionRef: 'child-session', permissionRef: 'pending', waitReason: { code: 'approval' } },
     failed: { ...base, id: 'failed', status: 'failed', promptRef: 'failed-prompt', errorRef: 'failed-error', failureReason: 'acceptance_failed' },
     verified: { ...base, id: 'verified', status: 'succeeded', promptRef: 'verified-prompt', outputRef: 'verified-output' },
-    late: { ...base, id: 'late', status: 'queued', promptRef: 'late-prompt' },
+    late: { ...base, id: 'late', waitReason: { code: 'scheduled', until: 1_800_000_060_000 }, status: 'queued', promptRef: 'late-prompt' },
     other: { ...base, id: 'other', projectId: 'other-project', status: 'queued', promptRef: 'other-prompt' },
   };
-  const fillers = Array.from({ length: 96 }, (_, index) => ({ ...base, id: 'history-' + index, status: 'succeeded', promptRef: 'empty' }));
+  const fillers = Array.from({ length: 96 }, (_, index) => ({ ...base, id: 'history-' + index,
+    status: index < 4 ? 'queued' : 'succeeded', promptRef: 'empty',
+    ...(index < 4 ? { waitReason: { code: ['dependencies', 'capacity', 'workspace', 'unknown_future_code'][index], taskIds: ['failed'] } } : {}) }));
   const firstIds = ['root', 'child', 'failed', 'verified'];
   const artifacts: Record<string, any> = {
     'root-session': { cli: 'mock', route: { cli: 'mock', model: 'provider/root-model', source: 'subscription' } },
@@ -45,6 +47,7 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
   const projects = [{ id: 'home' }, { id: 'other-project' }];
   let rejectProject = true;
   let permissionPending = true, rejectPermission = true, draining = false, holdVerified = false;
+  let artifactReads = 0;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), path = url.pathname, method = route.request().method();
@@ -81,9 +84,9 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
         if (action === 'permissions') {
           assert.equal(requestId, 'permission-1'); assert.equal(body.optionId, 'allow');
           if (rejectPermission) { rejectPermission = false; return respond({ error: 'Permission expired; refresh and retry' }, 409); }
-          permissionPending = false; task.permissionRef = null; return respond({ taskId: id });
+          permissionPending = false; task.permissionRef = null; task.waitReason = null; return respond({ taskId: id });
         }
-        if (action === 'cancel') { task.status = 'cancelled'; task.updatedAt++; draining = true; tasks.child.status = 'cancelled'; return respond(task); }
+        if (action === 'cancel') { task.status = 'cancelled'; task.waitReason = { code: 'draining' }; task.updatedAt++; draining = true; tasks.child.status = 'cancelled'; return respond(task); }
         if (action === 'retry') { task.status = 'queued'; task.updatedAt++; return respond(task, 202); }
       }
       if (action === 'permissions') return respond({ permissions: permissionPending ? [{ requestId: 'permission-1', params: {
@@ -91,6 +94,7 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
       return respond(task);
     }
     if (path.startsWith('/artifacts/')) {
+      artifactReads++;
       const ref = path.split('/').at(-1)!;
       if (ref === 'verified-output' && holdVerified) await new Promise<void>(resolve => { releaseArtifact = resolve; });
       return respond({ content: JSON.stringify(artifacts[ref] || { submission: { prompt: 'Task instruction' } }) });
@@ -109,17 +113,44 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
   await page.goto('http://fleet.test/');
   await page.getByRole('button', { name: 'Load more tasks', exact: true }).waitFor();
   assert.equal(mutations.length, 0, 'opening the inspector must not start work or answer permissions');
+  await page.locator('[data-task-id="root"]').getByText('Plan the workspace changes', { exact: true }).waitFor();
+  await page.locator('[data-task-id="child"]').getByText('Inspect <img src=x onerror=window.compromised=true> safely', { exact: true }).waitFor();
+  await page.locator('[data-task-id="failed"]').getByText('Coordinator task', { exact: true }).waitFor();
+  assert.equal(artifactReads, 0, 'tree titles must come from task rows without fetching prompt artifacts');
+  await page.locator('[data-task-id="root"]').getByText('Coordinator paused for child work', { exact: true }).waitFor();
+  await page.locator('[data-task-id="child"]').getByText('Waiting for approval', { exact: true }).waitFor();
+  for (const [id, label] of [['history-0', 'Waiting for prerequisites'], ['history-1', 'Waiting for execution capacity'], ['history-2', 'Waiting for shared workspace']])
+    await page.locator('[data-task-id="' + id + '"]').getByText(label, { exact: true }).waitFor();
+  assert.equal(await page.locator('[data-task-id="history-3"] .fleet-wait').count(), 0, 'unknown reasons must not invent an explanation');
+  await page.getByLabel('Task status filter').selectOption('waiting');
+  assert.equal(await page.locator('[data-task-id="failed"]').count(), 0);
+  assert.equal(await page.locator('[data-task-id="child"]').count(), 1);
+  await page.getByLabel('Task status filter').selectOption('all');
+
+  await page.getByLabel('Filter loaded tasks').fill('Inspect <img');
+  assert.equal(await page.locator('[data-task-id="child"]').count(), 1);
+  assert.equal(await page.locator('[data-task-id="failed"]').count(), 0);
+  assert.equal(await page.evaluate(() => (window as any).compromised), undefined);
+  await page.getByLabel('Filter loaded tasks').fill('');
   await page.getByRole('button', { name: 'Load more tasks', exact: true }).click();
   await page.locator('[data-task-id="late"]').waitFor();
+  await page.locator('[data-task-id="late"]').getByText(/Waiting for scheduled start/).waitFor();
   await page.locator('[data-task-id="child"]').click();
   await page.getByText('provider/child-model', { exact: true }).waitFor();
+  await page.getByRole('heading', { name: 'Inspect <img src=x onerror=window.compromised=true> safely', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Depends on · failed', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Parent · root', exact: true }).waitFor();
+  await page.locator('.fleet-facts').getByText('Waiting for approval', { exact: true }).waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'titles and wait reasons fit a narrow viewport');
+  await page.setViewportSize({ width: 1220, height: 1000 });
   await page.getByRole('button', { name: 'Allow once', exact: true }).click();
   await page.getByText('Permission expired; refresh and retry', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: 'Allow once', exact: true }).isEnabled(), true);
   await page.getByRole('button', { name: 'Allow once', exact: true }).click();
   await page.getByText('Permission response accepted.', { exact: true }).waitFor();
+  await page.locator('.fleet-facts dt').filter({ hasText: /^Wait reason$/ }).locator('+ dd').filter({ hasText: /^Not reported$/ }).waitFor();
+  assert.equal(await page.locator('[data-task-id="child"] .fleet-wait').count(), 0);
   const draft = page.getByLabel('Message to selected task'); await draft.fill('Keep this unsent draft');
   await page.getByRole('button', { name: 'Refresh fleet', exact: true }).click();
   assert.equal(await draft.inputValue(), 'Keep this unsent draft');
@@ -144,6 +175,7 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
   await page.getByRole('button', { name: 'Retry task', exact: true }).click();
   await page.getByText('Retry queued.', { exact: true }).waitFor();
   await page.locator('[data-task-id="root"]').click();
+  await page.getByRole('button', { name: 'Wait involves · child', exact: true }).waitFor();
   await page.getByRole('button', { name: 'Cancel coordinator and children', exact: true }).click();
   await page.locator('.fleet-draining').getByText(/vendor request is still finishing/).waitFor();
   await page.getByLabel('Full task ID').fill('other');

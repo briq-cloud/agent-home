@@ -41,6 +41,7 @@ export interface TaskRoute {
 export interface NewTask {
   id?: string;
   projectId: string;
+  title?: string;
   parentId?: string;
   dependencyIds?: string[];
   promptRef: string;
@@ -56,6 +57,8 @@ export interface NewTask {
 export interface Task {
   id: string;
   projectId: string;
+  /** Bounded private display text; null until an older row is backfilled. */
+  title: string | null;
   parentId: string | null;
   dependencyIds: string[];
   promptRef: string;
@@ -123,7 +126,25 @@ export const TASK_STORE_LIMITS = Object.freeze({
   idCharacters: 256,
   referenceCharacters: 4096,
   messageCharacters: 16_384,
+  titleCharacters: 160,
 });
+
+/** Deterministic display projection only; never an instruction or model call. */
+export function normalizeTaskTitle(value: string): string {
+  return value
+    .replace(/\s+/gu, ' ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/gu, '')
+    .trim()
+    .slice(0, TASK_STORE_LIMITS.titleCharacters)
+    .replace(/[\uD800-\uDBFF]$/u, '');
+}
+export function titleFromPrompt(prompt: string): string {
+  for (const line of prompt.split(/\r\n?|\n/u)) {
+    const title = normalizeTaskTitle(line);
+    if (title) return title;
+  }
+  return 'Untitled task';
+}
 
 function nonempty(
   value: unknown,
@@ -167,7 +188,7 @@ export class TaskStore {
       );
       this.transaction(() => {
         const version = Number(this.db.prepare('PRAGMA user_version').get()!.user_version);
-        if (version > 1) throw new Error(`Unsupported task database schema ${version}`);
+        if (version > 2) throw new Error(`Unsupported task database schema ${version}`);
         if (version === 0) {
           this.db.exec(`
             CREATE TABLE tasks (
@@ -201,6 +222,12 @@ export class TaskStore {
             PRAGMA user_version = 1;
           `);
         }
+        if (version < 2)
+          this.db.exec(`
+          ALTER TABLE tasks ADD COLUMN title TEXT CHECK(title IS NULL OR (length(title) > 0 AND length(title) <= 160));
+          CREATE INDEX tasks_untitled ON tasks(created_at, id) WHERE title IS NULL;
+          PRAGMA user_version = 2;
+        `);
       });
       if (path !== ':memory:') {
         for (const suffix of ['-wal', '-shm']) {
@@ -247,6 +274,7 @@ export class TaskStore {
     return {
       id: row.id as string,
       projectId: row.project_id as string,
+      title: row.title as string | null,
       parentId: row.parent_id as string | null,
       dependencyIds: this.db
         .prepare('SELECT dependency_id FROM task_dependencies WHERE task_id = ? ORDER BY dependency_id')
@@ -286,6 +314,42 @@ export class TaskStore {
     return row ? this.task(row) : null;
   }
 
+  /** Indexed, bounded migration work; no prompt artifact reads in the store. */
+  untitledTasks(limit = 10): Task[] {
+    integer(limit, 'title batch', 1);
+    if (limit > 10) throw Error('Title backfill batch exceeds 10');
+    return this.db
+      .prepare('SELECT * FROM tasks WHERE title IS NULL ORDER BY created_at, id LIMIT ?')
+      .all(limit)
+      .map((row) => this.task(row));
+  }
+
+  /** Compare-and-set protects a concurrently supplied/backfilled title. Does not
+   * change execution timestamps, leases, attempts, or a terminal outcome. */
+  fillTaskTitle(projectId: string, taskId: string, title: string): boolean {
+    nonempty(title, 'title', TASK_STORE_LIMITS.titleCharacters);
+    title = normalizeTaskTitle(title);
+    nonempty(title, 'title', TASK_STORE_LIMITS.titleCharacters);
+    return (
+      this.db
+        .prepare('UPDATE tasks SET title = ? WHERE id = ? AND project_id = ? AND title IS NULL')
+        .run(title, taskId, projectId).changes === 1
+    );
+  }
+
+  /** A bounded set of current dependency blockers, always same-project. */
+  dependencyWait(task: Task): { blocked: boolean; taskIds: string[] } {
+    const rows = this.db
+      .prepare(`SELECT CASE WHEN p.project_id = ? THEN p.id ELSE NULL END AS id
+      FROM task_dependencies d JOIN tasks p ON p.id = d.dependency_id
+      WHERE d.task_id = ? AND p.status <> 'succeeded' ORDER BY p.id LIMIT 16`)
+      .all(task.projectId, task.id);
+    return {
+      blocked: rows.length > 0,
+      taskIds: rows.map((row) => row.id).filter((id): id is string => typeof id === 'string'),
+    };
+  }
+
   /** Includes terminal children and is independent of list pagination. */
   countChildren(projectId: string, parentId: string): number {
     return Number(
@@ -297,17 +361,20 @@ export class TaskStore {
 
   listTasks(options: { projectId?: string; status?: TaskStatus; limit?: number; offset?: number } = {}): Task[] {
     const [limit, offset] = page(options);
+    const where: string[] = [];
+    const values: string[] = [];
+    if (options.projectId !== undefined) {
+      where.push('project_id = ?');
+      values.push(options.projectId);
+    }
+    if (options.status !== undefined) {
+      where.push('status = ?');
+      values.push(options.status);
+    }
     return this.db
-      .prepare(`SELECT * FROM tasks WHERE (? IS NULL OR project_id = ?) AND (? IS NULL OR status = ?)
+      .prepare(`SELECT * FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY created_at, id LIMIT ? OFFSET ?`)
-      .all(
-        options.projectId ?? null,
-        options.projectId ?? null,
-        options.status ?? null,
-        options.status ?? null,
-        limit,
-        offset,
-      )
+      .all(...values, limit, offset)
       .map((row) => this.task(row));
   }
 
@@ -329,6 +396,11 @@ export class TaskStore {
         nonempty(input.id, 'id', TASK_STORE_LIMITS.idCharacters);
         nonempty(input.projectId, 'projectId', TASK_STORE_LIMITS.idCharacters);
         nonempty(input.promptRef, 'promptRef');
+        if (input.title !== undefined) {
+          nonempty(input.title, 'title', TASK_STORE_LIMITS.titleCharacters);
+          input.title = normalizeTaskTitle(input.title);
+          nonempty(input.title, 'title', TASK_STORE_LIMITS.titleCharacters);
+        }
         if (this.row(input.id)) throw new Error(`Task already exists: ${input.id}`);
         if (!input.route || !['explicit', 'auto'].includes(input.route.mode))
           throw new Error('route.mode must be explicit or auto');
@@ -381,13 +453,14 @@ export class TaskStore {
       // Deferred FKs permit forward parent/dependency references within the batch.
       this.db.exec('PRAGMA defer_foreign_keys = ON');
       const insert = this.db.prepare(`INSERT INTO tasks
-        (id, project_id, parent_id, prompt_ref, input_refs, route, status, max_attempts, retry_on_lease_expiry, max_cost_micros, max_runtime_ms,
-          deadline, not_before, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`);
+        (id, project_id, title, parent_id, prompt_ref, input_refs, route, status, max_attempts, retry_on_lease_expiry, max_cost_micros, max_runtime_ms,
+          deadline, not_before, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const input of prepared) {
         const { mode, agentId, provider, model, reason } = input.route;
         insert.run(
           input.id,
           input.projectId,
+          input.title ?? null,
           input.parentId ?? null,
           input.promptRef,
           JSON.stringify(input.inputRefs ?? []),

@@ -62,13 +62,22 @@ flowchart LR
 | Verification | Bounded commands + artifact hashes | Explicit checks; absent checks remain unverified. |
 | Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
 
-Research: [T3 Code, Tencent memory and alternatives](docs/research/2026-10-30-architecture.html).
-Tencent memory remains an evaluated integration. OpenRouter batches use the existing SDK and require a separate opt-in.
-Evaluations: [memory](docs/research/2026-10-30-memory-evaluation.html) ·
-[fleet](docs/research/2026-10-30-fleet-evaluation.html) · [batch](docs/research/2026-10-30-batch-evaluation.html) ·
-[semantic retrieval confirmation](docs/research/2026-10-30-memory-retrieval-confirmation.html) ·
-[managed task comparisons](docs/research/2026-10-30-managed-evaluation.html).
-Semantic retrieval remains experimental: the held-out ambiguity checks do not justify automatic recall.
+Implementation checks: [fleet](docs/benchmarks/2026-10-30-fleet-evaluation.html) ·
+[batch](docs/benchmarks/2026-10-30-batch-evaluation.html) ·
+[memory retrieval](docs/benchmarks/2026-10-30-memory-retrieval-confirmation.html) ·
+[managed tasks](docs/benchmarks/2026-10-30-managed-evaluation.html).
+Semantic retrieval remains experimental; ambiguity checks do not justify automatic recall.
+
+## Libraries
+
+| Component | Library |
+| --- | --- |
+| Agent transports | `@agentclientprotocol/sdk`, Claude and Codex ACP adapters |
+| Scoped task tools | `@modelcontextprotocol/sdk` |
+| Provider metadata, decisions and batches | `@openrouter/sdk` |
+| Persistence and source hashes | Node SQLite and crypto |
+| RPC, WebSockets and validation | `vscode-jsonrpc`, `ws`, `zod` |
+| Development checks | TypeScript, Playwright and Promptfoo |
 
 ## Configure and develop
 
