@@ -793,3 +793,5 @@ footer {
 .tab-badge { font-size:11px; color:var(--warn); margin-left:5px; }
 [role="tabpanel"] { min-width:0; }
 @media(max-width:540px) { .home-tabs { gap:2px; } .home-tabs [role="tab"] { padding:10px 11px; } }
+
+html { scroll-padding-top:80px; }

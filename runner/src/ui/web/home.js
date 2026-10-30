@@ -52,7 +52,9 @@ let rememberedTab;
 try {
   rememberedTab = localStorage.getItem('agent-home-tab');
 } catch {}
-showTab(tabFromHash() || (homeTabs.includes(rememberedTab) ? rememberedTab : 'chat'), false);
+const initialTab = tabFromHash() || (homeTabs.includes(rememberedTab) ? rememberedTab : 'chat');
+showTab(initialTab, false);
+if (!tabFromHash()) history.replaceState(null, '', '#' + initialTab);
 window.addEventListener('hashchange', () => {
   const name = tabFromHash();
   if (name) showTab(name, false);

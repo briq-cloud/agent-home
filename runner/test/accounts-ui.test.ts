@@ -262,6 +262,9 @@ test(
     await page.getByRole('tab', { name: 'Tools', exact: true }).click();
     await page.goto('http://accounts.test/');
     assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await page.goBack();
+    assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, []);
   },
 );
