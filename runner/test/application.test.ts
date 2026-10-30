@@ -268,6 +268,7 @@ test('permission options are validated and an explicit valid answer resumes the 
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.ok(permission, 'mock agent should expose a pending permission');
+  assert.deepEqual((await task('http-permission')).waitReason, { code: 'approval' });
   const wrong = await api('POST', `/tasks/http-permission/permissions/${permission.requestId}`, {
     optionId: 'not-listed',
   });
@@ -360,6 +361,7 @@ test('future queued work survives runner restart with its notBefore timestamp', 
   const notBefore = Date.now() + 60_000;
   const accepted = await api('POST', '/tasks', {
     id: 'restart-queued',
+    title: '  Resume deferred integration work  ',
     projectId: 'home',
     prompt: 'hello',
     route: explicit,
@@ -367,10 +369,14 @@ test('future queued work survives runner restart with its notBefore timestamp', 
   });
   assert.equal(accepted.status, 202);
   const queued = await waitForTask('restart-queued', ['queued']);
+  assert.equal(queued.title, 'Resume deferred integration work');
+  assert.deepEqual(queued.waitReason, { code: 'scheduled', until: queued.notBefore });
   assert.equal(queued.notBefore, notBefore);
   await stopRunner();
   await startRunner();
   const afterRestart = await task('restart-queued');
+  assert.equal(afterRestart.title, queued.title);
+  assert.deepEqual(afterRestart.waitReason, { code: 'scheduled', until: queued.notBefore });
   assert.equal(afterRestart.status, 'queued');
   assert.equal(afterRestart.notBefore, notBefore);
   assert.equal((await api('POST', '/tasks/restart-queued/cancel')).status, 200);
@@ -413,10 +419,14 @@ test('task and message pagination reaches records beyond the first hundred witho
     const response = await api('GET', `/tasks?projectId=paged&limit=37&offset=${offset}`);
     assert.equal(response.status, 200);
     const page = (await response.json()) as {
-      tasks: Array<{ id: string; projectId: string }>;
+      tasks: Array<{ id: string; projectId: string; title: string; notBefore: number; waitReason: unknown }>;
       nextOffset: number | null;
     };
     assert.ok(page.tasks.every((task) => task.projectId === 'paged'));
+    for (const task of page.tasks) {
+      assert.equal(task.title, `Deferred paging fixture ${task.id.slice('page-'.length)}`);
+      assert.deepEqual(task.waitReason, { code: 'scheduled', until: task.notBefore });
+    }
     seen.push(...page.tasks.map((task) => task.id));
     offset = page.nextOffset;
   }
@@ -452,6 +462,46 @@ test('task and message pagination reaches records beyond the first hundred witho
   }
   assert.equal((await api('GET', '/tasks?projectId=')).status, 400);
   await Promise.all(tasks.map((task) => api('POST', `/tasks/${task.id}/cancel`)));
+});
+
+test('task titles and proven waits are bounded API projections without exposing later prompt lines', async () => {
+  const until = Date.now() + 60_000;
+  const submitted = await api('POST', '/tasks/batch', {
+    tasks: [
+      {
+        id: 'title-wait-parent',
+        projectId: 'home',
+        prompt: '\n  First useful task line  \nLater private instruction',
+        route: explicit,
+        notBefore: until,
+      },
+      {
+        id: 'title-wait-child',
+        projectId: 'home',
+        title: '  Explicit operator summary  ',
+        prompt: 'Keep the prompt separate',
+        route: explicit,
+        dependencyIds: ['title-wait-parent'],
+      },
+    ],
+  });
+  assert.equal(submitted.status, 202);
+  const parent = await task('title-wait-parent'),
+    child = await task('title-wait-child');
+  assert.equal(parent.title, 'First useful task line');
+  assert.deepEqual(parent.waitReason, { code: 'scheduled', until });
+  assert.equal(child.title, 'Explicit operator summary');
+  assert.deepEqual(child.waitReason, { code: 'dependencies', taskIds: [parent.id] });
+  assert.ok(!JSON.stringify(parent).includes('Later private instruction'));
+  for (const title of ['x'.repeat(161), '', '   ', '\0'])
+    assert.equal(
+      (await api('POST', '/tasks', { projectId: 'home', prompt: 'hello', title, route: explicit })).status,
+      400,
+    );
+  assert.equal((await api('POST', '/tasks/title-wait-parent/cancel')).status, 200);
+  const blocked = await task('title-wait-child');
+  assert.equal(blocked.status, 'blocked');
+  assert.equal(blocked.waitReason, null);
 });
 
 test('provider batch processing requires a separate opt-in and cannot run through the default API', async () => {

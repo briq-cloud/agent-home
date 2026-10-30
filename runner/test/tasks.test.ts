@@ -60,7 +60,7 @@ test('persists route, refs and settings through reopening, with WAL migration', 
   assert.deepEqual(store.getTask('task'), task);
   const db = new DatabaseSync(f.path);
   assert.equal(db.prepare('PRAGMA journal_mode').get()!.journal_mode, 'wal');
-  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 1);
+  assert.equal(db.prepare('PRAGMA user_version').get()!.user_version, 2);
   db.close();
   for (const suffix of ['', '-wal', '-shm']) assert.equal(statSync(f.path + suffix).mode & 0o777, 0o600);
   f.close(store);
@@ -445,4 +445,47 @@ test('child counts are project scoped and do not depend on historical task list 
   assert.equal(store.countChildren('project', 'parent'), 2);
   assert.equal(store.countChildren('other-project', 'parent'), 0);
   assert.equal(store.countChildren('project', 'missing'), 0);
+});
+
+test('migrates v1 titles additively and compare-and-set backfill preserves execution facts across stores/restarts', (t) => {
+  const f = fixture(t);
+  let store = f.open();
+  store.createTask(input('legacy'));
+  const claimed = store.claimNext(worker)!;
+  const before = store.getTask('legacy')!;
+  f.close(store);
+  const old = new DatabaseSync(f.path);
+  old.exec('DROP INDEX tasks_untitled; ALTER TABLE tasks DROP COLUMN title; PRAGMA user_version = 1;');
+  old.close();
+  store = f.open();
+  assert.deepEqual(store.getTask('legacy'), { ...before, title: null });
+  const second = f.open();
+  assert.equal(store.fillTaskTitle('other-project', 'legacy', 'Wrong scope'), false);
+  assert.equal(store.fillTaskTitle('project', 'legacy', '  Restore\n account summary  '), true);
+  assert.equal(second.fillTaskTitle('project', 'legacy', 'Racing replacement'), false);
+  const after = second.getTask('legacy')!;
+  assert.deepEqual(after, { ...before, title: 'Restore account summary' });
+  assert.equal(after.leaseToken, claimed.leaseToken);
+  f.close(store);
+  f.close(second);
+  store = f.open();
+  assert.equal(store.getTask('legacy')!.title, 'Restore account summary');
+  assert.deepEqual(store.untitledTasks(), []);
+});
+
+test('bounds normalized titles and indexed legacy batches without cross-project dependency links', (t) => {
+  const f = fixture(t),
+    store = f.open();
+  assert.equal(store.createTask(input('named', { title: '  Title\twith\nspaces  ' })).title, 'Title with spaces');
+  for (const title of ['', ' '.repeat(3), 'x'.repeat(161), '\0', '\u0001'])
+    assert.throws(() => store.createTask(input('invalid', { title })));
+  store.createTasks(Array.from({ length: 20 }, (_, i) => input(`legacy-${i}`)));
+  assert.equal(store.untitledTasks().length, 10);
+  assert.throws(() => store.untitledTasks(11));
+  store.createTask(input('foreign', { projectId: 'foreign-project' }));
+  const db = new DatabaseSync(f.path);
+  db.prepare('INSERT INTO task_dependencies(task_id, dependency_id) VALUES (?,?)').run('named', 'foreign');
+  db.close();
+  assert.deepEqual(store.dependencyWait(store.getTask('named')!), { blocked: true, taskIds: [] });
+  assert.equal(store.claimNext({ ...worker, taskId: 'named' }), null);
 });

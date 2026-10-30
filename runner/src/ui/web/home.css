@@ -695,7 +695,7 @@ footer {
 .fleet-state.running, .fleet-state.succeeded { color: var(--ok); }
 .fleet-state.failed, .fleet-state.blocked { color: var(--warn); }
 .fleet-detail { margin: 0; min-width: 0; }
-.fleet-detail h3 { margin-bottom: 12px; }
+.fleet-detail h3 { margin-bottom: 12px; overflow-wrap: anywhere; }
 .fleet-detail h4 { font-size: 13px; font-weight: 600; margin: 16px 0 8px; }
 .fleet-facts dl { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 5px 12px; font-size: 12px; margin: 0 0 12px; }
 .fleet-facts dt { color: var(--muted); }

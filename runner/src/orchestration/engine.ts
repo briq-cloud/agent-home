@@ -6,7 +6,14 @@ import type { Rpc } from '../acp/agent.ts';
 import type { Hub, Peer } from '../acp/hub.ts';
 import type { ContextStore } from '../context/store.ts';
 import type { Route, Routing } from '../routing/index.ts';
-import { TaskStore, type Task, type TaskRoute } from '../tasks/index.ts';
+import {
+  TaskStore,
+  normalizeTaskTitle,
+  titleFromPrompt,
+  TASK_STORE_LIMITS,
+  type Task,
+  type TaskRoute,
+} from '../tasks/index.ts';
 import {
   validateAcceptance,
   verifyAcceptance,
@@ -19,6 +26,7 @@ export interface EngineSubmission {
   id?: string;
   projectId: string;
   prompt: string;
+  title?: string;
   route: TaskRoute;
   inputRefs?: string[];
   parentId?: string;
@@ -44,6 +52,13 @@ export interface PendingPermission {
   params: unknown;
   createdAt: number;
 }
+export interface TaskWaitReason {
+  code: 'dependencies' | 'scheduled' | 'approval' | 'yielded' | 'draining' | 'capacity' | 'workspace';
+  /** Bounded blocker witnesses, never task IDs from another project. */
+  taskIds?: string[];
+  until?: number;
+}
+export type TaskView = Task & { waitReason: TaskWaitReason | null };
 type Config = { version: 1; projectRoot: string; submission: EngineSubmission };
 type SessionRef = { cli: string; id: string; cwd: string; route: Route };
 type Permission = PendingPermission & { settle: (response: Rpc) => void };
@@ -126,6 +141,9 @@ export class Engine {
   private readonly listeners = new Map<string, Set<(rpc: Rpc) => void>>();
   private readonly yielded = new Map<string, { childId: string; count: number }>();
   private readonly waits = new Set<() => void>();
+  private readonly taskRoots = new Map<string, { promptRef: string; root: string | null }>();
+  private nextTitleBackfillAt = 0;
+  private titlesBackfilled = false;
   private started = false;
   private polling?: ReturnType<typeof setInterval>;
   private ticking = false;
@@ -181,6 +199,15 @@ export class Engine {
   private validate(input: EngineSubmission, batch: Map<string, EngineSubmission>): void {
     text(input.projectId, 'projectId', 256);
     text(input.prompt, 'prompt', 128_000);
+    if (input.title !== undefined) {
+      if (
+        typeof input.title !== 'string' ||
+        input.title.length > TASK_STORE_LIMITS.titleCharacters ||
+        input.title.includes('\0') ||
+        !normalizeTaskTitle(input.title)
+      )
+        throw new Error('Invalid title (max 160 characters)');
+    }
     if (!input.route || !['auto', 'explicit'].includes(input.route.mode)) throw new Error('Invalid route');
     if (input.route.mode === 'explicit') text(input.route.agentId, 'explicit route agentId', 256);
     for (const value of [input.maxEstimatedUsd, input.decisionBudgetUsd]) {
@@ -236,6 +263,7 @@ export class Engine {
         id,
         projectId,
         prompt,
+        title,
         route,
         inputRefs,
         parentId,
@@ -258,6 +286,7 @@ export class Engine {
           id: id ?? randomUUID(),
           projectId,
           prompt,
+          title,
           route: route && {
             mode: route.mode,
             agentId: route.agentId,
@@ -284,7 +313,10 @@ export class Engine {
       );
     });
     const batch = new Map(prepared.map((input) => [input.id!, input]));
-    for (const input of prepared) this.validate(input, batch);
+    for (const input of prepared) {
+      this.validate(input, batch);
+      input.title = input.title === undefined ? titleFromPrompt(input.prompt) : normalizeTaskTitle(input.title);
+    }
     const roots = new Map(
       prepared.map((input) => [input.projectId, realpathSync(this.options.projectRoot(input.projectId))]),
     );
@@ -298,6 +330,7 @@ export class Engine {
         return {
           id: input.id,
           projectId: input.projectId,
+          title: input.title,
           promptRef,
           route: input.route,
           inputRefs: input.inputRefs,
@@ -311,6 +344,7 @@ export class Engine {
         };
       }),
     );
+    for (const task of tasks) this.cacheRoot(task, roots.get(task.projectId)!);
     this.tick();
     return tasks;
   }
@@ -318,6 +352,8 @@ export class Engine {
   start(): void {
     if (this.started) return;
     this.options.tasks.recover();
+    this.titlesBackfilled = false;
+    this.nextTitleBackfillAt = 0;
     this.started = true;
     this.polling = setInterval(() => this.tick(), this.pollMs);
     this.polling.unref();
@@ -373,7 +409,62 @@ export class Engine {
   }
 
   private emitTask(task: Task): void {
-    this.emit(task.id, { jsonrpc: '2.0', method: '_runner/task', params: task });
+    this.emit(task.id, { jsonrpc: '2.0', method: '_runner/task', params: this.projectTasks([task])[0] });
+  }
+
+  /** Read-only bounded list/detail projection. No prompt/artifact reads here.
+   * Persisted permission refs alone are not proof a live RPC can be answered. */
+  projectTasks(tasks: Task[]): TaskView[] {
+    if (tasks.length > TASK_STORE_LIMITS.page) throw new Error('Task projection page exceeds limit');
+    let running: Task[] | undefined;
+    return tasks.map((task) => {
+      const active = this.active.get(task.id);
+      const live =
+        active &&
+        !active.abort.signal.aborted &&
+        task.status === 'running' &&
+        task.workerId === this.workerId &&
+        task.leaseToken === active.task.leaseToken &&
+        (task.leaseExpiresAt ?? 0) > this.now();
+      let waitReason: TaskWaitReason | null = null;
+      if (this.nativePrompts.has(task.id) && (!active || active.abort.signal.aborted))
+        waitReason = { code: 'draining' };
+      else if (live && active.permissions.size) waitReason = { code: 'approval' };
+      else if (live && this.yielded.has(task.id))
+        waitReason = { code: 'yielded', taskIds: [this.yielded.get(task.id)!.childId] };
+      else if (task.status === 'queued') {
+        const dependencies = this.options.tasks.dependencyWait(task);
+        if (dependencies.blocked)
+          waitReason = {
+            code: 'dependencies',
+            ...(dependencies.taskIds.length ? { taskIds: dependencies.taskIds } : {}),
+          };
+        else if (task.notBefore > this.now()) waitReason = { code: 'scheduled', until: task.notBefore };
+        else if (this.started) {
+          running ??= this.runningTasks();
+          waitReason = this.schedulingBlock(task, running, false).reason;
+        }
+      }
+      return { ...task, waitReason };
+    });
+  }
+
+  private backfillTitles(): void {
+    if (this.titlesBackfilled || this.now() < this.nextTitleBackfillAt) return;
+    this.nextTitleBackfillAt = this.now() + 1000;
+    const tasks = this.options.tasks.untitledTasks();
+    for (const task of tasks) {
+      let title = 'Untitled task';
+      try {
+        const artifact = this.options.context.readArtifact({ project: task.projectId, id: task.promptRef });
+        const prompt = object(object(JSON.parse(artifact!.content.toString('utf8'))).submission).prompt;
+        if (typeof prompt === 'string') title = titleFromPrompt(prompt);
+      } catch {
+        /* An unavailable legacy artifact must not break startup or retry forever. */
+      }
+      this.options.tasks.fillTaskTitle(task.projectId, task.id, title);
+    }
+    this.titlesBackfilled = tasks.length < 10;
   }
 
   subscribe(taskId: string, callback: (rpc: Rpc) => void): () => void {
@@ -496,9 +587,8 @@ export class Engine {
     }
   }
 
-  private eligible(task: Task): boolean {
-    if (task.notBefore > this.now()) return false;
-    const running = [
+  private runningTasks(): Task[] {
+    return [
       ...new Map(
         [
           ...this.options.tasks.listTasks({ status: 'running', limit: 1000 }),
@@ -507,21 +597,48 @@ export class Engine {
         ].map((value) => [value.id, value]),
       ).values(),
     ];
+  }
+
+  private schedulingBlock(
+    task: Task,
+    running: Task[],
+    loadRoots: boolean,
+  ): { blocked: boolean; reason: TaskWaitReason | null } {
+    const block = (
+      code?: TaskWaitReason['code'],
+      blockers: Task[] = [],
+    ): { blocked: boolean; reason: TaskWaitReason | null } => {
+      const taskIds = [
+        ...new Set(blockers.filter((blocker) => blocker.projectId === task.projectId).map((blocker) => blocker.id)),
+      ].slice(0, 16);
+      return { blocked: true, reason: code ? { code, ...(taskIds.length ? { taskIds } : {}) } : null };
+    };
     if (!task.parentId) {
+      // Full coordinator pools must not load queued prompt snapshots per poll.
+      const overlaps = running.map((other) => ({ task: other, overlap: this.projectsOverlap(task, other, false) }));
+      const known = overlaps.filter((other) => other.overlap === true).map((other) => other.task);
+      if (known.length) return block('workspace', known);
       // Reserve a child slot for each coordinator, including coordinators that
       // have not yielded yet. Otherwise two waiting roots can consume all slots.
-      if (running.filter((value) => !value.parentId).length >= Math.max(1, this.maxConcurrent / 2)) return false;
-      return !running.some((value) => this.projectsOverlap(task, value));
+      const coordinators = running.filter((value) => !value.parentId);
+      if (coordinators.length >= Math.max(1, this.maxConcurrent / 2) || this.occupiedSlots() >= this.maxConcurrent)
+        return block('capacity', coordinators);
+      if (loadRoots) {
+        for (const other of overlaps)
+          if (other.overlap === undefined) other.overlap = this.projectsOverlap(task, other.task, true);
+        const loaded = overlaps.filter((other) => other.overlap === true).map((other) => other.task);
+        if (loaded.length) return block('workspace', loaded);
+      }
+      // Serialize unknown snapshots, but do not invent a known workspace cause.
+      if (overlaps.some((other) => other.overlap === undefined)) return block();
+      return { blocked: false, reason: null };
     }
     const parent = this.active.get(task.parentId);
     const yielded = this.yielded.get(task.parentId);
-    if (
-      !parent ||
-      !yielded ||
-      parent.abort.signal.aborted ||
-      running.some((value) => !!value.parentId && value.projectId === task.projectId)
-    )
-      return false;
+    if (!parent || !yielded || parent.abort.signal.aborted) return block();
+    const children = running.filter((value) => !!value.parentId && value.projectId === task.projectId);
+    if (children.length) return block('workspace', children);
+    if (this.occupiedSlots() >= this.maxConcurrent) return block('capacity');
     // Only the awaited child and its direct-child prerequisites may use the write slot.
     const needed = new Set<string>();
     const visit = (id: string) => {
@@ -531,26 +648,36 @@ export class Engine {
       if (value?.parentId === task.parentId) for (const dep of value.dependencyIds) visit(dep);
     };
     visit(yielded.childId);
-    return needed.has(task.id);
+    return { blocked: !needed.has(task.id), reason: null };
   }
 
-  private projectsOverlap(a: Task, b: Task): boolean {
-    if (a.projectId === b.projectId) return true;
+  private cacheRoot(task: Task, root: string | null): void {
+    this.taskRoots.delete(task.id);
+    this.taskRoots.set(task.id, { promptRef: task.promptRef, root });
+    if (this.taskRoots.size > 2048) this.taskRoots.delete(this.taskRoots.keys().next().value!);
+  }
+
+  private taskRoot(task: Task, load: boolean): string | null | undefined {
+    const cached = this.taskRoots.get(task.id);
+    if (cached?.promptRef === task.promptRef) return cached.root;
+    if (!load) return;
     try {
-      const root = (task: Task): string => {
-        const artifact = this.options.context.readArtifact({ project: task.projectId, id: task.promptRef });
-        const config = JSON.parse(artifact!.content.toString('utf8')) as Config;
-        if (typeof config.projectRoot !== 'string' || !isAbsolute(config.projectRoot)) throw Error('Missing root');
-        return config.projectRoot;
-      };
-      const x = root(a),
-        y = root(b);
-      return within(x, y) || within(y, x);
+      const artifact = this.options.context.readArtifact({ project: task.projectId, id: task.promptRef });
+      const config = JSON.parse(artifact!.content.toString('utf8')) as Config;
+      if (typeof config.projectRoot !== 'string' || !isAbsolute(config.projectRoot)) throw Error('Missing root');
+      this.cacheRoot(task, config.projectRoot);
+      return config.projectRoot;
     } catch {
-      // Unknown roots serialize. Dispatch still reports invalid artifacts once
-      // the other project finishes; admission never treats unknown as isolated.
-      return true;
+      this.cacheRoot(task, null);
+      return null;
     }
+  }
+
+  private projectsOverlap(a: Task, b: Task, loadRoots: boolean): boolean | undefined {
+    if (a.projectId === b.projectId) return true;
+    const x = this.taskRoot(a, loadRoots),
+      y = this.taskRoot(b, loadRoots);
+    return x && y ? within(x, y) || within(y, x) : undefined;
   }
 
   private occupiedSlots(): number {
@@ -582,21 +709,31 @@ export class Engine {
     this.ticking = true;
     try {
       this.options.tasks.recover();
+      this.backfillTitles();
       for (const active of this.active.values()) {
         const task = this.options.tasks.getTask(active.task.id);
         if (!task || task.status !== 'running' || task.leaseToken !== active.task.leaseToken) this.abort(active);
       }
       if (this.occupiedSlots() >= this.maxConcurrent) return;
+      let running = this.runningTasks();
       for (let offset = 0; this.occupiedSlots() < this.maxConcurrent; offset += 1000) {
         const queued = this.options.tasks.listTasks({ status: 'queued', limit: 1000, offset });
         for (const candidate of queued) {
-          if (!this.eligible(candidate)) continue;
+          if (
+            candidate.notBefore > this.now() ||
+            this.options.tasks.dependencyWait(candidate).blocked ||
+            this.schedulingBlock(candidate, running, true).blocked
+          )
+            continue;
           const task = this.options.tasks.claimNext({
             taskId: candidate.id,
             workerId: this.workerId,
             leaseMs: this.leaseMs,
           });
-          if (task) this.launch(task);
+          if (task) {
+            this.launch(task);
+            running = this.runningTasks();
+          }
           if (this.occupiedSlots() >= this.maxConcurrent) break;
         }
         if (queued.length < 1000) break;
