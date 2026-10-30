@@ -107,11 +107,13 @@ test('command failures, startup errors and bounded stdout/stderr remain structur
 test('timeout kills the entire command process group, including a child writing in the background', async (t) => {
   const directory = root(t);
   const heartbeat = join(directory, 'child-heartbeat.txt');
-  const childSource = `const fs=require('node:fs');setInterval(()=>fs.appendFileSync(${JSON.stringify(heartbeat)},'x'),10);`;
-  const parentSource = `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(childSource)}],{stdio:'ignore'});console.log('ready');setInterval(()=>{},1000);`;
+  // Avoid racing two Node startups against a sub-second timeout on a busy CI
+  // host. The background shell writes immediately and exits if cleanup removes
+  // its directory, so a failed assertion cannot leave an unbounded writer.
+  const parentSource = '(while :; do printf x >> "$1" || exit; sleep 0.01; done) & wait';
   const result = await verifyAcceptance({
     root: directory,
-    spec: { commands: [{ argv: [process.execPath, '-e', parentSource], timeoutMs: 250 }] },
+    spec: { commands: [{ argv: ['/bin/sh', '-c', parentSource, 'heartbeat-fixture', heartbeat], timeoutMs: 1000 }] },
   });
   assert.equal(result.status, 'failed');
   const check = result.checks[0]!;
