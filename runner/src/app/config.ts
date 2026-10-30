@@ -17,7 +17,7 @@ export function configuration(env: NodeJS.ProcessEnv) {
     cwd: resolve(env.RUNNER_CWD ?? '/work'),
     maxTurns: integer('RUNNER_MAX_TURNS', 2, 1, 32),
     orchestrator: flag('RUNNER_ORCHESTRATOR', true),
-    dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', false),
+    dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', true),
     delegation: flag('RUNNER_DELEGATION', false),
     memory: flag('RUNNER_MEMORY', true),
     deferred: flag('RUNNER_DEFERRED', true),

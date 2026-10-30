@@ -115,6 +115,8 @@ export type RoutingOptions = {
   decisionClient?: (key: string) => DecisionClient;
   dynamic?: boolean;
   defaultRouteId?: string;
+  /** Only the application without an operator-selected default enables pool fallback. */
+  autoFallback?: boolean;
   chooser?: string;
   fetcher?: typeof fetch;
   now?: () => number;
@@ -327,15 +329,44 @@ export class Routing {
   private async fallback(request: Selection, reason: string, decisionCostUsd?: number): Promise<Route> {
     const eligible = await this.inventory(request);
     const preferred = eligible.find((b) => b.id === this.options.defaultRouteId);
-    const binding =
+    let binding =
       (preferred?.billing === 'subscription' ? preferred : undefined) ??
       eligible.find((b) => b.billing === 'subscription') ??
       preferred;
-    if (!binding) throw new Error('no eligible configured route');
-    if (binding.billing === 'use') {
-      // A default API route must have a fresh exact price estimate, even after dynamic failure.
-      await this.apiBudget(binding, request);
+    if (binding?.billing === 'use') {
+      try {
+        await this.apiBudget(binding, request);
+      } catch (error) {
+        if (!this.options.autoFallback) throw error;
+        binding = undefined;
+      }
     }
+    if (!binding && this.options.autoFallback) {
+      // Canonical metadata is supplied only for operator-approved Auto profiles.
+      // Legacy provider/auto aliases and unapproved profiles cannot enter this path.
+      const priced = await Promise.all(
+        eligible
+          .filter(
+            (candidate) =>
+              candidate.billing === 'use' &&
+              candidate.provider === 'openrouter' &&
+              !!candidate.model &&
+              !!candidate.canonical,
+          )
+          .map(async (candidate) => {
+            try {
+              return { binding: candidate, estimate: await this.apiBudget(candidate, request) };
+            } catch {
+              return null;
+            }
+          }),
+      );
+      binding = priced
+        .filter((item): item is { binding: Binding; estimate: number } => item !== null)
+        .sort((a, b) => a.estimate - b.estimate || a.binding.id.localeCompare(b.binding.id))[0]?.binding;
+      if (binding) reason += '; lowest priced approved Auto pool fallback';
+    }
+    if (!binding) throw new Error('no eligible configured route');
     return {
       cli: binding.cli,
       model: binding.model,
@@ -345,7 +376,7 @@ export class Routing {
       decisionCostUsd,
     };
   }
-  private async apiBudget(binding: Binding, request: Selection): Promise<void> {
+  private async apiBudget(binding: Binding, request: Selection): Promise<number> {
     if (
       binding.provider !== 'openrouter' ||
       !request.allowPaidApi ||
@@ -370,6 +401,7 @@ export class Routing {
       (request.outputTokens ?? 2_000) * model.outputPrice +
       model.requestPrice;
     if (estimate > request.maxEstimatedUsd) throw new Error('estimated request budget exceeded');
+    return estimate;
   }
   async select(request: Selection): Promise<Route> {
     if (request.pinned) return { ...request.pinned, source: 'pinned' };

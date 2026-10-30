@@ -17,7 +17,9 @@ import { commandStatus } from '../auth/status.ts';
 import { usageReport } from '../telemetry/usage.ts';
 import { configuration } from './config.ts';
 import { Application } from './services.ts';
+import { ProviderMutations } from './provider-mutations.ts';
 import { AutoConn } from '../acp/auto.ts';
+import { prepareAutoProfiles, AUTO_POOL_SOURCE } from '../providers/auto-models.ts';
 
 /**
  * The agent home runner (ADR 0021 in github.com/up-lab/briq; this folder's README): an ACP agent
@@ -61,6 +63,7 @@ function profileClis(): Cli[] {
 
 /** Every CLI the runner drives now: the image's, then the person's profiles. */
 let table: Cli[] = [...base.map(withKey), ...profileClis()];
+const providerMutations = new ProviderMutations();
 const hub = new Hub({
   clis: table,
   env: childEnv,
@@ -99,6 +102,11 @@ async function reload(): Promise<void> {
       hub.add(c);
   table = next;
   known.clear();
+}
+async function prepareModels() {
+  if (!keys.key('openrouter')) throw Error("add OpenRouter's key first");
+  const result = await prepareAutoProfiles({ keys, claudeAvailable: base.some((c) => c.name === 'claude') });
+  return result;
 }
 // Only completion dates: never a vendor's credentials or sign-in output.
 const signInFile = `${stateDir}/sign-ins.json`;
@@ -225,6 +233,7 @@ const application = new Application({
   table: () => table,
   signedIn: signedInCached,
   authEnv: childEnv,
+  providerSnapshot: () => providerMutations.run(() => ({ profiles: keys.profiles(), table: [...table] })),
 });
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');
@@ -270,6 +279,15 @@ const server = createServer(async (req, res) => {
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
     if (config.orchestrator && (await application.http(req, res, url, () => body(req)))) return;
+    if (url.pathname === '/routing/models' && req.method === 'POST')
+      return await providerMutations.run(async () => {
+        if (!keys.key('openrouter')) return json(res, 409, { error: "add OpenRouter's key first" });
+        const models = await prepareModels();
+        await reload();
+        return json(res, 200, models);
+      });
+    if (url.pathname === '/routing/models' && req.method === 'GET')
+      return json(res, 200, { profiles: keys.profiles().filter((p) => p.autoEligible), source: AUTO_POOL_SOURCE });
     // The page's link carries the key once: kept as a cookie for this origin, then dropped from
     // the address. SameSite=Strict: no other site's page sends it.
     if (url.searchParams.has('token') && req.method === 'GET' && !parts.length) {
@@ -362,74 +380,83 @@ const server = createServer(async (req, res) => {
         profiles: keys.profiles(),
       });
     if (parts[0] === 'keys' && parts.length === 2 && (req.method === 'PUT' || req.method === 'DELETE')) {
-      if (!PROVIDERS.some((p) => p.id === parts[1])) return json(res, 404, { error: `no provider named ${parts[1]}` });
-      let key: string | undefined;
-      let auto = false;
-      if (req.method === 'PUT') {
-        const input = await body(req);
-        const k = input.key;
-        auto = input.auto === true;
-        if (typeof k !== 'string' || !/^\S{8,1024}$/.test(k))
-          return json(res, 400, { error: "key is the provider's key, without spaces" });
-        key = k;
-      }
-      keys.putKey(parts[1] as string, key);
-      if (key && auto) {
-        const provider = PROVIDERS.find((p) => p.id === parts[1]);
-        if (provider && !provider.cli) {
-          const profile = profileFor(provider.id, 'auto', 'auto');
-          if (
-            typeof profile !== 'string' &&
-            base.some((c) => c.name === profile.harness) &&
-            !keys.profiles().some((p) => p.provider === provider.id)
-          )
-            keys.putProfile(profile);
+      return await providerMutations.run(async () => {
+        if (!PROVIDERS.some((p) => p.id === parts[1]))
+          return json(res, 404, { error: `no provider named ${parts[1]}` });
+        let key: string | undefined;
+        let auto = false;
+        if (req.method === 'PUT') {
+          const input = await body(req);
+          const k = input.key;
+          auto = input.auto === true;
+          if (typeof k !== 'string' || !/^\S{8,1024}$/.test(k))
+            return json(res, 400, { error: "key is the provider's key, without spaces" });
+          key = k;
         }
-      }
-      await reload();
-      return json(res, 200, { provider: parts[1], set: Boolean(key) });
+        keys.putKey(parts[1] as string, key);
+        let models;
+        if (key && auto && parts[1] === 'openrouter') models = await prepareModels();
+        else if (key && auto) {
+          const provider = PROVIDERS.find((p) => p.id === parts[1]);
+          if (provider && !provider.cli) {
+            const profile = profileFor(provider.id, 'auto', 'auto');
+            if (
+              typeof profile !== 'string' &&
+              base.some((c) => c.name === profile.harness) &&
+              !keys.profiles().some((p) => p.provider === provider.id)
+            )
+              keys.putProfile(profile);
+          }
+        }
+        await reload();
+        return json(res, 200, { provider: parts[1], set: Boolean(key), ...(models ? { models } : {}) });
+      });
     }
     if (url.pathname === '/profiles' && req.method === 'POST') {
-      const b = await body(req);
-      const p = profileFor(b.provider, b.harness, b.model);
-      if (typeof p === 'string') return json(res, 400, { error: p });
-      if (!keys.key(p.provider))
-        return json(res, 409, { error: `add ${p.provider}'s key first: PUT /keys/${p.provider}` });
-      if (!base.some((c) => c.name === p.harness)) return json(res, 409, { error: `this home has no ${p.harness}` });
-      if (b.name !== undefined) {
-        if (
-          typeof b.name !== 'string' ||
-          !b.name.startsWith(`${p.provider}-${p.harness}-`) ||
-          !/^[a-z0-9][a-z0-9-]{0,95}$/.test(b.name)
-        )
-          return json(res, 400, {
-            error: 'name must start with provider-harness- and use lowercase letters, digits or hyphens',
-          });
-        p.name = b.name;
-      }
-      if (base.some((c) => c.name === p.name))
-        return json(res, 409, { error: 'profile name conflicts with a native CLI' });
-      if (b.autoEligible === true) {
-        if (p.provider !== 'openrouter' || !p.model || p.model === 'openrouter/auto')
-          return json(res, 400, { error: 'automatic API routes need a pinned OpenRouter model' });
-        const r = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(15000) });
-        if (!r.ok) return json(res, 503, { error: 'model catalog unavailable' });
-        const catalog = (await r.json()) as { data: Array<{ id: string; canonical_slug: string }> };
-        const model = catalog.data.find((m) => m.id === p.model);
-        if (!model?.canonical_slug) return json(res, 400, { error: 'model is not in the catalog' });
-        p.canonical = model.canonical_slug;
-        p.autoEligible = true;
-      }
-      keys.putProfile(p);
-      await reload();
-      return json(res, 200, { ...p, acp: `/acp/${p.name}` });
+      return await providerMutations.run(async () => {
+        const b = await body(req);
+        const p = profileFor(b.provider, b.harness, b.model);
+        if (typeof p === 'string') return json(res, 400, { error: p });
+        if (!keys.key(p.provider))
+          return json(res, 409, { error: `add ${p.provider}'s key first: PUT /keys/${p.provider}` });
+        if (!base.some((c) => c.name === p.harness)) return json(res, 409, { error: `this home has no ${p.harness}` });
+        if (b.name !== undefined) {
+          if (
+            typeof b.name !== 'string' ||
+            !b.name.startsWith(`${p.provider}-${p.harness}-`) ||
+            !/^[a-z0-9][a-z0-9-]{0,95}$/.test(b.name)
+          )
+            return json(res, 400, {
+              error: 'name must start with provider-harness- and use lowercase letters, digits or hyphens',
+            });
+          p.name = b.name;
+        }
+        if (base.some((c) => c.name === p.name))
+          return json(res, 409, { error: 'profile name conflicts with a native CLI' });
+        if (b.autoEligible === true) {
+          if (p.provider !== 'openrouter' || !p.model || p.model === 'openrouter/auto')
+            return json(res, 400, { error: 'automatic API routes need a pinned OpenRouter model' });
+          const r = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(15000) });
+          if (!r.ok) return json(res, 503, { error: 'model catalog unavailable' });
+          const catalog = (await r.json()) as { data: Array<{ id: string; canonical_slug: string }> };
+          const model = catalog.data.find((m) => m.id === p.model);
+          if (!model?.canonical_slug) return json(res, 400, { error: 'model is not in the catalog' });
+          p.canonical = model.canonical_slug;
+          p.autoEligible = true;
+        }
+        keys.putProfile(p);
+        await reload();
+        return json(res, 200, { ...p, acp: `/acp/${p.name}` });
+      });
     }
     if (parts[0] === 'profiles' && parts.length === 2 && req.method === 'DELETE') {
-      if (!keys.profiles().some((p) => p.name === parts[1]))
-        return json(res, 404, { error: `no profile named ${parts[1]}` });
-      keys.dropProfile(parts[1] as string);
-      await reload();
-      return json(res, 200, { name: parts[1], removed: true });
+      return await providerMutations.run(async () => {
+        if (!keys.profiles().some((p) => p.name === parts[1]))
+          return json(res, 404, { error: `no profile named ${parts[1]}` });
+        keys.dropProfile(parts[1] as string);
+        await reload();
+        return json(res, 200, { name: parts[1], removed: true });
+      });
     }
     if (parts[0] === 'refresh' && parts[1] && signIns.has(parts[1]) && req.method === 'POST') {
       const c = table.find((t) => t.name === parts[1]) as Cli;

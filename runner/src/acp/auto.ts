@@ -6,6 +6,7 @@ import type { Hub, Peer } from './hub.ts';
 import type { Engine, EngineSubmission, PendingPermission } from '../orchestration/engine.ts';
 import type { ContextStore } from '../context/store.ts';
 import type { Task, TaskStore } from '../tasks/index.ts';
+import { validateAcceptance, type Acceptance } from '../verification/index.ts';
 
 type Backend = { cli: string; id: string; cwd: string; model?: string };
 type Session = {
@@ -20,6 +21,7 @@ type Session = {
   maxEstimatedUsd?: number;
   decisionBudgetUsd?: number;
   context?: EngineSubmission['context'];
+  acceptance?: Acceptance;
 };
 export type AutoOptions = {
   engine: Pick<Engine, 'submit' | 'subscribe' | 'wait' | 'cancel' | 'pendingPermissions' | 'answerPermission'>;
@@ -47,6 +49,14 @@ function money(value: unknown, name: string): number | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) invalid(`Invalid ${name}`);
   return value;
+}
+function acceptance(value: unknown): Acceptance | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return validateAcceptance(value as Acceptance);
+  } catch (error) {
+    invalid(`Invalid acceptance: ${error instanceof Error ? error.message : 'malformed checks'}`);
+  }
 }
 
 /**
@@ -138,6 +148,7 @@ export class AutoConn {
         throw Error('invalid session file');
       if (value.requestedCli !== undefined) text(value.requestedCli, 'requested CLI');
       if (value.modeId !== undefined) text(value.modeId, 'modeId');
+      if (value.acceptance !== undefined) value.acceptance = acceptance(value.acceptance);
       return value as Session;
     } catch (error) {
       if (error instanceof RpcFailure) throw error;
@@ -325,10 +336,14 @@ export class AutoConn {
         maxEstimatedUsd: money(opts.maxEstimatedUsd, 'maxEstimatedUsd'),
         decisionBudgetUsd: money(opts.decisionBudgetUsd, 'decisionBudgetUsd'),
         context,
+        acceptance: acceptance(opts.acceptance),
       };
       // No route, CLI process, model call or client cwd is consumed at creation.
       this.save(session);
-      return { sessionId: session.id, _meta: { agentHome: { projectId: session.projectId, durable: true } } };
+      return {
+        sessionId: session.id,
+        _meta: { agentHome: { projectId: session.projectId, durable: true, allowPaidApi: session.allowPaidApi } },
+      };
     }
     if (!['session/load', 'session/prompt', 'session/cancel'].includes(method))
       throw new RpcFailure({ code: -32601, message: `Auto does not support ${method}` });
@@ -365,7 +380,14 @@ export class AutoConn {
         current = this.task(currentSession);
       if (current) this.emitTask(currentSession, current);
       return {
-        _meta: { agentHome: { projectId: session.projectId, taskId: currentSession.lastTaskId, durable: true } },
+        _meta: {
+          agentHome: {
+            projectId: session.projectId,
+            taskId: currentSession.lastTaskId,
+            durable: true,
+            allowPaidApi: session.allowPaidApi,
+          },
+        },
       };
     }
     if (task && active(task))
@@ -403,6 +425,7 @@ export class AutoConn {
         allowPaidApi: session.allowPaidApi,
         maxEstimatedUsd: session.maxEstimatedUsd,
         decisionBudgetUsd: session.decisionBudgetUsd,
+        acceptance: session.acceptance,
       });
     } catch (error) {
       this.save(session);

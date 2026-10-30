@@ -367,3 +367,73 @@ test('explicit unpriced non-OpenRouter route requires paid opt-in and rejects pr
     /paid route requires/,
   );
 });
+
+test('partial Auto pools fall back to the lowest fresh priced approved model within budget', async (t) => {
+  const h = await setup(t);
+  const models = [
+    { id: 'vendor/capable', canonical: 'vendor/capable-v1', price: '0.000004' },
+    { id: 'vendor/cheap', canonical: 'vendor/cheap-v1', price: '0.000001' },
+    { id: 'vendor/unapproved', canonical: 'vendor/unapproved-v1', price: '0.0000001' },
+  ];
+  h.bindings(
+    models.map((model, i) =>
+      binding({
+        id: `pool-${i}`,
+        cli: `openrouter-claude-${i}`,
+        provider: 'openrouter',
+        billing: 'use',
+        model: model.id,
+        canonical: i === 2 ? undefined : model.canonical,
+      }),
+    ),
+  );
+  const fetcher: typeof fetch = async () =>
+    Response.json({
+      data: models.map((model) => ({
+        ...catalog.data[0],
+        id: model.id,
+        canonical_slug: model.canonical,
+        pricing: { prompt: model.price, completion: model.price },
+      })),
+    });
+  const routing = new Routing({
+    ...h.options,
+    dynamic: false,
+    autoFallback: true,
+    defaultRouteId: 'missing-haiku',
+    fetcher,
+  });
+  const route = await routing.select({ task: 'work', allowPaidApi: true, maxEstimatedUsd: 0.02 });
+  assert.equal(route.routeId, 'pool-1');
+  assert.equal(route.source, 'default');
+  assert.match(route.reason ?? '', /lowest priced approved/);
+  await assert.rejects(routing.select({ task: 'work', maxEstimatedUsd: 1 }), /no eligible/);
+  await assert.rejects(routing.select({ task: 'work', allowPaidApi: true, maxEstimatedUsd: 0.001 }), /no eligible/);
+});
+
+test('generic explicit defaults retain strict fallback semantics without the application opt-in', async (t) => {
+  const h = await setup(t);
+  h.bindings([binding({ id: 'other-paid', cli: 'openrouter-claude', provider: 'openrouter', billing: 'use' })]);
+  await assert.rejects(
+    new Routing({ ...h.options, dynamic: false, defaultRouteId: 'operator-selected-missing' }).select({
+      task: 'work',
+      allowPaidApi: true,
+      maxEstimatedUsd: 1,
+    }),
+    /no eligible/,
+  );
+  assert.equal(h.requests.length, 0);
+});
+
+test('Auto pool fallback never consumes stale failed price data or overrides a subscription', async (t) => {
+  const h = await setup(t);
+  h.bindings([binding({ id: 'pool', cli: 'openrouter-claude', provider: 'openrouter', billing: 'use' })]);
+  const routing = new Routing({ ...h.options, dynamic: false, autoFallback: true, defaultRouteId: 'missing-haiku' });
+  const request = { task: 'work', allowPaidApi: true, maxEstimatedUsd: 1 };
+  assert.equal((await routing.select(request)).routeId, 'pool');
+  h.now(START + 86400001);
+  h.failMetadata();
+  await assert.rejects(routing.select(request), /no eligible/);
+  h.bindings([binding(), binding({ id: 'pool', cli: 'openrouter-claude', provider: 'openrouter', billing: 'use' })]);
+  assert.equal((await routing.select(request)).source, 'subscription');
+});

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { configuration } from './config.ts';
 import type { Hub } from '../acp/hub.ts';
 import type { Cli } from '../providers/catalog.ts';
-import { PROVIDERS, type Keys } from '../providers/profiles.ts';
+import { PROVIDERS, type Keys, type Profile } from '../providers/profiles.ts';
 import { ContextStore } from '../context/store.ts';
 import { TaskStore } from '../tasks/index.ts';
 import { Routing, type Binding } from '../routing/index.ts';
@@ -15,6 +15,8 @@ import { Projects } from '../orchestration/projects.ts';
 import { Delegation } from '../orchestration/delegation.ts';
 import { nextEligible, type OffpeakPolicy } from '../scheduling/offpeak.ts';
 import { commandBilling } from '../auth/status.ts';
+import { DEFAULT_AUTO_PROFILE } from '../providers/auto-models.ts';
+import { validateAcceptance, type Acceptance } from '../verification/index.ts';
 
 const id = z.string().min(1).max(256),
   hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -35,6 +37,17 @@ const submission = z
     maxEstimatedUsd: z.number().finite().nonnegative().max(100).optional(),
     decisionBudgetUsd: z.number().finite().nonnegative().max(0.05).optional(),
     modeId: id.optional(),
+    acceptance: z
+      .unknown()
+      .transform((value, ctx) => {
+        try {
+          return validateAcceptance(value as Acceptance);
+        } catch (error) {
+          ctx.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'Invalid acceptance' });
+          return z.NEVER;
+        }
+      })
+      .optional(),
     context: z
       .object({
         revision: id,
@@ -52,6 +65,7 @@ type Options = {
   table: () => Cli[];
   signedIn: (cli: string) => Promise<boolean | null>;
   authEnv: Record<string, string>;
+  providerSnapshot?: () => Promise<{ profiles: Profile[]; table: Cli[] }>;
 };
 export class Application {
   readonly tasks: TaskStore;
@@ -75,10 +89,14 @@ export class Application {
     this.routing = new Routing({
       stateDir: config.stateDir,
       dynamic: config.dynamicRouting,
-      defaultRouteId: config.defaultRoute,
+      defaultRouteId: config.defaultRoute ?? DEFAULT_AUTO_PROFILE,
+      autoFallback: config.defaultRoute === undefined,
       openRouterKey: () => keys.key('openrouter'),
       decisionClient: (key) => new OpenRouter({ apiKey: key, retryConfig: { strategy: 'none' } }),
-      availability: async () => ({ checkedAt: new Date().toISOString(), bindings: await this.bindings() }),
+      availability: async () => {
+        const snapshot = await options.providerSnapshot?.();
+        return { checkedAt: new Date().toISOString(), bindings: await this.bindings(snapshot) };
+      },
     });
     this.delegation = new Delegation({
       tasks: this.tasks,
@@ -116,10 +134,10 @@ export class Application {
     });
     if (config.orchestrator) this.engine.start();
   }
-  private async bindings(): Promise<Binding[]> {
-    const profiles = this.options.keys.profiles();
+  private async bindings(snapshot?: { profiles: Profile[]; table: Cli[] }): Promise<Binding[]> {
+    const profiles = snapshot?.profiles ?? this.options.keys.profiles();
     return Promise.all(
-      this.options.table().map(async (c) => {
+      (snapshot?.table ?? this.options.table()).map(async (c) => {
         const p = profiles.find((p) => p.name === c.name),
           provider = p && PROVIDERS.find((q) => q.id === p.provider);
         const apiNames: Record<string, string[]> = {

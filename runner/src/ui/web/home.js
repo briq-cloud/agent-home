@@ -283,7 +283,12 @@ function keyCard(p) {
     );
   } else {
     const own = profiles.filter((q) => q.provider === p.id);
-    if (p.cli) box.append($('span', { class: 'muted' }, 'Ready in ' + (names[p.cli] || p.cli)));
+    const autoCount = own.filter((q) => q.autoEligible === true).length;
+    if (p.id === 'openrouter')
+      box.append(
+        $('span', { class: 'muted' }, autoCount ? 'Auto ready · ' + autoCount + ' models' : 'Auto models not ready'),
+      );
+    else if (p.cli) box.append($('span', { class: 'muted' }, 'Ready in ' + (names[p.cli] || p.cli)));
     else if (own.length)
       box.append(
         $(
@@ -294,7 +299,20 @@ function keyCard(p) {
         ),
       );
     const actions = $('div', { class: 'card-actions' });
-    if (p.cli || own.length)
+    if (p.id === 'openrouter') {
+      actions.append(
+        $(
+          'button',
+          { class: 'text-button', onclick: () => selectAgent(features.orchestrator ? 'auto' : '') },
+          'Chat →',
+        ),
+        $(
+          'button',
+          { class: autoCount ? '' : 'primary', onclick: useAutoModels },
+          autoCount ? 'Refresh Auto models' : 'Use Auto',
+        ),
+      );
+    } else if (p.cli || own.length)
       actions.append($('button', { class: 'text-button', onclick: () => selectAgent(p.cli || own[0].name) }, 'Chat →'));
     else actions.append($('button', { class: 'primary', onclick: () => addProfile(p.id, 'auto', 'auto') }, 'Use Auto'));
     actions.append($('button', { onclick: () => putKey(p.id, '') }, 'Remove key'));
@@ -358,7 +376,10 @@ function render() {
         { value: c.name },
         c.profile
           ? (providers[c.profile.provider]?.name || c.name) +
-              (c.profile.model === 'openrouter/auto' ? ' · Auto' : ' · ' + names[c.profile.harness])
+              ' · ' +
+              (c.profile.model === 'openrouter/auto' ? 'Provider Auto' : c.profile.model || 'Provider default') +
+              ' · ' +
+              (names[c.profile.harness] || c.profile.harness)
           : names[c.name] || c.name,
       ),
     );
@@ -383,11 +404,59 @@ async function load() {
     report(e);
   }
 }
-async function putKey(id, key) {
-  const r = key ? await call('PUT', '/keys/' + id, { key, auto: true }) : await call('DELETE', '/keys/' + id);
-  messages['key:' + id] = r.ok ? '' : r.body.error || 'Could not save the key';
+function autoModelsMessage(models) {
+  if (!models || !Array.isArray(models.created) || !Array.isArray(models.unavailable))
+    return 'Auto models could not be checked. Use Auto to retry.';
+  const readyNames = new Set(
+    profiles.filter((p) => p.provider === 'openrouter' && p.autoEligible === true).map((p) => p.name),
+  );
+  for (const profile of models.created) if (profile.autoEligible === true) readyNames.add(profile.name);
+  const count = readyNames.size,
+    missing = models.unavailable.length;
+  if (count)
+    return (
+      'Auto ready · ' +
+      count +
+      (count === 1 ? ' model.' : ' models.') +
+      (missing ? ' ' + missing + ' unavailable; refresh to retry.' : ' Paid use still needs your chat opt-in.')
+    );
+  return (
+    'Auto models unavailable' +
+    (missing && models.unavailable[0].reason ? ': ' + models.unavailable[0].reason : '.') +
+    ' Use Auto to retry.'
+  );
+}
+async function useAutoModels() {
+  messages['key:openrouter'] = 'Preparing Auto models…';
   editing = false;
-  await load();
+  render();
+  try {
+    const r = await call('POST', '/routing/models', {});
+    messages['key:openrouter'] = r.ok ? autoModelsMessage(r.body) : r.body.error || 'Could not prepare Auto models';
+    await load();
+    if (r.ok && features.orchestrator) selectAgent('auto');
+  } catch (error) {
+    messages['key:openrouter'] = 'Could not prepare Auto models. Use Auto to retry.';
+    editing = false;
+    render();
+  }
+}
+async function putKey(id, key) {
+  try {
+    const r = key ? await call('PUT', '/keys/' + id, { key, auto: true }) : await call('DELETE', '/keys/' + id);
+    messages['key:' + id] = r.ok
+      ? id === 'openrouter' && key
+        ? autoModelsMessage(r.body.models)
+        : ''
+      : r.body.error || 'Could not save the key';
+    editing = false;
+    await load();
+    if (r.ok && key && id === 'openrouter' && features.orchestrator) selectAgent('auto');
+  } catch (error) {
+    messages['key:' + id] = 'Could not save the key. Please try again.';
+    editing = false;
+    render();
+  }
 }
 async function addProfile(provider, harness, model, extra = {}) {
   const r = await call('POST', '/profiles', { provider, harness, model, ...extra });
@@ -469,7 +538,10 @@ function rejectPending(reason) {
 }
 function remember() {
   try {
-    localStorage.setItem('agent-home-chat', JSON.stringify({ id: session, cli: selected }));
+    localStorage.setItem(
+      'agent-home-chat',
+      JSON.stringify({ id: session, cli: selected, allowPaidApi: byId('allow-paid').checked }),
+    );
   } catch {}
 }
 function permission(m) {
@@ -543,11 +615,12 @@ function receive(m) {
 async function connection() {
   if (ready && ws?.readyState === WebSocket.OPEN) return ready;
   selected = byId('chat-agent').value;
-  const socket = new WebSocket(
-    (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + (selected === '' ? '/acp' : '/acp/auto'),
-  );
+  const endpoint =
+    selected === '' ? '/acp' : features.orchestrator ? '/acp/auto' : '/acp/' + encodeURIComponent(selected);
+  const socket = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + endpoint);
   ws = socket;
   socket.onmessage = (e) => {
+    if (ws !== socket) return;
     try {
       const m = JSON.parse(e.data);
       for (const item of Array.isArray(m) ? m : [m]) receive(item);
@@ -576,7 +649,11 @@ async function connection() {
     if (session) {
       byId('chat-messages').replaceChildren();
       assistant = undefined;
-      await request('session/load', { sessionId: session, cwd: '/work', mcpServers: [] });
+      const loaded = await request('session/load', { sessionId: session, cwd: '/work', mcpServers: [] });
+      if (selected === 'auto' && loaded._meta?.agentHome?.allowPaidApi !== byId('allow-paid').checked) {
+        resetChat(true);
+        throw new Error('Conversation billing preference changed. Send again to start a new conversation.');
+      }
     } else {
       const s = await request('session/new', {
         cwd: '/work',
@@ -604,8 +681,8 @@ async function connection() {
     throw e;
   }
 }
-function resetChat() {
-  if (busy) return;
+function resetChat(force = false) {
+  if (busy && force !== true) return;
   ws?.close();
   ws = undefined;
   ready = undefined;
@@ -614,6 +691,7 @@ function resetChat() {
   rejectPending('New conversation');
   byId('chat-messages').replaceChildren();
   byId('permissions').replaceChildren();
+  permissions.clear();
   try {
     localStorage.removeItem('agent-home-chat');
   } catch {}
@@ -628,6 +706,7 @@ function selectAgent(name) {
 }
 byId('new-chat').onclick = resetChat;
 byId('chat-agent').onchange = resetChat;
+byId('allow-paid').onchange = resetChat;
 byId('stop-chat').onclick = () => {
   if (session) {
     for (const answer of permissions.values()) answer({ outcome: 'cancelled' });
@@ -643,6 +722,7 @@ byId('chat-form').onsubmit = async (e) => {
   byId('send-chat').disabled = true;
   byId('new-chat').disabled = true;
   byId('chat-agent').disabled = true;
+  byId('allow-paid').disabled = true;
   byId('stop-chat').hidden = false;
   try {
     chatStatus('Connecting…');
@@ -661,6 +741,7 @@ byId('chat-form').onsubmit = async (e) => {
     byId('send-chat').disabled = false;
     byId('new-chat').disabled = false;
     byId('chat-agent').disabled = false;
+    byId('allow-paid').disabled = false;
     byId('stop-chat').hidden = true;
     byId('prompt').focus();
   }
@@ -681,10 +762,16 @@ async function loadUsage() {
 await load();
 try {
   const saved = JSON.parse(localStorage.getItem('agent-home-chat') || 'null');
-  if (saved?.id && typeof saved.cli === 'string') {
+  if (
+    saved?.id &&
+    typeof saved.cli === 'string' &&
+    [...byId('chat-agent').options].some((o) => o.value === saved.cli) &&
+    (saved.cli !== 'auto' || typeof saved.allowPaidApi === 'boolean')
+  ) {
     session = saved.id;
     selected = saved.cli;
     byId('chat-agent').value = selected;
+    byId('allow-paid').checked = selected === 'auto' && saved.allowPaidApi === true;
     chatStatus('Previous conversation available · send to reconnect');
   }
 } catch {}
@@ -775,7 +862,10 @@ async function loadTasks() {
                   const a = await call('GET', '/artifacts/home/' + t.outputRef);
                   if (a.ok) {
                     try {
-                      box.append($('pre', {}, JSON.parse(a.body.content).text || a.body.content));
+                      const output = JSON.parse(a.body.content);
+                      if (typeof output.verification?.status === 'string')
+                        box.append($('p', { class: 'muted' }, 'Verification · ' + output.verification.status));
+                      box.append($('pre', {}, output.text || a.body.content));
                     } catch {
                       box.append($('pre', {}, a.body.content));
                     }
