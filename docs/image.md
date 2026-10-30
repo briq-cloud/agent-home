@@ -73,4 +73,4 @@ MIT licensed. The briq service is operated by Uplab SAS under its
 
 ## Benchmarks
 
-[Small ACP benchmarks](benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
+[Small ACP benchmarks](../benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
