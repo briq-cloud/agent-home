@@ -52,18 +52,19 @@ const product = (id, name, sub) =>
     $('div', {}, $('div', { class: 'name' }, name), sub ? $('div', { class: 'product-subtitle' }, sub) : null),
   );
 const day = (iso) => new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-const call = async (method, path, body) => {
+const call = async (method, path, body, signal) => {
   const r = await fetch(path, {
     method,
     headers: body ? { 'content-type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
   return { ok: r.ok, body: await r.json().catch(() => ({})) };
 };
 function report(error) {
   byId('notice').textContent = error instanceof Error ? error.message : String(error);
 }
-async function copy(text) {
+async function copy(text, confirmation = 'Link copied') {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -74,10 +75,11 @@ async function copy(text) {
     input.remove();
     if (!copied) {
       window.prompt('Copy this link', text);
-      return;
+      return false;
     }
   }
-  byId('notice').textContent = 'Link copied';
+  byId('notice').textContent = confirmation;
+  return true;
 }
 function copyButton(text, label = 'Copy link') {
   const button = $('button', {
@@ -85,7 +87,7 @@ function copyButton(text, label = 'Copy link') {
     class: 'icon-button',
     title: label,
     'aria-label': label,
-    onclick: () => copy(text).catch(report),
+    onclick: () => copy(text, label.toLowerCase().includes('code') ? 'Code copied' : 'Link copied').catch(report),
   });
   button.innerHTML = copySvg;
   return button;
@@ -105,34 +107,427 @@ let features = {},
   limited = {},
   messages = {};
 const signIns = {};
-let editing = false,
-  dirty = false;
-document.addEventListener('focusin', (e) => {
-  if (e.target.closest('.card') && e.target.matches('input,select,button,summary')) editing = true;
+const signInPolls = new Map();
+const composingCards = new Set();
+document.addEventListener('compositionstart', (event) => {
+  const card = event.target.closest('.card');
+  if (card) composingCards.add(card.getAttribute('data-agent') || 'key:' + card.getAttribute('data-provider'));
 });
-document.addEventListener('focusout', () =>
-  setTimeout(() => {
-    if (!document.activeElement?.closest('.card')) {
-      editing = false;
-      if (dirty) render();
+document.addEventListener('compositionend', (event) => {
+  const card = event.target.closest('.card');
+  if (card) composingCards.delete(card.getAttribute('data-agent') || 'key:' + card.getAttribute('data-provider'));
+  render();
+});
+let loading = false;
+let pageActive = true;
+
+// Replace only one card at a time. Typed values, selections and open Advanced
+// controls stay local to that card; focused buttons never freeze status updates.
+function replaceCard(previous, next) {
+  if (!previous) return next;
+  const controls = [...previous.querySelectorAll('input,textarea,select')];
+  const drafts = new Map(
+    controls.map((control, index) => [
+      control.dataset.draft || control.tagName + ':' + (control.getAttribute('aria-label') || index),
+      {
+        value: control.value,
+        checked: control.checked,
+        focused: control === document.activeElement,
+        start: control.selectionStart,
+        end: control.selectionEnd,
+      },
+    ]),
+  );
+  const expanded = [...previous.querySelectorAll('details')].map((details) => details.open);
+  previous.replaceWith(next);
+  [...next.querySelectorAll('details')].forEach((details, index) => {
+    details.open = expanded[index] || false;
+  });
+  [...next.querySelectorAll('input,textarea,select')].forEach((control, index) => {
+    const saved = drafts.get(
+      control.dataset.draft || control.tagName + ':' + (control.getAttribute('aria-label') || index),
+    );
+    if (!saved) return;
+    control.value = saved.value;
+    if (control.type === 'checkbox') control.checked = saved.checked;
+    if (saved.focused && !control.disabled) {
+      control.focus({ preventScroll: true });
+      if (typeof saved.start === 'number') {
+        try {
+          control.setSelectionRange(saved.start, saved.end);
+        } catch {}
+      }
     }
-  }, 0),
-);
+  });
+  return next;
+}
+function renderCards(container, values, key, create) {
+  const existing = new Map([...container.children].map((node) => [node.getAttribute(key), node]));
+  for (const value of values) {
+    const name = key === 'data-agent' ? value.name : value.id;
+    const previous = existing.get(name);
+    if (previous && composingCards.has(key === 'data-agent' ? name : 'key:' + name)) {
+      existing.delete(name);
+      continue;
+    }
+    const next = create(value);
+    if (previous?.dataset.renderSignature === next.dataset.renderSignature) {
+      existing.delete(name);
+      continue;
+    }
+    if (previous) replaceCard(previous, next);
+    else container.append(next);
+    existing.delete(name);
+  }
+  for (const node of existing.values()) node.remove();
+}
+function renderAgent(name) {
+  const agent = agents.find((item) => item.name === name);
+  if (!agent || composingCards.has(name)) return;
+  const previous = [...byId('clis').children].find((node) => node.getAttribute('data-agent') === name);
+  if (previous) {
+    const next = card(agent);
+    if (previous.dataset.renderSignature !== next.dataset.renderSignature) replaceCard(previous, next);
+  }
+}
+function signInActive(view) {
+  return view && ['starting', 'waiting'].includes(view.state);
+}
+function stopSignInPoll(name, expected) {
+  const poll = signInPolls.get(name);
+  if (!poll || (expected && poll !== expected)) return;
+  poll.stopped = true;
+  clearTimeout(poll.timer);
+  poll.controller?.abort();
+  signInPolls.delete(name);
+}
+function updateSignIn(name, state) {
+  const view = signIns[name];
+  if (!view || !['idle', 'starting', 'waiting', 'done', 'failed'].includes(state.state)) return;
+  if (['done', 'failed'].includes(view.state) && signInActive(state)) return;
+  Object.assign(view, state, { pollError: '' });
+  if (!signInActive(view)) {
+    view.finishing = false;
+    view.submitting = false;
+    view.cancelling = false;
+    view.endedAt = Date.now();
+    stopSignInPoll(name);
+    if (view.state === 'done') {
+      const agent = agents.find((item) => item.name === name);
+      if (agent) {
+        agent.signedIn = true;
+        agent.signIn = 'done';
+      }
+      messages[name] = '';
+      // The cheap login poll already proved completion. Refresh slower overall
+      // inventory in the background without delaying this visible confirmation.
+      void load();
+    }
+  } else if (view.finishing && !view.submitting && Date.now() - view.submittedAt > 10_000) {
+    view.finishing = false;
+    view.note = 'Still waiting for Claude. Check the browser, or paste the code again.';
+  }
+  renderAgent(name);
+}
+function startSignInPoll(name) {
+  if (!pageActive || signInPolls.has(name) || !signInActive(signIns[name])) return;
+  const view = signIns[name];
+  const poll = { stopped: false, timer: undefined, controller: undefined };
+  signInPolls.set(name, poll);
+  const tick = async () => {
+    if (poll.stopped || signIns[name] !== view || poll.controller) return;
+    poll.controller = new AbortController();
+    const timeout = setTimeout(() => poll.controller.abort(), 5000);
+    try {
+      const response = await call('GET', '/connect/' + name, undefined, poll.controller.signal);
+      if (!poll.stopped && signIns[name] === view) {
+        if (response.ok) updateSignIn(name, response.body);
+        else {
+          view.pollError = 'Could not check sign-in. Retrying…';
+          renderAgent(name);
+        }
+      }
+    } catch {
+      if (!poll.stopped && signIns[name] === view) {
+        view.pollError = 'Connection interrupted. Retrying…';
+        renderAgent(name);
+      }
+    } finally {
+      clearTimeout(timeout);
+      poll.controller = undefined;
+      if (!poll.stopped && signIns[name] === view && signInActive(view)) poll.timer = setTimeout(tick, 500);
+      else stopSignInPoll(name, poll);
+    }
+  };
+  poll.tick = tick;
+  void tick();
+}
+function wakeSignInPoll(name) {
+  const poll = signInPolls.get(name);
+  if (!poll) {
+    startSignInPoll(name);
+    return;
+  }
+  if (poll.controller || poll.stopped) return;
+  clearTimeout(poll.timer);
+  void poll.tick();
+}
+function wakeSignIns() {
+  for (const name of Object.keys(signIns)) wakeSignInPoll(name);
+}
+async function cancelSignIn(name) {
+  const view = signIns[name];
+  if (!view || view.cancelling) return;
+  view.cancelling = true;
+  renderAgent(name);
+  try {
+    const response = await call('DELETE', '/connect/' + name, undefined, AbortSignal.timeout(10_000));
+    if (signIns[name] !== view) return;
+    if (!response.ok) throw Error('cancel failed');
+    updateSignIn(name, response.body);
+    startSignInPoll(name);
+  } catch {
+    view.cancelling = false;
+    view.pollError = 'Could not cancel sign-in. Try again.';
+    renderAgent(name);
+  }
+}
+async function confirmSignIn(name, input) {
+  const view = signIns[name],
+    code = input.value.trim();
+  if (!view || !code || view.submitting || view.finishing || view.cancelling) return;
+  view.submitting = true;
+  view.finishing = true;
+  view.submittedAt = Date.now();
+  view.note = '';
+  input.value = '';
+  renderAgent(name);
+  try {
+    const response = await call('POST', '/connect/' + name + '/input', { text: code }, AbortSignal.timeout(10_000));
+    if (signIns[name] !== view || !signInActive(view)) return;
+    view.submitting = false;
+    if (!response.ok) {
+      view.finishing = false;
+      view.note = 'The code could not be sent. Check it and try again, or restart sign-in.';
+      updateSignIn(name, response.body);
+      renderAgent(name);
+      return;
+    }
+    updateSignIn(name, response.body);
+    startSignInPoll(name);
+  } catch {
+    if (signIns[name] !== view || !signInActive(view)) return;
+    view.submitting = false;
+    view.finishing = false;
+    view.note = 'The code could not be sent. Paste it again to retry.';
+    renderAgent(name);
+  }
+}
+function signInCopy(text, label, name, view) {
+  return $(
+    'button',
+    {
+      type: 'button',
+      class: 'signin-copy',
+      onclick: async () => {
+        try {
+          const copied = await copy(text, label === 'Copy code' ? 'Code copied' : 'Link copied');
+          if (signIns[name] !== view) return;
+          view.copyFeedback = copied
+            ? label === 'Copy code'
+              ? 'Code copied'
+              : 'Sign-in link copied'
+            : 'Select and copy the value shown.';
+          renderAgent(name);
+        } catch {
+          view.copyFeedback = 'Could not copy. Please try again.';
+          renderAgent(name);
+        }
+      },
+    },
+    label,
+  );
+}
+function signInPanel(c, view) {
+  const vendor = names[c.name] || c.name;
+  const finishing = view.finishing || view.submitting;
+  const title = view.cancelling
+    ? 'Cancelling sign-in…'
+    : view.state === 'done'
+      ? 'Connected to ' + vendor
+      : view.state === 'failed'
+        ? view.reason === 'cancelled'
+          ? 'Sign-in cancelled'
+          : 'Sign-in did not finish'
+        : finishing
+          ? 'Finishing sign-in…'
+          : view.state === 'starting'
+            ? 'Preparing your sign-in…'
+            : 'Continue in your browser';
+  const panel = $(
+    'div',
+    { class: 'signin-flow', 'data-signin-state': finishing ? 'finishing' : view.state },
+    $(
+      'p',
+      { class: 'signin-heading' + (view.state === 'done' ? ' ok' : ''), role: 'status', 'aria-live': 'polite' },
+      title,
+    ),
+  );
+  if (view.state === 'done') {
+    panel.append($('p', { class: 'muted' }, 'Your ' + vendor + ' connection is ready on this home.'));
+    return panel;
+  }
+  if (view.state === 'failed') {
+    const reasons = {
+      timed_out: 'This sign-in expired. Start again for a fresh link and code.',
+      start_failed: 'The sign-in command could not start. Try again, or use the terminal.',
+      command_failed: 'The provider did not confirm sign-in. Check the code or start again.',
+      cancelled: 'No sign-in is waiting. You can try again whenever you are ready.',
+    };
+    panel.append(
+      $('p', { class: 'muted' }, view.error || reasons[view.reason] || 'Start again for a fresh sign-in link.'),
+    );
+    return panel;
+  }
+  const progress = $('ol', { class: 'signin-progress', 'aria-label': 'Sign-in steps' });
+  ['Open browser', 'Approve with ' + vendor, 'Return here'].forEach((label, index) =>
+    progress.append($('li', { class: index === (finishing ? 2 : view.opened ? 1 : 0) ? 'current' : '' }, label)),
+  );
+  panel.append(progress);
+  let url;
+  try {
+    const parsed = new URL(view.url);
+    if (parsed.protocol === 'https:') url = parsed;
+  } catch {}
+  if (url) {
+    panel.append(
+      $('p', { class: 'signin-host' }, 'Sign in with ' + vendor + ' at ', $('strong', {}, url.hostname)),
+      $(
+        'div',
+        { class: 'signin-browser-actions' },
+        $(
+          'a',
+          {
+            href: url.href,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            referrerpolicy: 'no-referrer',
+            class: 'button primary signin-open',
+            onclick: () => {
+              view.opened = true;
+              setTimeout(() => renderAgent(c.name), 0);
+            },
+          },
+          'Open ' + vendor + ' sign-in ↗',
+        ),
+        signInCopy(url.href, 'Copy link', c.name, view),
+      ),
+    );
+    if (view.code && c.name !== 'claude')
+      panel.append(
+        $(
+          'div',
+          { class: 'signin-code-row' },
+          $(
+            'div',
+            {},
+            $('span', { class: 'muted' }, 'Enter this code on the provider page'),
+            $('div', { class: 'code' }, view.code),
+          ),
+          signInCopy(view.code, 'Copy code', c.name, view),
+        ),
+      );
+    if (view.copyFeedback)
+      panel.append($('p', { class: 'signin-copy-feedback ok', role: 'status' }, view.copyFeedback));
+    panel.append(
+      $(
+        'p',
+        { class: 'muted' },
+        c.name === 'claude'
+          ? 'Approve in the browser, then return here and paste the confirmation code it gives you.'
+          : 'Approve in the browser, then return here. This page updates automatically.',
+      ),
+    );
+    if (c.name === 'claude') {
+      const input = $('input', {
+        placeholder: 'Paste the confirmation code from Claude',
+        'aria-label': 'Claude confirmation code',
+        'data-draft': 'signin-code',
+        autocomplete: 'off',
+        autocapitalize: 'off',
+        spellcheck: 'false',
+        ...(finishing || view.cancelling ? { disabled: '' } : {}),
+      });
+      const confirm = $(
+        'button',
+        {
+          class: 'primary',
+          type: 'button',
+          ...(finishing || view.cancelling ? { disabled: '' } : {}),
+          onclick: () => confirmSignIn(c.name, input),
+        },
+        finishing ? 'Confirming…' : 'Confirm code',
+      );
+      input.onkeydown = (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void confirmSignIn(c.name, input);
+        }
+      };
+      panel.append($('label', { class: 'signin-paste' }, 'Confirmation code', input), confirm);
+    }
+  } else
+    panel.append(
+      $('p', { class: 'muted signin-working' }, 'Waiting for ' + vendor + ' to prepare its secure sign-in link…'),
+    );
+  if (view.note || view.pollError)
+    panel.append($('p', { class: 'message', role: 'status' }, view.pollError || view.note));
+  panel.append(
+    $(
+      'button',
+      {
+        class: 'text-button',
+        type: 'button',
+        ...(view.cancelling ? { disabled: '' } : {}),
+        onclick: () => cancelSignIn(c.name),
+      },
+      view.cancelling ? 'Cancelling…' : 'Cancel sign-in',
+    ),
+  );
+  return panel;
+}
+window.addEventListener('pagehide', () => {
+  pageActive = false;
+  for (const name of signInPolls.keys()) stopSignInPoll(name);
+});
+window.addEventListener('pageshow', () => {
+  pageActive = true;
+  wakeSignIns();
+});
+window.addEventListener('focus', wakeSignIns);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) wakeSignIns();
+});
 const number = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
 function card(c) {
   const p = c.profile && providers[c.profile.provider];
   const name = p ? p.name : names[c.name] || c.name;
   const isKey = c.signInWith === 'api-key';
-  const state = limited[c.name]
-    ? ['At limit', 'warn']
-    : c.signedIn === true
-      ? [isKey ? 'Ready' : 'Signed in', 'ok']
-      : c.signedIn === false
-        ? [isKey ? 'Needs key' : 'Signed out', 'off']
-        : ['Not checked', 'off'];
+  const s = signIns[c.name];
+  const state = signInActive(s)
+    ? [s.finishing ? 'Confirming…' : 'Connecting…', 'warn']
+    : s?.state === 'done'
+      ? ['Signed in', 'ok']
+      : limited[c.name]
+        ? ['At limit', 'warn']
+        : c.signedIn === true
+          ? [isKey ? 'Ready' : c.statusSource === 'sign-in' ? 'Sign-in recorded' : 'Signed in', 'ok']
+          : c.signedIn === false
+            ? [isKey ? 'Needs key' : 'Signed out', 'off']
+            : ['Not checked', 'off'];
   const box = $(
     'article',
-    { class: 'card', 'data-agent': c.name },
+    { class: 'card' + (signInActive(s) ? ' signin-active' : ''), 'data-agent': c.name },
     $(
       'div',
       { class: 'row' },
@@ -150,15 +545,24 @@ function card(c) {
       $('span', { class: 'tag ' + state[1] }, state[0]),
     ),
   );
-  if (c.statusSource === 'sign-in') box.append($('span', { class: 'muted' }, 'Last sign-in completed on this home'));
+  if (c.statusSource === 'sign-in')
+    box.append($('span', { class: 'muted' }, 'Sign-in completion recorded here · not a live account check'));
   if (c.signedIn === null)
     box.append(
       $(
         'span',
         { class: 'muted' },
-        c.statusSource === 'command'
+        ['command', 'acp'].includes(c.statusSource)
           ? 'Sign-in check unavailable · try again shortly'
-          : 'This CLI does not provide a sign-in check',
+          : 'No standalone account check available',
+      ),
+    );
+  if (c.name === 'copilot' && ['sign-in', 'unavailable'].includes(c.statusSource))
+    box.append(
+      $(
+        'a',
+        { class: 'muted', href: '/terminal/', target: '_blank', rel: 'noopener' },
+        'Check account in terminal: open Copilot, then /user ↗',
       ),
     );
   if (c.life?.endsAt) box.append($('span', { class: 'muted' }, 'Sign-in until ' + day(c.life.endsAt)));
@@ -192,58 +596,8 @@ function card(c) {
           .join(' · '),
       ),
     );
-  const s = signIns[c.name];
-  if (s?.state === 'waiting') {
-    const steps = $('div', { class: 'steps' });
-    steps.append(
-      $(
-        'div',
-        { class: 'row' },
-        $('a', { href: s.url, target: '_blank', rel: 'noopener noreferrer' }, 'Open sign-in page ↗'),
-        copyButton(s.url, 'Copy sign-in link'),
-      ),
-    );
-    if (s.code)
-      steps.append(
-        $('div', { class: 'row' }, $('span', { class: 'code' }, s.code), copyButton(s.code, 'Copy sign-in code')),
-      );
-    if (c.name === 'claude') {
-      const input = $('input', {
-        placeholder: 'Code from the vendor page',
-        'aria-label': 'Sign-in code',
-        autocomplete: 'off',
-      });
-      steps.append(
-        input,
-        $(
-          'button',
-          {
-            onclick: async () => {
-              const r = await call('POST', '/connect/' + c.name + '/input', { text: input.value.trim() });
-              if (!r.ok) report('Could not send the code');
-              else input.value = '';
-            },
-          },
-          'Confirm code',
-        ),
-      );
-    }
-    steps.append(
-      $(
-        'button',
-        {
-          onclick: async () => {
-            await call('DELETE', '/connect/' + c.name);
-            delete signIns[c.name];
-            editing = false;
-            render();
-          },
-        },
-        'Cancel',
-      ),
-    );
-    box.append(steps);
-  } else {
+  if (s && s.state !== 'idle') box.append(signInPanel(c, s));
+  if (!signInActive(s)) {
     const actions = $('div', { class: 'card-actions' });
     if (c.signedIn !== false)
       actions.append($('button', { class: 'text-button', onclick: () => selectAgent(c.name) }, 'Chat →'));
@@ -251,12 +605,19 @@ function card(c) {
     else if (c.signInWith === 'terminal')
       actions.append($('a', { href: '/terminal/', target: '_blank', rel: 'noopener' }, 'Sign in in terminal ↗'));
     else if (!isKey)
-      actions.append($('button', { onclick: () => connect(c.name) }, c.signedIn ? 'Reconnect' : 'Sign in'));
+      actions.append(
+        $(
+          'button',
+          { onclick: () => connect(c.name) },
+          s?.state === 'failed' ? 'Try again' : c.signedIn ? 'Reconnect' : 'Sign in',
+        ),
+      );
     else if (!c.signedIn) actions.append($('a', { href: '#keys-section' }, 'Add key ↓'));
     if (c.life?.renews && c.signedIn) actions.append($('button', { onclick: () => refresh(c.name) }, 'Refresh'));
     box.append(actions);
   }
   if (messages[c.name]) box.append($('p', { class: 'message', role: 'status' }, messages[c.name]));
+  box.dataset.renderSignature = JSON.stringify([c, p?.name, limited[c.name], usage[c.name], s, messages[c.name]]);
   return box;
 }
 function keyCard(p) {
@@ -349,17 +710,20 @@ function keyCard(p) {
     box.append(details);
   }
   if (messages['key:' + p.id]) box.append($('p', { class: 'message', role: 'status' }, messages['key:' + p.id]));
+  box.dataset.renderSignature = JSON.stringify([
+    p,
+    profiles.filter((profile) => profile.provider === p.id),
+    messages['key:' + p.id],
+    features.orchestrator,
+  ]);
   return box;
 }
 function render() {
-  if (editing) {
-    dirty = true;
-    return;
-  }
-  dirty = false;
-  byId('clis').replaceChildren(...agents.map(card));
-  byId('keys').replaceChildren(...Object.values(providers).map(keyCard));
-  byId('connection-count').textContent = agents.filter((c) => c.signedIn).length + ' ready';
+  renderCards(byId('clis'), agents, 'data-agent', card);
+  renderCards(byId('keys'), Object.values(providers), 'data-provider', keyCard);
+  byId('connection-count').textContent =
+    agents.filter((c) => c.signedIn === true && (c.statusSource !== 'sign-in' || signIns[c.name]?.state === 'done'))
+      .length + ' ready';
   const select = byId('chat-agent'),
     current = select.value;
   select.replaceChildren(
@@ -386,6 +750,9 @@ function render() {
   select.value = [...select.options].some((o) => o.value === current) ? current : features.orchestrator ? 'auto' : '';
 }
 async function load() {
+  if (loading) return;
+  loading = true;
+  const requestedAt = Date.now();
   try {
     const [status, keys] = await Promise.all([call('GET', '/status'), call('GET', '/keys')]);
     if (!status.ok || !keys.ok) throw new Error('Open this home with its private link to connect.');
@@ -394,14 +761,20 @@ async function load() {
     features = status.body.features || {};
     providers = Object.fromEntries(keys.body.providers.map((p) => [p.id, p]));
     profiles = keys.body.profiles;
-    for (const c of agents)
-      if (signIns[c.name] && ['done', 'failed'].includes(c.signIn)) {
-        messages[c.name] = c.signIn === 'done' ? 'Sign-in complete' : 'Sign-in failed';
+    for (const c of agents) {
+      const view = signIns[c.name];
+      if (['starting', 'waiting'].includes(c.signIn) && (!view || view.endedAt < requestedAt)) {
+        signIns[c.name] = { state: c.signIn };
+        startSignInPoll(c.name);
+      } else if (view?.state === 'done' && requestedAt > view.endedAt && Date.now() - view.endedAt > 3000) {
         delete signIns[c.name];
       }
+    }
     render();
   } catch (e) {
     report(e);
+  } finally {
+    loading = false;
   }
 }
 function autoModelsMessage(models) {
@@ -428,7 +801,6 @@ function autoModelsMessage(models) {
 }
 async function useAutoModels() {
   messages['key:openrouter'] = 'Preparing Auto models…';
-  editing = false;
   render();
   try {
     const r = await call('POST', '/routing/models', {});
@@ -437,7 +809,6 @@ async function useAutoModels() {
     if (r.ok && features.orchestrator) selectAgent('auto');
   } catch (error) {
     messages['key:openrouter'] = 'Could not prepare Auto models. Use Auto to retry.';
-    editing = false;
     render();
   }
 }
@@ -449,43 +820,45 @@ async function putKey(id, key) {
         ? autoModelsMessage(r.body.models)
         : ''
       : r.body.error || 'Could not save the key';
-    editing = false;
     await load();
     if (r.ok && key && id === 'openrouter' && features.orchestrator) selectAgent('auto');
   } catch (error) {
     messages['key:' + id] = 'Could not save the key. Please try again.';
-    editing = false;
     render();
   }
 }
 async function addProfile(provider, harness, model, extra = {}) {
   const r = await call('POST', '/profiles', { provider, harness, model, ...extra });
   messages['key:' + provider] = r.ok ? '' : r.body.error || 'Could not configure the provider';
-  editing = false;
   await load();
 }
 async function dropProfile(name) {
   await call('DELETE', '/profiles/' + name);
-  editing = false;
   await load();
 }
 async function connect(name) {
-  messages[name] = 'Starting sign-in…';
-  editing = false;
-  render();
-  const r = await call('POST', '/connect/' + name);
-  messages[name] = r.ok
-    ? r.body.state === 'waiting'
-      ? ''
-      : 'Sign-in ' + r.body.state
-    : r.body.error || 'Sign-in failed';
-  if (r.body.state === 'waiting') signIns[name] = r.body;
-  editing = false;
-  await load();
+  if (signInActive(signIns[name])) {
+    startSignInPoll(name);
+    return;
+  }
+  stopSignInPoll(name);
+  const view = { state: 'starting' };
+  signIns[name] = view;
+  messages[name] = '';
+  renderAgent(name);
+  try {
+    const response = await call('POST', '/connect/' + name, { wait: false }, AbortSignal.timeout(10_000));
+    if (signIns[name] !== view) return;
+    if (!response.ok) throw Error('start failed');
+    updateSignIn(name, response.body);
+    startSignInPoll(name);
+  } catch {
+    if (signIns[name] !== view) return;
+    updateSignIn(name, { state: 'failed', error: 'Could not start sign-in. Try again, or use the terminal.' });
+  }
 }
 async function refresh(name) {
   messages[name] = 'Refreshing…';
-  editing = false;
   render();
   const r = await call('POST', '/refresh/' + name);
   messages[name] = r.ok ? (r.body.moved ? 'Refreshed' : 'Nothing to refresh yet') : r.body.error || 'Refresh failed';

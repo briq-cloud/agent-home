@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { commandStatus, parseBillingStatus, commandBilling } from '../src/auth/status.ts';
+import { clis } from '../src/providers/catalog.ts';
+import { commandStatus, parseAcpAuthStatus, parseBillingStatus, commandBilling } from '../src/auth/status.ts';
 
 test('distinguishes a signed-out result from a timed-out check', async () => {
   assert.equal(await commandStatus([process.execPath, '-e', 'process.exit(1)'], {}), false);
@@ -85,4 +86,23 @@ test('API authentication is never labelled an included subscription', async () =
     await commandBilling([process.execPath, '-e', 'process.stdout.write("x".repeat(20000))'], {}),
     'unknown',
   );
+});
+
+test('Vibe ACP auth status accepts only the documented authenticated boolean', () => {
+  assert.equal(
+    parseAcpAuthStatus({ authenticated: true, authState: 'api_key', signOutAvailable: true, secret: 'ignored' }),
+    true,
+  );
+  assert.equal(parseAcpAuthStatus({ authenticated: false, authState: 'missing' }), false);
+  assert.equal(parseAcpAuthStatus({ authState: 'missing' }), null);
+  assert.equal(parseAcpAuthStatus({ authenticated: 'true' }), null);
+  assert.equal(parseAcpAuthStatus(null), null);
+  assert.equal(parseAcpAuthStatus([]), null);
+});
+test('only the documented read-only ACP auth method can be configured', () => {
+  const configuration = (method: string) => ({
+    RUNNER_CLIS: JSON.stringify([{ name: 'vibe', acp: ['vibe-acp'], authStatusMethod: method }]),
+  });
+  assert.equal(clis(configuration('_auth/status'))[0]?.authStatusMethod, '_auth/status');
+  assert.throws(() => clis(configuration('_auth/signOut')), /invalid ACP auth status method/);
 });

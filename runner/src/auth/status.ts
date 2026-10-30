@@ -2,6 +2,18 @@ import { spawn } from 'node:child_process';
 
 const STATUS_OUTPUT_LIMIT = 16_384;
 
+/** Read the boolean from Vibe's ACP `{ authenticated, authState, signOutAvailable }` response. */
+export function parseAcpAuthStatus(value: unknown): boolean | null {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    typeof (value as { authenticated?: unknown }).authenticated !== 'boolean'
+  )
+    return null;
+  return (value as { authenticated: boolean }).authenticated;
+}
+
 function explicitStatus(stream: string): boolean | undefined {
   const candidates = [stream.trim(), ...stream.split(/\r?\n/).map((line) => line.trim())];
   for (const candidate of candidates) {

@@ -24,6 +24,8 @@ export interface Cli {
   blockedAuth?: string[];
   /** Asks whether its person is signed in: exit 0, or `"loggedIn": true` in what it prints. */
   status?: string[];
+  /** Read-only ACP extension returning `{ authenticated: boolean }`; never opens a model session. */
+  authStatusMethod?: '_auth/status';
   /**
    * Its processes share one sign-in whose refresh token works once: two that refresh at the same
    * moment sign the person out. The runner starts its sessions one at a time, and lets one prompt
@@ -95,7 +97,13 @@ export const CLIS: Cli[] = [
     status: ['agent', 'status'],
   },
   { name: 'grok', acp: ['grok', 'agent', 'stdio'], login: ['grok', 'login', '--device-auth'] },
-  { name: 'vibe', acp: ['vibe-acp'], login: ['vibe', '--setup'] },
+  {
+    name: 'vibe',
+    acp: ['vibe-acp'],
+    login: ['vibe', '--setup'],
+    // Mistral's documented read-only ACP extension; no prompt or session/new is needed.
+    authStatusMethod: '_auth/status',
+  },
   {
     // A key only: Gemini CLI serves no consumer plan since 2026-06-18 (Google moved them to
     // Antigravity). The image's system settings enforce it.
@@ -134,6 +142,8 @@ export function clis(env: NodeJS.ProcessEnv): Cli[] {
       )
         throw Error('invalid CLI command');
     }
+    if (cli.authStatusMethod !== undefined && cli.authStatusMethod !== '_auth/status')
+      throw Error('invalid ACP auth status method');
   }
   return table;
 }

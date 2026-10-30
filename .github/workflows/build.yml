@@ -42,6 +42,8 @@ jobs:
         working-directory: runner
         run: |
           npm ci --omit=optional --no-fund --no-audit
+          export RUNNER_CHROME_BIN="$(command -v google-chrome || command -v chromium)"
+          test -x "$RUNNER_CHROME_BIN"
           npm run typecheck
           npm test
           npm run benchmark -- /tmp/foundation-results.json
