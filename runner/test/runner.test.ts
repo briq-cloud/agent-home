@@ -306,6 +306,19 @@ test('starts the vendor sign-in and gives its page and code', async () => {
     headers: { authorization: `Bearer ${TOKEN}` },
   });
   assert.deepEqual(await res.json(), { state: 'waiting', url: 'https://example.test/device', code: 'ABCD-EFGH' });
+  // Reauthentication now pauses native work. Let this fixture finish before the
+  // next test exercises refresh and session operations against the same account.
+  const until = Date.now() + 5000;
+  let state = 'waiting';
+  while (['starting', 'waiting'].includes(state) && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    state = (
+      await (
+        await fetch(`http://127.0.0.1:${PORT}/connect/mock`, { headers: { authorization: `Bearer ${TOKEN}` } })
+      ).json()
+    ).state;
+  }
+  assert.equal(state, 'done');
 });
 
 test('refreshes a sign-in that a refresh renews, and says why not for one that only a sign-in does', async () => {

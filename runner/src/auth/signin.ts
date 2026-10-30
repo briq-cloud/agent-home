@@ -39,9 +39,11 @@ export class SignIn {
   private readonly options: Required<SignInOptions>;
 
   private readonly completed?: () => void;
+  private readonly ended?: () => void;
 
-  constructor(cli: Cli, completed?: () => void, options: SignInOptions = {}) {
+  constructor(cli: Cli, completed?: () => void, options: SignInOptions = {}, ended?: () => void) {
     this.completed = completed;
+    this.ended = ended;
     this.cli = cli;
     this.options = {
       timeoutMs: options.timeoutMs ?? SIGN_IN_MS,
@@ -69,6 +71,7 @@ export class SignIn {
     this.answeredPlaintext = false;
     if (!this.cli.login?.length || this.cli.login.some((part) => typeof part !== 'string' || part.includes('\0'))) {
       this.update({ state: 'failed', reason: 'start_failed' });
+      this.ended?.();
       return Promise.resolve(this.status);
     }
     const command = (this.cli.login ?? []).map(shq).join(' ');
@@ -113,6 +116,7 @@ export class SignIn {
           }
         }
       }
+      this.ended?.();
       log.info('sign-in ended', { cli: this.cli.name, code });
     };
     child.once('error', () => finish(null, true));

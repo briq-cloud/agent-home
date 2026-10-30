@@ -25,6 +25,7 @@ export type Binding = {
   modalities?: string[];
   healthy?: boolean;
   quotaBlocked?: boolean;
+  subscriptionAccount?: { enabled: boolean; priority: number };
   endpointTag?: string;
 };
 export type Availability = { checkedAt: string; bindings: Binding[] };
@@ -309,6 +310,7 @@ export class Routing {
       binding.compatibility === 'verified' &&
       binding.healthy !== false &&
       !binding.quotaBlocked &&
+      (request.explicit !== undefined || binding.subscriptionAccount?.enabled !== false) &&
       (!request.allowedRouteIds || request.allowedRouteIds.includes(binding.id)) &&
       (binding.billing === 'subscription' || request.allowPaidApi === true) &&
       (request.minContext === undefined || (numeric(binding.context) && binding.context >= request.minContext)) &&
@@ -320,11 +322,24 @@ export class Routing {
     const available = await this.options.availability();
     if (!fresh(available.checkedAt, this.now(), 60_000)) throw new Error('routing availability stale');
     const ids = new Set<string>();
-    return available.bindings.filter((b) => {
+    const eligible = available.bindings.filter((b) => {
       if (ids.has(b.id)) return false;
       ids.add(b.id);
       return this.eligible(b, request);
     });
+    if (request.explicit) return eligible;
+    // Select one eligible account per native subscription family before model decisions.
+    const families = new Map<string, Binding>();
+    const family = (b: Binding) => JSON.stringify([b.harness, b.model ?? null, b.canonical ?? null]);
+    for (const b of eligible) {
+      if (!b.subscriptionAccount || b.billing !== 'subscription') continue;
+      const existing = families.get(family(b));
+      if (!existing || b.subscriptionAccount.priority < existing.subscriptionAccount!.priority)
+        families.set(family(b), b);
+    }
+    return eligible.filter(
+      (b) => !b.subscriptionAccount || b.billing !== 'subscription' || families.get(family(b)) === b,
+    );
   }
   private async fallback(request: Selection, reason: string, decisionCostUsd?: number): Promise<Route> {
     const eligible = await this.inventory(request);
@@ -437,6 +452,10 @@ export class Routing {
           : {}),
       };
     }
+    if (!eligible.length) throw new Error('no eligible configured route');
+    const subscriptions = eligible.filter((b) => b.billing === 'subscription');
+    if (subscriptions.length === 1 && subscriptions[0]!.subscriptionAccount)
+      return this.fallback(request, 'eligible owned subscription account; no decision call');
     if (!this.options.dynamic) return this.fallback(request, 'dynamic routing disabled');
     const key = await this.options.openRouterKey();
     if (!key || !this.options.decisionClient || !numeric(request.decisionBudgetUsd) || request.decisionBudgetUsd <= 0)

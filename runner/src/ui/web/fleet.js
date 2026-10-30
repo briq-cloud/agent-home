@@ -440,10 +440,10 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   }
   function updateRoutes() {
     const select = composer.querySelector('[data-fleet-route]'), current = select.value;
-    const signature = JSON.stringify(getAgents().map(agent => [agent.name, agent.signedIn, agent.profile?.model]));
+    const signature = JSON.stringify(getAgents().map(agent => [agent.name, agent.signedIn, agent.profile?.model, agent.subscriptionAccount]));
     if (select.dataset.signature === signature) return;
     select.replaceChildren(element('option', { value: '' }, 'Auto · subscription first'), ...getAgents().map(agent =>
-      element('option', { value: agent.name, disabled: agent.signedIn === false }, agent.name +
+      element('option', { value: agent.name, disabled: agent.signedIn === false }, (agent.subscriptionAccount && !agent.subscriptionAccount.isDefault ? agent.subscriptionAccount.label + ' · Claude Code' : agent.name) +
         (agent.profile?.model ? ' · ' + agent.profile.model : '') + (agent.signedIn === null ? ' · status unknown' : ''))));
     if ([...select.options].some(option => option.value === current)) select.value = current;
     select.dataset.signature = signature;

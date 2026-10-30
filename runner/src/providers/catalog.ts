@@ -1,10 +1,12 @@
 import { accessSync, constants } from 'node:fs';
 import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { SubscriptionAccount } from './accounts.ts';
 
 /** One CLI the runner drives. Nothing else about a CLI is written anywhere in the runner. */
 export interface Cli {
   name: string;
+  subscriptionAccount?: SubscriptionAccount;
   /** Its ACP agent, speaking JSON-RPC on stdin and stdout. */
   acp: string[];
   /** The vendor's own sign-in, which the runner runs and reads the page's address and code from. */
@@ -231,3 +233,16 @@ export function which(name: string, path = ''): string | undefined {
   }
   return undefined;
 }
+
+/** Effective native environment shared by sign-in, status and native process launch. */
+export function effectiveCliEnv(cli: Cli, inherited: Record<string, string | undefined>): Record<string, string> {
+  const env = Object.fromEntries(
+    Object.entries(inherited).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+  for (const [name, value] of Object.entries(cli.env ?? {})) {
+    if (value === null) delete env[name];
+    else env[name] = value;
+  }
+  return env;
+}
+export const nativeHarness = (cli: Cli): string => cli.subscriptionAccount?.harness ?? cli.profile?.harness ?? cli.name;

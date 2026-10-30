@@ -21,6 +21,11 @@
     <div class="section-title"><div><p class="eyebrow">YOUR WORKSPACE</p><h1 id="agents-title">Connected agents</h1></div><span id="connection-count" class="muted"></span></div>
     <p class="signin-intro">Sign in with your own account. Open the provider’s page in your browser, then return here to finish.</p>
     <div class="grid" id="clis"><p class="muted">Loading agents…</p></div>
+    <details class="fleet-composer"><summary>Add a Claude subscription account</summary>
+      <form id="account-form" class="fleet-new-form"><label for="account-label">Account label</label><input id="account-label" aria-label="Claude account label" maxlength="80" placeholder="Work or personal" required><button id="add-account" type="submit">Add Claude account</button></form>
+      <p class="muted">Each account has its own sign-in; credentials are not copied. Auto picks eligible accounts for new tasks. Existing chats keep their account.</p>
+      <p id="account-notice" class="message" role="status" aria-live="polite"></p>
+    </details>
   </section>
   <section class="chat-shell" aria-labelledby="chat-title" id="chat">
     <div class="chat-header"><div><p class="eyebrow">YOUR AGENT HOME</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="auto">Auto orchestrator</option></select><button id="new-chat">New chat</button></div></div>

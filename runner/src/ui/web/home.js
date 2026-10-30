@@ -20,6 +20,9 @@ const names = {
   vibe: 'Mistral Vibe',
   gemini: 'Gemini',
 };
+const harnessOf = (agent) => agent.subscriptionAccount?.harness || agent.profile?.harness || agent.name;
+const agentLabel = (agent) =>
+  (!agent.subscriptionAccount?.isDefault && agent.subscriptionAccount?.label) || names[agent.name] || agent.name;
 const icons = {
   claude: 'claude',
   codex: 'openai',
@@ -111,6 +114,7 @@ let features = {},
   usage = {},
   limited = {},
   messages = {};
+const accountChanges = new Map();
 const signIns = {};
 const signInPolls = new Map();
 const composingCards = new Set();
@@ -354,7 +358,7 @@ function signInCopy(text, label, name, view) {
   );
 }
 function signInPanel(c, view) {
-  const vendor = names[c.name] || c.name;
+  const vendor = names[harnessOf(c)] || harnessOf(c);
   const finishing = view.finishing || view.submitting;
   const title = view.cancelling
     ? 'Cancelling sign-in…'
@@ -428,7 +432,7 @@ function signInPanel(c, view) {
         signInCopy(url.href, 'Copy link', c.name, view),
       ),
     );
-    if (view.code && c.name !== 'claude')
+    if (view.code && harnessOf(c) !== 'claude')
       panel.append(
         $(
           'div',
@@ -448,12 +452,12 @@ function signInPanel(c, view) {
       $(
         'p',
         { class: 'muted' },
-        c.name === 'claude'
+        harnessOf(c) === 'claude'
           ? 'Approve in the browser, then return here and paste the confirmation code it gives you.'
           : 'Approve in the browser, then return here. This page updates automatically.',
       ),
     );
-    if (c.name === 'claude') {
+    if (harnessOf(c) === 'claude') {
       const input = $('input', {
         placeholder: 'Paste the confirmation code from Claude',
         'aria-label': 'Claude confirmation code',
@@ -516,7 +520,7 @@ document.addEventListener('visibilitychange', () => {
 const number = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
 function card(c) {
   const p = c.profile && providers[c.profile.provider];
-  const name = p ? p.name : names[c.name] || c.name;
+  const name = p ? p.name : agentLabel(c);
   const isKey = c.signInWith === 'api-key';
   const s = signIns[c.name];
   const state = signInActive(s)
@@ -537,7 +541,7 @@ function card(c) {
       'div',
       { class: 'row' },
       product(
-        c.profile?.provider || c.name,
+        c.profile?.provider || harnessOf(c),
         name,
         p
           ? c.profile.model === 'openrouter/auto'
@@ -545,11 +549,24 @@ function card(c) {
             : c.profile.model || 'Provider default'
           : isKey
             ? 'API key'
-            : 'Subscription',
+            : c.subscriptionAccount
+              ? 'Claude Code · ' + ({ subscription: 'Subscription', use: 'API key' }[c.billing] || 'Account')
+              : 'Subscription',
       ),
       $('span', { class: 'tag ' + state[1] }, state[0]),
     ),
   );
+  if (c.subscriptionAccount) {
+    const account = c.subscriptionAccount;
+    box.append($('span', { class: 'muted' }, account.enabled ? 'Included in Auto' : 'Excluded from new Auto tasks'));
+    box.append(
+      $(
+        'button',
+        { type: 'button', class: 'text-button', onclick: (event) => toggleAccount(account, event.currentTarget) },
+        account.enabled ? 'Exclude from Auto' : 'Include in Auto',
+      ),
+    );
+  }
   if (c.statusSource === 'sign-in')
     box.append($('span', { class: 'muted' }, 'Sign-in completion recorded here · not a live account check'));
   if (c.signedIn === null)
@@ -749,11 +766,65 @@ function render() {
               (c.profile.model === 'openrouter/auto' ? 'Provider Auto' : c.profile.model || 'Provider default') +
               ' · ' +
               (names[c.profile.harness] || c.profile.harness)
-          : names[c.name] || c.name,
+          : c.subscriptionAccount && !c.subscriptionAccount.isDefault
+            ? agentLabel(c) + ' · Claude Code'
+            : names[c.name] || c.name,
       ),
     );
   select.value = [...select.options].some((o) => o.value === current) ? current : features.orchestrator ? 'auto' : '';
 }
+function acceptAccount(account) {
+  if (!account?.id || !account.cli) throw Error('Account update could not be confirmed. Refresh and try again.');
+  accountChanges.set(account.id, { account, acceptedAt: Date.now() });
+  const existing = agents.find((agent) => agent.subscriptionAccount?.id === account.id);
+  if (existing) {
+    existing.subscriptionAccount = account;
+    delete messages[existing.name];
+  } else
+    agents.push({
+      name: account.cli,
+      subscriptionAccount: account,
+      signInWith: 'page',
+      statusSource: 'sdk',
+      signedIn: null,
+      signIn: 'idle',
+    });
+  render();
+}
+async function toggleAccount(account, button) {
+  button.disabled = true;
+  try {
+    const response = await call('PATCH', '/accounts/' + encodeURIComponent(account.id), { enabled: !account.enabled });
+    if (!response.ok) throw Error(response.body.error || 'Could not update account selection.');
+    acceptAccount(response.body.account);
+    await load();
+  } catch (error) {
+    messages[agents.find((agent) => agent.subscriptionAccount?.id === account.id)?.name || 'claude'] =
+      error instanceof Error ? error.message : 'Could not update account selection.';
+    render();
+  } finally {
+    button.disabled = false;
+  }
+}
+byId('account-form').onsubmit = async (event) => {
+  event.preventDefault();
+  const button = byId('add-account'),
+    label = byId('account-label');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const response = await call('POST', '/accounts', { harness: 'claude', label: label.value.trim() });
+    if (!response.ok) throw Error(response.body.error || 'Could not add the account.');
+    acceptAccount(response.body.account);
+    label.value = '';
+    byId('account-notice').textContent = 'Account added. Sign in on its card to connect it.';
+    await load();
+  } catch (error) {
+    byId('account-notice').textContent = error instanceof Error ? error.message : 'Could not add the account.';
+  } finally {
+    button.disabled = false;
+  }
+};
 async function load() {
   if (loading) return;
   loading = true;
@@ -769,6 +840,23 @@ async function load() {
       );
     }
     agents = status.body.clis;
+    for (const [id, change] of accountChanges) {
+      if (requestedAt > change.acceptedAt) {
+        accountChanges.delete(id);
+        continue;
+      }
+      const existing = agents.find((agent) => agent.subscriptionAccount?.id === id);
+      if (existing) existing.subscriptionAccount = change.account;
+      else
+        agents.push({
+          name: change.account.cli,
+          subscriptionAccount: change.account,
+          signInWith: 'page',
+          statusSource: 'sdk',
+          signedIn: null,
+          signIn: 'idle',
+        });
+    }
     limited = status.body.limited || {};
     features = status.body.features || {};
     providers = Object.fromEntries(keys.body.providers.map((p) => [p.id, p]));
@@ -1065,7 +1153,13 @@ async function connection() {
       });
       session = s.sessionId;
       remember();
-      chatStatus('Connected · ' + (names[s._meta?.agentHome?.cli] || s._meta?.agentHome?.cli || 'agent'));
+      const actualAgent = agents.find((agent) => agent.name === s._meta?.agentHome?.cli);
+      chatStatus(
+        'Connected · ' +
+          (actualAgent
+            ? agentLabel(actualAgent)
+            : names[s._meta?.agentHome?.cli] || s._meta?.agentHome?.cli || 'agent'),
+      );
     }
   })();
   try {

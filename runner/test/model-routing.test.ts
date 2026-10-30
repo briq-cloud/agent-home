@@ -437,3 +437,37 @@ test('Auto pool fallback never consumes stale failed price data or overrides a s
   h.bindings([binding(), binding({ id: 'pool', cli: 'openrouter-claude', provider: 'openrouter', billing: 'use' })]);
   assert.equal((await routing.select(request)).source, 'subscription');
 });
+
+test('owned account arithmetic stays deterministic while distinct harness/model decisions remain opt-in', async (t) => {
+  const h = await setup(t);
+  h.bindings([
+    binding({ id: 'claude-a', cli: 'claude-account-a', subscriptionAccount: { enabled: true, priority: 0 } }),
+    binding({ id: 'claude-b', cli: 'claude-account-b', subscriptionAccount: { enabled: true, priority: 1 } }),
+    binding({ id: 'codex', cli: 'codex', harness: 'codex' }),
+  ]);
+  h.result({
+    model: 'cloudflare/clef-flash',
+    usage: { cost: 0.001 },
+    answers: { type: { choice: 'change' }, route: { choice: 'codex' } },
+  });
+  const route = await new Routing(h.options).select({ task: 'Implement tests', decisionBudgetUsd: 0.01 });
+  assert.equal(route.source, 'decision');
+  assert.equal(route.cli, 'codex');
+  assert.equal(h.decisions(), 1);
+  const candidates = route.candidates!.find((p) => p.type === 'change')!.candidates;
+  assert.ok(candidates.some((c) => c.id === 'claude-a'));
+  assert.ok(!candidates.some((c) => c.id === 'claude-b'));
+});
+
+test('account priority overrides the default Claude family label while retaining explicit account choice', async (t) => {
+  const h = await setup(t);
+  h.bindings([
+    binding({ id: 'claude', cli: 'claude', subscriptionAccount: { enabled: true, priority: 100 } }),
+    binding({ id: 'second', cli: 'claude-account-second', subscriptionAccount: { enabled: true, priority: 0 } }),
+  ]);
+  const routing = new Routing({ ...h.options, defaultRouteId: 'claude' });
+  assert.equal((await routing.select({ task: 'work' })).cli, 'claude-account-second');
+  assert.equal((await routing.select({ task: 'owner choice', explicit: { cli: 'claude' } })).cli, 'claude');
+  assert.equal(h.decisions(), 0);
+  assert.equal(h.requests.length, 0);
+});

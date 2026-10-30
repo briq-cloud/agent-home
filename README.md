@@ -55,6 +55,7 @@ flowchart LR
 | Concept | Component | Default / boundary |
 | --- | --- | --- |
 | Harnesses | Unmodified vendor CLIs + official ACP adapters | Pinned per image. |
+| Subscription accounts | Native Claude login folders + private account registry | Add accounts explicitly; Auto skips observed quota limits for new work. Existing chats keep their account. |
 | Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, opt-in fleet slots, explicit retries. |
 | Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic decisions enabled; key and per-task budget required. |
 | Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
@@ -67,11 +68,7 @@ flowchart LR
 | Verification | Bounded commands + artifact hashes | Explicit checks; absent checks remain unverified. |
 | Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
 
-Implementation checks: [fleet](docs/benchmarks/2026-10-30-fleet-evaluation.html) ·
-[batch](docs/benchmarks/2026-10-30-batch-evaluation.html) ·
-[memory retrieval](docs/benchmarks/2026-10-30-memory-retrieval-confirmation.html) ·
-[semantic search](docs/benchmarks/2026-10-30-semantic-search.html) ·
-[managed tasks](docs/benchmarks/2026-10-30-managed-evaluation.html).
+Run the [benchmark harness](benchmarks/README.md) for reproducible implementation and model checks.
 [Shared skills, MCP setup and compatibility](docs/extensions.md). The free native Claude conformance check passed 9/9 with zero paid model calls; other CLI ingestion is not certified by that check.
 
 Semantic search returns cited candidates and similarity scores. It never injects them into prompts automatically.
@@ -120,7 +117,7 @@ only when their exact versions pass the public catalog checks. The operator can 
 these profiles. Catalog priors are a starting signal, not learned “best model” results. Use
 `POST /routing/models` to prepare/refresh and `GET /routing/models` to inspect eligible profiles.
 
-[Task/API examples](runner/README.md) · [Shared extensions](docs/extensions.md) · [Architecture](docs/architecture.md) ·
+[Task/API examples](runner/README.md) · [Subscription accounts](docs/accounts.md) · [Shared extensions](docs/extensions.md) · [Architecture](docs/architecture.md) ·
 [Image and CLI list](docs/image.md) · [Pinned versions](REFERENCE.md) · [Model benchmarks](benchmarks/README.md)
 
 This is a single-user home. Coordination and path checks do not provide OS sandboxes.

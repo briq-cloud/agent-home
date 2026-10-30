@@ -44,6 +44,8 @@ export function commandStatus(
   command: string[],
   env: Record<string, string>,
   timeoutMs = 10_000,
+  subscriptionOnly = false,
+  onBilling?: (billing: 'subscription' | 'use' | 'unknown') => void,
 ): Promise<boolean | null> {
   return new Promise((resolve) => {
     const [cmd, ...args] = command;
@@ -75,7 +77,14 @@ export function commandStatus(
       if (timedOut || invalid || signal || code === null) return resolve(null);
       const out = Buffer.concat(stdout).toString('utf8');
       const err = Buffer.concat(stderr).toString('utf8');
+      const billing = parseBillingStatus(`${out}\n${err}`);
+      onBilling?.(billing);
       const structured = explicitStatus(out) ?? explicitStatus(err);
+      if (structured === false) return resolve(false);
+      if (subscriptionOnly) {
+        if (explicitlySignedOut(`${out}\n${err}`)) return resolve(false);
+        return resolve(structured === true && parseBillingStatus(`${out}\n${err}`) === 'subscription' ? true : null);
+      }
       if (structured !== undefined) return resolve(structured);
       if (explicitlySignedOut(`${out}\n${err}`)) return resolve(false);
       // Grok also prints a default model catalog while signed out. A successful

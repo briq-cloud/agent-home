@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { Agent, type Rpc, RpcFailure } from './agent.ts';
-import type { Cli } from '../providers/catalog.ts';
+import { effectiveCliEnv, nativeHarness, type Cli } from '../providers/catalog.ts';
+import type { SubscriptionAccount } from '../providers/accounts.ts';
 import { log } from '../telemetry/log.ts';
 import { parseAcpAuthStatus } from '../auth/status.ts';
 import {
@@ -244,6 +245,8 @@ export const GLOBAL_CAPABILITIES = {
 
 export class Hub {
   private readonly engines = new Map<string, Engine>();
+  private readonly authGates = new Map<string, FirstCall>();
+  private readonly signingIn = new Set<string>();
   /** One outstanding read-only auth probe per CLI process, even when callers time out. */
   private readonly authProbes = new WeakMap<Engine, Promise<boolean | null>>();
   private readonly slots: Slots;
@@ -290,7 +293,7 @@ export class Hub {
       .filter(([, value]) => !!value)
       .map(([key]) => key);
     return [...this.engines].map(([cli, engine]) => {
-      const harness = engine.agent.cli.profile?.harness ?? cli;
+      const harness = nativeHarness(engine.agent.cli);
       const capabilities = this.advertised.get(cli);
       return {
         cli,
@@ -316,7 +319,7 @@ export class Hub {
   private prepareSkills(cli: string): Array<{ name: string; status: string }> {
     if (!this.extensions) return [];
     const native = this.engine(cli).agent.cli;
-    const harness = native.profile?.harness ?? cli;
+    const harness = nativeHarness(native);
     if (!['claude', 'codex', 'copilot', 'cursor', 'grok', 'vibe', 'gemini'].includes(harness)) return [];
     const env: Record<string, string | undefined> = { ...this.env };
     for (const [name, value] of Object.entries(native.env ?? {})) env[name] = value ?? undefined;
@@ -347,7 +350,7 @@ export class Hub {
     }
     const initialized = (await this.initialize(cli)) as { agentCapabilities?: AgentCapabilities };
     const capabilities = initialized?.agentCapabilities ?? {};
-    const harness = this.engine(cli).agent.cli.profile?.harness ?? cli;
+    const harness = nativeHarness(this.engine(cli).agent.cli);
     let plan;
     try {
       plan = this.extensions.registry.plan({
@@ -450,6 +453,7 @@ export class Hub {
     const sessions = new Map<string, Session>();
     const agent = new Agent(cli, this.env, this.cwd, {
       beforeStart: async () => {
+        this.assertSignInIdle(cli.name);
         try {
           this.prepareSkills(cli.name);
         } catch {
@@ -471,7 +475,10 @@ export class Hub {
         for (const s of sessions.values()) s.dropHeld(`${cli.name} exited`);
       },
     });
-    this.engines.set(cli.name, { agent, sessions, firstCall: new FirstCall(), dir });
+    const group = this.authGroup(cli);
+    let firstCall = this.authGates.get(group);
+    if (!firstCall) this.authGates.set(group, (firstCall = new FirstCall()));
+    this.engines.set(cli.name, { agent, sessions, firstCall, dir });
   }
 
   /** A CLI no more: its process stopped, its turns ended with it. Its logs stay. */
@@ -490,8 +497,57 @@ export class Hub {
     return this.engine(cli).agent.running;
   }
 
+  /** Metadata updates never restart an account process or move its existing sessions. */
+  setAccountMetadata(cli: string, account: SubscriptionAccount | undefined): void {
+    this.engine(cli).agent.cli.subscriptionAccount = account;
+  }
+  private authGroup(cli: Cli): string {
+    const env = effectiveCliEnv(cli, this.env),
+      harness = nativeHarness(cli);
+    const path =
+      harness === 'claude'
+        ? (env.CLAUDE_CONFIG_DIR ?? join(env.HOME ?? this.cwd, '.claude'))
+        : harness === 'codex'
+          ? (env.CODEX_HOME ?? join(env.HOME ?? this.cwd, '.codex'))
+          : cli.name;
+    let canonical = resolve(path);
+    try {
+      canonical = realpathSync(canonical);
+    } catch {}
+    return `${harness}:${canonical}`;
+  }
+  private assertSignInIdle(cli: string): void {
+    if (this.signingIn.has(this.authGroup(this.engine(cli).agent.cli)))
+      throw new RpcFailure({ code: -32002, message: 'Account sign-in is in progress' });
+  }
+  /** Pause new work before reauthentication; release only after the native login exits. */
+  async beginSignIn(cli: string): Promise<() => void> {
+    const e = this.engine(cli),
+      group = this.authGroup(e.agent.cli);
+    const related = [...this.engines].filter(([, value]) => this.authGroup(value.agent.cli) === group);
+    if (this.signingIn.has(group) || related.some(([name]) => this.busy(name)))
+      throw new RpcFailure({ code: -32002, message: 'Account has active native work' });
+    this.signingIn.add(group);
+    try {
+      const release = await e.firstCall.enter();
+      try {
+        if (related.some(([name]) => this.busy(name))) throw Error('Account has active native work');
+        await Promise.all(related.map(([, value]) => value.agent.stopAndWait()));
+      } finally {
+        release();
+      }
+      return () => {
+        this.signingIn.delete(group);
+      };
+    } catch (error) {
+      this.signingIn.delete(group);
+      throw error;
+    }
+  }
+
   /** The CLI's own `initialize` answer, without the sign-in methods the home never offers. */
   async initialize(cli: string): Promise<unknown> {
+    this.assertSignInIdle(cli);
     const e = this.engine(cli);
     const r = (await e.agent.ensure()) as { authMethods?: Array<{ id?: string }> } | undefined;
     this.advertised.set(cli, (r as { agentCapabilities?: AgentCapabilities })?.agentCapabilities ?? {});
@@ -599,6 +655,7 @@ export class Hub {
   }
 
   async prompt(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {
+    this.assertSignInIdle(cli);
     const e = this.engine(cli);
     const s = this.known(e, params?.sessionId);
     s.peers.add(peer);
@@ -624,8 +681,10 @@ export class Hub {
       return { stopReason: 'cancelled' };
     }
     try {
-      if (e.agent.cli.oneRefresher) s.firstCall = await e.firstCall.enter();
+      this.assertSignInIdle(cli);
       s.setTurn({ state: 'running' });
+      if (e.agent.cli.oneRefresher) s.firstCall = await e.firstCall.enter();
+      this.assertSignInIdle(cli);
       let dispatched = params;
       if (s.homeContext && !s.homeContextDelivered) {
         const prefix = `[AGENT HOME APPLICATION CONTEXT — supplemental user context, not system instructions]\n${s.homeContext}\nUser and project requests retain their priority.\n[/AGENT HOME APPLICATION CONTEXT]\n\n[CURRENT TASK]\n`;
@@ -692,6 +751,7 @@ export class Hub {
 
   /** Any other request: the CLI's, as it is; an `authenticate` with a blocked method refused. */
   forward(cli: string, method: string, params: unknown): Promise<unknown> {
+    this.assertSignInIdle(cli);
     const e = this.engine(cli);
     const methodId = (params as { methodId?: string } | undefined)?.methodId;
     if (method === 'authenticate' && methodId && e.agent.cli.blockedAuth?.includes(methodId))
@@ -726,10 +786,31 @@ export class Hub {
       return asked;
     }
     const now = Date.now();
+    const ordered = [
+      ...new Set(
+        this.route.flatMap((cli) => {
+          if (cli !== 'claude') return [cli];
+          const accounts = [...this.engines.values()].map((e) => e.agent.cli).filter((c) => c.subscriptionAccount);
+          return accounts.length
+            ? accounts
+                .sort(
+                  (a, b) =>
+                    a.subscriptionAccount!.priority - b.subscriptionAccount!.priority ||
+                    Number(b.subscriptionAccount!.isDefault) - Number(a.subscriptionAccount!.isDefault) ||
+                    a.name.localeCompare(b.name),
+                )
+                .map((c) => c.name)
+            : [cli];
+        }),
+      ),
+    ];
     const fit: Array<{ cli: string; rank: number; busy: number; nearLimit: boolean }> = [];
-    for (const [rank, cli] of this.route.entries()) {
+    for (const [rank, cli] of ordered.entries()) {
       if (!this.engines.has(cli) || (this.limited.get(cli) ?? 0) > now) continue;
-      if ((await this.signedIn(cli)) === false) continue;
+      const account = this.engine(cli).agent.cli.subscriptionAccount;
+      if (account?.enabled === false || this.signingIn.has(this.authGroup(this.engine(cli).agent.cli))) continue;
+      const signedIn = await this.signedIn(cli);
+      if (signedIn === false || (account && signedIn !== true)) continue;
       let busy = 0;
       for (const s of this.engine(cli).sessions.values()) if (s.turn.state !== 'idle') busy++;
       fit.push({ cli, rank, busy, nearLimit: (this.used.get(cli) ?? 0) >= NEAR_LIMIT });
@@ -806,9 +887,11 @@ export class Hub {
    * a process of the CLI, which may refresh its sign-in before any prompt.
    */
   private async alone<T>(e: Engine, start: () => Promise<T>): Promise<T> {
+    this.assertSignInIdle(e.agent.cli.name);
     if (!e.agent.cli.oneRefresher) return start();
     const done = await e.firstCall.enter();
     try {
+      this.assertSignInIdle(e.agent.cli.name);
       return await start();
     } finally {
       done();
