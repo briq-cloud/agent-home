@@ -42,6 +42,8 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
   const inbox = Array.from({ length: 51 }, (_, index) => ({ id: 'message-' + index, sender: 'root', recipient: 'child',
     text: index === 0 ? 'Remember <script>window.compromised=true</script>' : 'Message ' + index, createdAt: base.createdAt + index, acknowledgedAt: null }));
   const mutations: { path: string; body: any }[] = [];
+  const projects = [{ id: 'home' }, { id: 'other-project' }];
+  let rejectProject = true;
   let permissionPending = true, rejectPermission = true, draining = false, holdVerified = false;
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', async route => {
@@ -50,11 +52,17 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
     if (path === '/') return route.fulfill({ contentType: 'text/html', body: `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/assets/home.css"><main><h2 id="tasks-title">Tasks</h2><div id="task-list"></div></main><script type="module">import{createFleet}from'/assets/fleet.js';const request=async(method,path,body)=>{const r=await fetch(path,{method,headers:body?{'content-type':'application/json'}:{},body:body?JSON.stringify(body):undefined});return{ok:r.ok,body:await r.json()}};window.fleet=createFleet({root:document.getElementById('task-list'),request,getAgents:()=>[{name:'mock',signedIn:true},{name:'openrouter-claude-haiku',signedIn:true,profile:{model:'provider/child-model'}}],getFeatures:()=>({orchestrator:true})});window.fleet.refresh();</script>` });
     if (path === '/assets/fleet.js') return route.fulfill({ contentType: 'text/javascript', body: js });
     if (path === '/assets/home.css') return route.fulfill({ contentType: 'text/css', body: css });
-    if (path === '/projects') return respond({ projects: [{ id: 'home' }, { id: 'other-project' }] });
+    if (path === '/projects') return respond({ projects });
+    if (path.startsWith('/projects/') && method === 'PUT') {
+      const body = route.request().postDataJSON(); mutations.push({ path, body });
+      if (rejectProject) { rejectProject = false; return respond({ error: 'Project folder does not exist' }, 400); }
+      const id = decodeURIComponent(path.slice('/projects/'.length)); projects.push({ id }); return respond({ id, ...body });
+    }
     if (path === '/features') return respond({ orchestrator: true, delegation: true,
       concurrency: { coordinators: 2, children: 2, maxDepth: 1 }, fleet: { occupiedSlots: 1, totalSlots: 4,
         draining: draining ? [{ taskId: 'root', projectId: 'home' }] : [] } });
     if (path === '/tasks' && method === 'GET') {
+      if (url.searchParams.get('projectId') === 'new-project') return respond({ tasks: [], nextOffset: null });
       if (url.searchParams.get('projectId') === 'other-project') return respond({ tasks: [tasks.other], nextOffset: null });
       const offset = Number(url.searchParams.get('offset') || 0);
       return respond(offset === 0 ? { tasks: firstIds.map(id => tasks[id]).concat(fillers), nextOffset: 100 } : { tasks: [tasks.late], nextOffset: null });
@@ -152,6 +160,34 @@ test('Fleet displays hierarchy, routes, messages and explicit scoped actions thr
   const created = mutations.find(item => item.path === '/tasks')!.body;
   assert.equal(created.projectId, 'other-project'); assert.deepEqual(created.route, { mode: 'explicit', agentId: 'mock' });
   assert.equal(created.allowPaidApi, false); assert.equal(created.decisionBudgetUsd, undefined); assert.equal(created.maxAttempts, 1);
+  await page.getByLabel('Message to selected task').fill('Keep the project message draft');
+  await page.locator('summary').getByText('New task', { exact: true }).click();
+  await page.getByLabel('New task instruction').fill('Keep the task draft');
+  await page.locator('summary').getByText('Add project', { exact: true }).click();
+  await page.getByLabel('Project ID', { exact: true }).fill('new-project');
+  await page.getByLabel('Existing project folder').fill('/work/new-project');
+  await page.getByLabel('Project revision').fill('working-tree');
+  await page.getByRole('button', { name: 'Register project', exact: true }).click();
+  await page.getByText('Project folder does not exist', { exact: true }).waitFor();
+  assert.equal(await page.getByLabel('Fleet project').inputValue(), 'other-project');
+  assert.equal(await page.getByLabel('Existing project folder').inputValue(), '/work/new-project');
+  assert.equal(await page.getByLabel('Project revision').inputValue(), 'working-tree');
+  assert.equal(await page.getByLabel('New task instruction').inputValue(), 'Keep the task draft');
+  assert.equal(await page.getByLabel('Message to selected task').inputValue(), 'Keep the project message draft');
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'registration must fit a narrow viewport');
+  await page.getByRole('button', { name: 'Register project', exact: true }).click();
+  await page.getByText('Project registered.', { exact: true }).waitFor();
+  const registered = mutations.filter(item => item.path === '/projects/new-project');
+  assert.equal(registered.length, 2);
+  assert.deepEqual(registered[1]!.body, { root: '/work/new-project', revision: 'working-tree' });
+  assert.equal(await page.getByLabel('Fleet project').inputValue(), 'new-project');
+  assert.equal(await page.getByLabel('New task instruction').inputValue(), 'Keep the task draft');
+  await page.getByLabel('Fleet project').selectOption('other-project');
+  await page.getByLabel('Full task ID').fill(created.id);
+  await page.getByRole('button', { name: 'Inspect task', exact: true }).click();
+  await page.getByLabel('Message to selected task').waitFor({ state: 'visible' });
+  assert.equal(await page.getByLabel('Message to selected task').inputValue(), 'Keep the project message draft');
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   if (process.env.RUNNER_FLEET_SCREENSHOT) await page.screenshot({ path: process.env.RUNNER_FLEET_SCREENSHOT, fullPage: true });

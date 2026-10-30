@@ -59,11 +59,13 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   const detail = element('section', { class: 'fleet-detail', 'aria-label': 'Selected task' }, detailTitle, facts, links, actions,
     approvals, prompt, result, element('h4', {}, 'Received messages'), inbox, moreMessages, messageForm);
   const composer = buildComposer();
+  const registration = buildRegistration();
   const columns = element('div', { class: 'fleet-columns' }, element('div', { class: 'fleet-list' }, summary, tree, more), detail);
-  root.replaceChildren(header, capacity, draining, composer, notice, lookupForm, columns);
+  root.replaceChildren(header, capacity, draining, registration, composer, notice, lookupForm, columns);
   filter.onchange = drawTree; search.oninput = drawTree;
-  project.onchange = () => {
-    saveDraft(); state.project = project.value; state.selected = null; state.pages.clear(); state.extra.clear();
+  project.onchange = () => selectProject(project.value).catch(showError);
+  function selectProject(projectId) {
+    saveDraft(); state.project = projectId; project.value = projectId; state.selected = null; state.pages.clear(); state.extra.clear();
     state.messagePages.clear(); state.messageFor = null; state.nextOffset = null; detailGeneration++;
     createRequestId = undefined; messageRequestId = undefined;
     tree.replaceChildren(element('p', { class: 'muted' }, 'Loading project…')); delete tree.dataset.signature;
@@ -71,8 +73,8 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
     messageForm.hidden = true; facts.replaceChildren(); links.replaceChildren(); actions.replaceChildren();
     prompt.replaceChildren(); result.replaceChildren(); approvals.replaceChildren(); inbox.replaceChildren();
     for (const node of [facts, links, actions, prompt, result, approvals, inbox]) delete node.dataset.signature;
-    detailTitle.textContent = 'Select a task'; refresh().catch(showError);
-  };
+    detailTitle.textContent = 'Select a task'; return refresh();
+  }
   messageText.oninput = () => { messageRequestId = undefined; };
   function showError(error) { notice.textContent = error instanceof Error ? error.message : String(error); notice.classList.add('warn'); }
   function inform(text) { notice.textContent = text; notice.classList.remove('warn'); }
@@ -130,7 +132,7 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   }
   async function refresh(history = false) {
     const enabled = !!getFeatures().orchestrator;
-    for (const node of [header, composer, lookupForm, columns]) node.hidden = !enabled;
+    for (const node of [header, registration, composer, lookupForm, columns]) node.hidden = !enabled;
     if (!enabled) { capacity.textContent = getFeatures().orchestrator === false ? 'Orchestrator disabled' : 'Fleet status unavailable'; return; }
     if (state.pending) { state.rerun = true; state.historyRequested ||= history; return state.pending; }
     history ||= state.historyRequested; state.historyRequested = false;
@@ -353,6 +355,30 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
       if (state.selected === id && state.project === projectId) { messageText.value = ''; drafts.delete(projectId + ':' + id); messageRequestId = undefined; }
       inform('Message saved to the task inbox.'); await refresh();
     } finally { sendMessage.disabled = false; messageText.disabled = false; }
+  }
+  function buildRegistration() {
+    const panel = element('details', { class: 'fleet-composer' }, element('summary', {}, 'Add project'));
+    const projectId = element('input', { 'aria-label': 'Project ID', maxlength: '64', required: true, placeholder: 'my-project' });
+    const folder = element('input', { 'aria-label': 'Existing project folder', required: true, pattern: '/.*', placeholder: '/work/my-project', title: 'Enter an absolute path to an existing folder' });
+    const revision = element('input', { 'aria-label': 'Project revision', maxlength: '256', required: true, placeholder: 'working-tree' });
+    const submit = element('button', { type: 'submit' }, 'Register project');
+    const form = element('form', { class: 'fleet-new-form', onsubmit: async event => {
+      event.preventDefault(); if (submit.disabled) return;
+      const id = projectId.value.trim();
+      for (const control of form.querySelectorAll('input,button')) control.disabled = true;
+      try {
+        await api('PUT', '/projects/' + encode(id), { root: folder.value.trim(), revision: revision.value.trim() });
+        const data = await api('GET', '/projects');
+        if (!data.projects.some(item => item.id === id)) throw Error('Project saved, but its refreshed listing is unavailable. Refresh and try again.');
+        project.replaceChildren(...data.projects.map(item => element('option', { value: item.id }, item.id)));
+        await selectProject(id);
+        panel.open = false; inform('Project registered.');
+      } catch (error) { showError(error); }
+      finally { for (const control of form.querySelectorAll('input,button')) control.disabled = false; }
+    } }, element('p', { class: 'muted' }, 'Use the absolute path of an existing folder under the home workspace. You can clone your repository in the terminal first.'),
+      element('div', { class: 'fleet-form-grid' }, element('label', {}, 'Project ID', projectId),
+        element('label', {}, 'Existing folder, absolute path', folder), element('label', {}, 'Revision', revision)), submit);
+    panel.append(form); return panel;
   }
   function buildComposer() {
     const panel = element('details', { class: 'fleet-composer' }, element('summary', {}, 'New task'));
