@@ -67,11 +67,7 @@ flowchart LR
 | Verification | Bounded commands + artifact hashes | Explicit checks; absent checks remain unverified. |
 | Usage | ACP usage/plan reports | Unknown execution cost stays unknown. |
 
-Implementation checks: [fleet](docs/benchmarks/2026-10-30-fleet-evaluation.html) ·
-[batch](docs/benchmarks/2026-10-30-batch-evaluation.html) ·
-[memory retrieval](docs/benchmarks/2026-10-30-memory-retrieval-confirmation.html) ·
-[semantic search](docs/benchmarks/2026-10-30-semantic-search.html) ·
-[managed tasks](docs/benchmarks/2026-10-30-managed-evaluation.html).
+Run the [benchmark harness](benchmarks/README.md) for reproducible implementation and model checks.
 [Shared skills, MCP setup and compatibility](docs/extensions.md). The free native Claude conformance check passed 9/9 with zero paid model calls; other CLI ingestion is not certified by that check.
 
 Semantic search returns cited candidates and similarity scores. It never injects them into prompts automatically.

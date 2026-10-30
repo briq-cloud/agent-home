@@ -44,4 +44,4 @@ Standalone launches persist vendor homes beneath `RUNNER_LOGINS` unless an opera
 Persistence uses Node SQLite. ACP and MCP use their protocol SDKs. The OpenRouter SDK handles
 provider metadata, typed decisions and opt-in text batches; interactive CLI execution stays on ACP.
 
-[API](../runner/README.md) · [Task benchmarks](benchmarks/2026-10-30-managed-evaluation.html)
+[API](../runner/README.md) · [Benchmark harness](../benchmarks/README.md)
