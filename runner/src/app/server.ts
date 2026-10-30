@@ -14,6 +14,7 @@ import { Keys, PROVIDERS, profileFor } from '../providers/profiles.ts';
 import { RUNNER_COOKIE, terminalProxy } from '../http/terminal.ts';
 import { SignIn } from '../auth/signin.ts';
 import { commandStatus } from '../auth/status.ts';
+import { CopilotAccountObserver } from '../auth/copilot.ts';
 import { usageReport } from '../telemetry/usage.ts';
 import { configuration } from './config.ts';
 import { Application } from './services.ts';
@@ -75,6 +76,19 @@ const hub = new Hub({
     .map((n) => n.trim())
     .filter(Boolean),
   signedIn: (name) => signedInCached(name),
+  beforeStart: async (name) => {
+    if (name !== 'copilot') return () => {};
+    copilotNativeStarting++;
+    try {
+      await copilotAccounts.invalidate();
+    } catch {
+      copilotNativeStarting--;
+      throw new Error('Copilot account observation unavailable');
+    }
+    return () => {
+      copilotNativeStarting--;
+    };
+  },
 });
 
 /**
@@ -102,6 +116,7 @@ async function reload(): Promise<void> {
       hub.add(c);
   table = next;
   known.clear();
+  await copilotAccounts.invalidate();
 }
 async function prepareModels() {
   if (!keys.key('openrouter')) throw Error("add OpenRouter's key first");
@@ -120,6 +135,7 @@ function completedSignIn(name: string): void {
   writeFileSync(`${signInFile}.tmp`, JSON.stringify(completedSignIns), { mode: 0o600 });
   renameSync(`${signInFile}.tmp`, signInFile);
   known.delete(name);
+  if (name === 'copilot') void copilotAccounts.invalidate();
 }
 const signIns = new Map(base.map((c) => [c.name, new SignIn(c, () => completedSignIn(c.name))]));
 /** ttyd on localhost, started with `--base-path /terminal`. */
@@ -201,6 +217,20 @@ async function body(req: IncomingMessage): Promise<Record<string, unknown>> {
 /** `signedIn`, kept 30 s: `/acp` asks it for each new session. */
 const known = new Map<string, { at: number; value: Promise<boolean | null> }>();
 const statusSources = new Map<string, 'command' | 'sign-in'>();
+let pendingCopilotStarts = 0;
+let copilotNativeStarting = 0;
+const copilotAccounts = new CopilotAccountObserver({
+  command: base.find((cli) => cli.name === 'copilot')?.acp.filter((arg) => !['--acp', '--stdio'].includes(arg)) ?? [
+    'copilot',
+  ],
+  env: childEnv,
+  cwd: config.cwd,
+  canCheck: () =>
+    pendingCopilotStarts === 0 &&
+    copilotNativeStarting === 0 &&
+    !['starting', 'waiting'].includes(signIns.get('copilot')?.status.state ?? '') &&
+    (!hub.has('copilot') || !hub.running('copilot')),
+});
 function signedInCached(name: string): Promise<boolean | null> {
   const hit = known.get(name);
   if (hit && Date.now() - hit.at < 30_000) return hit.value;
@@ -216,6 +246,7 @@ function signedInCached(name: string): Promise<boolean | null> {
  */
 function signedIn(cli: Cli): Promise<boolean | null> {
   if (cli.profile) return Promise.resolve(Boolean(keys.key(cli.profile.provider)));
+  if (cli.name === 'copilot') return copilotAccounts.check().then((result) => result.signedIn);
   if (cli.authStatusMethod) return hub.authStatus(cli.name);
   if (!cli.status && !cli.login && !cli.terminalLogin && cli.apiKeys)
     return Promise.resolve(cli.apiKeys.some((k) => Boolean(cli.env?.[k] ?? childEnv[k])));
@@ -328,15 +359,18 @@ const server = createServer(async (req, res) => {
           running: hub.running(c.name),
           signedIn: await signedInCached(c.name),
           signIn: signIns.get(c.name)?.status.state,
-          statusSource: c.authStatusMethod
-            ? 'acp'
-            : c.status
-              ? (statusSources.get(c.name) ?? 'command')
-              : c.profile || c.apiKeys
-                ? 'key'
-                : completedSignIns[c.name]
-                  ? 'sign-in'
-                  : 'unavailable',
+          statusSource:
+            c.name === 'copilot' && !c.profile
+              ? 'sdk'
+              : c.authStatusMethod
+                ? 'acp'
+                : c.status
+                  ? (statusSources.get(c.name) ?? 'command')
+                  : c.profile || c.apiKeys
+                    ? 'key'
+                    : completedSignIns[c.name]
+                      ? 'sign-in'
+                      : 'unavailable',
           // How its person signs in: on the page, with a command in the terminal, or by an API key.
           signInWith: c.login ? 'page' : c.terminalLogin ? 'terminal' : 'api-key',
           ...(c.terminalLogin ? { command: c.terminalLogin } : {}),
@@ -503,7 +537,16 @@ const server = createServer(async (req, res) => {
           (input.wait !== undefined && typeof input.wait !== 'boolean')
         )
           return json(res, 400, { error: 'wait must be a boolean' });
-        return json(res, 200, await s.start(childEnv, { wait: input.wait !== false }));
+        if (c.name === 'copilot') pendingCopilotStarts++;
+        try {
+          if (c.name === 'copilot') {
+            known.delete(c.name);
+            await copilotAccounts.invalidate();
+          }
+          return json(res, 200, await s.start(childEnv, { wait: input.wait !== false }));
+        } finally {
+          if (c.name === 'copilot') pendingCopilotStarts--;
+        }
       }
       if (parts.length === 2 && req.method === 'GET') return json(res, 200, s.status);
       if (parts.length === 2 && req.method === 'DELETE') {
@@ -540,7 +583,8 @@ server.listen(port, config.host, () => {
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const)
   process.once(signal, () => {
-    void application.stop().finally(() => {
+    void application.stop().finally(async () => {
+      await copilotAccounts.close();
       hub.stop();
       server.close();
       process.exit(0);

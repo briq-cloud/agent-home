@@ -78,6 +78,11 @@ export function commandStatus(
       const structured = explicitStatus(out) ?? explicitStatus(err);
       if (structured !== undefined) return resolve(structured);
       if (explicitlySignedOut(`${out}\n${err}`)) return resolve(false);
+      // Grok also prints a default model catalog while signed out. A successful
+      // catalog listing alone cannot establish authentication.
+      if (cmd?.split('/').pop() === 'grok' && args[0] === 'models') {
+        return resolve(code === 0 && /\byou are logged in with\s+\S+/i.test(`${out}\n${err}`) ? true : null);
+      }
       resolve(code === 0);
     });
   });

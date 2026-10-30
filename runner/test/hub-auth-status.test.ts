@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -79,7 +79,12 @@ test('Vibe ACP auth status times out to unknown and leaves ordinary CLIs unsuppo
 test('timed-out callers share one pending status RPC until it settles', async (t) => {
   const { hub, methods, release } = fixture(t, { authenticated: true }, false, true);
   const first = hub.authStatus('vibe', 25);
-  await new Promise((resolve) => setTimeout(resolve, 5));
+  // The caller deadline can expire before a loaded CI worker starts the child.
+  // Synchronize on the actual pending RPC rather than assuming a spawn duration.
+  const startedBy = Date.now() + 5000;
+  while ((!existsSync(methods) || !readFileSync(methods, 'utf8').includes('_auth/status')) && Date.now() < startedBy)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.ok(existsSync(methods) && readFileSync(methods, 'utf8').includes('_auth/status'), 'the original RPC started');
   const second = hub.authStatus('vibe', 45);
   assert.deepEqual(await Promise.all([first, second]), [null, null]);
   const countStatus = () =>

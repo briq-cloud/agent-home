@@ -516,7 +516,7 @@ function card(c) {
   const s = signIns[c.name];
   const state = signInActive(s)
     ? [s.finishing ? 'Confirming…' : 'Connecting…', 'warn']
-    : s?.state === 'done'
+    : s?.state === 'done' && c.statusSource !== 'sdk'
       ? ['Signed in', 'ok']
       : limited[c.name]
         ? ['At limit', 'warn']
@@ -552,7 +552,7 @@ function card(c) {
       $(
         'span',
         { class: 'muted' },
-        ['command', 'acp'].includes(c.statusSource)
+        ['command', 'acp', 'sdk'].includes(c.statusSource)
           ? 'Sign-in check unavailable · try again shortly'
           : 'No standalone account check available',
       ),
