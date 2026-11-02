@@ -13,6 +13,8 @@ export function createHomeServices({ call, byId }) {
       t3.state === 'failed' ? 'T3 Code stopped unexpectedly. Start it again to retry.' : 'T3 Code is stopped.';
     byId('t3-start').disabled = !t3.installed || t3.state === 'running';
     byId('t3-pair').disabled = t3.state !== 'running' || !t3.publicUrl;
+    byId('t3-open').hidden = t3.state !== 'running' || !t3.publicUrl;
+    byId('t3-open').href = '/api/services/t3/open';
     if (!t3.publicUrl) byId('t3-notice').textContent = 'Browser access needs a dedicated T3 origin configured by this home’s operator.';
     if (state.dsh) byId('dsh-service').textContent = state.dsh.enabled ?
       'DSH is available as an explicitly selected experimental ACP agent.' :
@@ -36,7 +38,7 @@ export function createHomeServices({ call, byId }) {
     byId('t3-pair').disabled = true;
     try {
       const result = await request('POST', '/t3/pair');
-      const link = byId('t3-open');
+      const link = byId('t3-pair-open');
       link.href = result.url; link.hidden = false;
       byId('t3-notice').textContent = 'Private, one-use browser link ready. Expires ' + new Date(result.expiresAt).toLocaleTimeString() + '.';
       clearTimeout(pairingExpiry);

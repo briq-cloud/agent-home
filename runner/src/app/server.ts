@@ -363,6 +363,14 @@ const server = createServer(async (req, res) => {
   }
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
+    if (url.pathname === '/api/services/t3/open' && req.method === 'GET') {
+      res.setHeader('cache-control', 'no-store');
+      res.setHeader('referrer-policy', 'no-referrer');
+      if (url.search) return json(res, 400, { error: 'T3 navigation does not accept query parameters' });
+      res.writeHead(302, { location: homeServices.openUrl() });
+      res.end();
+      return;
+    }
     if (parts[0] === 'home-services') {
       res.setHeader('cache-control', 'no-store');
       if (parts.length === 1 && req.method === 'GET') return json(res, 200, homeServices.status());

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { accessSync, chmodSync, constants, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { accessSync, chmodSync, closeSync, constants, fstatSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { commandStatus } from '../auth/status.ts';
 import { SignIn } from '../auth/signin.ts';
@@ -14,6 +14,7 @@ export class HomeServices {
   private readonly bridge: string;
   private readonly port: number;
   private readonly publicUrl?: string;
+  private readonly gatewayFile?: string;
   private readonly childEnv: Record<string, string>;
   private readonly briqEnv: Record<string, string>;
   private readonly login = new SignIn({ name: 'briq', acp: [], login: ['briq', 'login'] });
@@ -34,6 +35,10 @@ export class HomeServices {
         throw Error('RUNNER_T3_PUBLIC_URL must be a dedicated HTTP origin without credentials');
       this.publicUrl = url.origin;
     }
+    if (env.RUNNER_T3_GATEWAY_URL_FILE) {
+      if (!isAbsolute(env.RUNNER_T3_GATEWAY_URL_FILE)) throw Error('T3 gateway file must be an absolute path');
+      this.gatewayFile = env.RUNNER_T3_GATEWAY_URL_FILE;
+    }
     const safe = Object.fromEntries(['PATH', 'HOME', 'LANG', 'LC_ALL', 'TERM', 'TZ', 'USER', 'TMPDIR'].flatMap((key) =>
       env[key] === undefined ? [] : [[key, env[key]!]],
     ));
@@ -44,6 +49,30 @@ export class HomeServices {
     this.briqEnv = { ...safe, ...Object.fromEntries(['BRIQ_API_URL', 'BRIQ_CONFIG_DIR', 'BRIQ_API_KEY', 'XDG_CONFIG_HOME'].flatMap((key) =>
       env[key] === undefined ? [] : [[key, env[key]!]],
     )) };
+  }
+  /** Private navigation capability, delivered only by authenticated redirect or pairing. */
+  private navigationUrl(pairUrl?: URL): URL {
+    if (!this.publicUrl) throw Error('T3 browser access is not configured');
+    const target = pairUrl ?? new URL(this.publicUrl);
+    if (!this.gatewayFile) return target;
+    let fd: number | undefined;
+    try {
+      fd = openSync(this.gatewayFile, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const stat = fstatSync(fd);
+      if (!stat.isFile() || (stat.mode & 0o777) !== 0o600 || stat.size > 8192 ||
+        (process.getuid && stat.uid !== process.getuid())) throw Error();
+      const gateway = new URL(readFileSync(fd, 'utf8').trim());
+      const entries = [...gateway.searchParams.entries()];
+      if (gateway.origin !== this.publicUrl || gateway.pathname !== '/' || gateway.username || gateway.password || gateway.hash ||
+        entries.length !== 1 || entries[0]![0] !== 'briq_token' || !entries[0]![1] || /[\s\x00-\x1f\x7f]/.test(entries[0]![1])) throw Error();
+      target.searchParams.set('briq_token', entries[0]![1]);
+      return target;
+    } catch { throw Error('T3 gateway access is unavailable'); }
+    finally { if (fd !== undefined) closeSync(fd); }
+  }
+  openUrl(): string {
+    if (!this.child) throw Error('Start T3 before opening its browser UI');
+    return this.navigationUrl().href;
   }
   private installed(binary: string): boolean {
     try { accessSync(binary, constants.X_OK); return true; } catch { return false; }
@@ -111,6 +140,8 @@ export class HomeServices {
   }
   async pair() {
     if (!this.child || !this.publicUrl) throw Error('Start T3 and configure its dedicated public origin first');
+    // Validate the configured gateway before creating a native one-use credential.
+    this.navigationUrl();
     return await new Promise<{ url: string; expiresAt: string }>((resolve, reject) => {
       const child = spawn(this.binary, ['auth', 'pairing', 'create', '--base-dir', this.baseDir, '--base-url', this.publicUrl!,
         '--ttl', '5m', '--label', 'Agent Home browser', '--json'], { env: this.childEnv, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -123,8 +154,9 @@ export class HomeServices {
         try {
           if (invalid || code !== 0) throw Error();
           const value = JSON.parse(data), url = new URL(value.pairUrl);
-          if (url.origin !== this.publicUrl || url.pathname !== '/pair' || !url.hash.startsWith('#token=') || typeof value.expiresAt !== 'string') throw Error();
-          resolve({ url: url.href, expiresAt: value.expiresAt });
+          if (url.origin !== this.publicUrl || url.username || url.password || url.search || url.pathname !== '/pair' ||
+            !url.hash.startsWith('#token=') || typeof value.expiresAt !== 'string') throw Error();
+          resolve({ url: this.navigationUrl(url).href, expiresAt: value.expiresAt });
         } catch { reject(Error('T3 pairing unavailable')); }
       });
     });

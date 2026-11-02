@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HomeServices } from '../src/app/home-services.ts';
 
-function fixture(url = 'https://coding.example.test') {
+function fixture(url = 'https://coding.example.test', gateway?: string) {
   const dir = mkdtempSync(join(tmpdir(), 'home-services-'));
   const binary = join(dir, 'fake-t3');
+  const gatewayFile = join(dir, 'private-gateway');
+  if (gateway !== undefined) writeFileSync(gatewayFile, gateway, { mode: 0o600 });
   writeFileSync(binary, `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === 'auth') {
@@ -17,9 +19,10 @@ if (args[0] === 'auth') {
 `, { mode: 0o700 });
   const service = new HomeServices({ env: { PATH: process.env.PATH, HOME: dir, RUNNER_T3_BINARY: binary,
     RUNNER_BRIQ_AGENT_BINARY: binary, ...(url ? { RUNNER_T3_PUBLIC_URL: url } : {}),
+    ...(gateway !== undefined ? { RUNNER_T3_GATEWAY_URL_FILE: gatewayFile } : {}),
     RUNNER_TOKEN: 'never-child-ambient', ANTHROPIC_API_KEY: 'never-child-ambient' }, stateDir: dir, cwd: dir,
     token: 'private-runner-test', runnerPort: 8090 });
-  return { dir, service, clean: async () => { await service.stop(); rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, service, gatewayFile, clean: async () => { await service.stop(); rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test('T3 starts once, seeds only isolated settings and issues short-lived pairing through native CLI', async () => {
@@ -39,7 +42,49 @@ test('T3 starts once, seeds only isolated settings and issues short-lived pairin
     assert.throws(() => f.service.setOpenRouter('yes'), /boolean/);
     assert.equal(readFileSync(join(f.dir, 't3/bridge-token'), 'utf8'), 'private-runner-test');
     assert.equal((await f.service.pair()).url, 'https://coding.example.test/pair#token=one-use-test');
+    assert.equal(f.service.openUrl(), 'https://coding.example.test/');
   } finally { await f.clean(); }
+});
+
+test('private gateway capability appears only in intentional navigation and pairing responses', async () => {
+  const secret = 'fake-private-gateway-capability';
+  const f = fixture('https://coding.example.test', 'https://coding.example.test/?briq_token=' + secret);
+  try {
+    await f.service.start();
+    assert.equal(f.service.openUrl(), 'https://coding.example.test/?briq_token=' + secret);
+    const pair = new URL((await f.service.pair()).url);
+    assert.equal(pair.searchParams.get('briq_token'), secret);
+    assert.equal(pair.hash, '#token=one-use-test');
+    assert.equal(JSON.stringify(f.service.status()).includes(secret), false);
+    assert.equal(JSON.stringify(f.service.status()).includes(f.gatewayFile), false);
+    chmodSync(f.gatewayFile, 0o644);
+    assert.throws(() => f.service.openUrl(), /^Error: T3 gateway access is unavailable$/);
+    await assert.rejects(f.service.pair(), /^Error: T3 gateway access is unavailable$/);
+    rmSync(f.gatewayFile);
+    assert.throws(() => f.service.openUrl(), /^Error: T3 gateway access is unavailable$/);
+    const target = join(f.dir, 'gateway-target');
+    writeFileSync(target, 'https://coding.example.test/?briq_token=' + secret, { mode: 0o600 });
+    symlinkSync(target, f.gatewayFile);
+    assert.throws(() => f.service.openUrl(), /^Error: T3 gateway access is unavailable$/);
+  } finally { await f.clean(); }
+});
+
+test('malformed or cross-origin configured gateway files fail closed without URL details', async () => {
+  const invalid = ['https://other.example.test/?briq_token=fake-secret',
+    'https://coding.example.test/path?briq_token=fake-secret',
+    'https://coding.example.test/?briq_token=fake-secret&extra=1',
+    'https://coding.example.test/?briq_token=one&briq_token=two',
+    'https://coding.example.test/?briq_token=', 'https://coding.example.test/?briq_token=fake-secret#fragment',
+    'https://user:fake-secret@coding.example.test/?briq_token=fake-secret', 'not-a-url-with-fake-secret'];
+  for (const value of invalid) {
+    const f = fixture('https://coding.example.test', value);
+    try {
+      await f.service.start();
+      assert.throws(() => f.service.openUrl(), /^Error: T3 gateway access is unavailable$/);
+      await assert.rejects(f.service.pair(), /^Error: T3 gateway access is unavailable$/);
+      assert.equal(JSON.stringify(f.service.status()).includes('fake-secret'), false);
+    } finally { await f.clean(); }
+  }
 });
 
 test('T3 preserves conflicting owner settings and refuses competing shared CLI ownership', async () => {
