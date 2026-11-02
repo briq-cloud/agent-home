@@ -26,6 +26,9 @@ const ENDS = Date.now() + 3 * 86_400_000;
 before(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
   home = dir;
+  const fakeT3 = join(dir, 'fake-t3');
+  writeFileSync(fakeT3, `#!${process.execPath}\nsetInterval(()=>{},1000);\n`, { mode: 0o700 });
+  writeFileSync(join(dir, 't3-gateway'), 'https://t3.runner.test/?briq_token=fake-gateway-capability', { mode: 0o600 });
   writeFileSync(
     join(dir, 'auth.json'),
     JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }),
@@ -56,6 +59,10 @@ before(async () => {
       RUNNER_HOST: '127.0.0.1',
       RUNNER_CWD: dir,
       RUNNER_STATE: join(dir, 'state'),
+      RUNNER_T3_BINARY: fakeT3,
+      RUNNER_BRIQ_AGENT_BINARY: fakeT3,
+      RUNNER_T3_PUBLIC_URL: 'https://t3.runner.test',
+      RUNNER_T3_GATEWAY_URL_FILE: join(dir, 't3-gateway'),
       RUNNER_LOGINS: join(dir, 'logins'),
       RUNNER_MAX_TURNS: '1',
       RUNNER_TERMINAL: `http://127.0.0.1:${TERMINAL_PORT}`,
@@ -103,6 +110,23 @@ before(async () => {
 after(() => {
   runner.kill();
   stopTerminal();
+});
+
+test('T3 open redirects require runner authentication and never cache private navigation', async () => {
+  const root = `http://127.0.0.1:${PORT}`;
+  const headers = { authorization: `Bearer ${TOKEN}` };
+  assert.equal((await fetch(root + '/api/services/t3/open', { redirect: 'manual' })).status, 401);
+  assert.equal((await fetch(root + '/home-services/t3', { method: 'POST', headers })).status, 200);
+  const opened = await fetch(root + '/api/services/t3/open', { headers, redirect: 'manual' });
+  assert.equal(opened.status, 302);
+  assert.equal(opened.headers.get('location'), 'https://t3.runner.test/?briq_token=fake-gateway-capability');
+  assert.equal(opened.headers.get('cache-control'), 'no-store');
+  assert.equal(opened.headers.get('referrer-policy'), 'no-referrer');
+  const status = await fetch(root + '/home-services', { headers });
+  assert.equal((await status.text()).includes('fake-gateway-capability'), false);
+  const arbitrary = await fetch(root + '/api/services/t3/open?url=https://other.test', { headers, redirect: 'manual' });
+  assert.equal(arbitrary.status, 400);
+  assert.equal(arbitrary.headers.get('location'), null);
 });
 
 type Msg = { jsonrpc: '2.0'; id?: string | number; method?: string; params?: any; result?: any; error?: any };

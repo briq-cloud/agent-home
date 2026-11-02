@@ -25,6 +25,15 @@ Create a browser pairing link on demand. The native T3 auth CLI issues a one-use
 five-minute lifetime. The authenticated home response is not cached, and the link is not persisted
 in page storage or logs. Pairing authenticates the browser to T3; it does not sign in a CLI vendor.
 
+For a private Briq gateway on the separate origin, set `RUNNER_T3_GATEWAY_URL_FILE` to an
+absolute, owner-readable file with mode 0600 containing that endpoint's private URL. Its origin
+must match `RUNNER_T3_PUBLIC_URL`; its only query parameter must be `briq_token`. Missing or
+invalid configured files block navigation and pairing with a fixed error. The URL is never
+included in service status. Open T3 Code uses the authenticated `/api/services/t3/open` redirect
+with no-store and no-referrer headers. Pairing adds the gateway token to the private one-use link
+so a fresh browser can acquire the gateway cookie before native T3 authentication. Keep this
+file and pairing links private. Standalone origins without a gateway need no gateway file.
+
 The local ACP wrapper connects to `/acp/auto` over loopback and reads its runner token from a private
 file. T3 settings contain no runner token. The wrapper passes an allowlisted environment to the
 existing bridge; native subscription credential folders remain with the runner.
