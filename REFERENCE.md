@@ -16,9 +16,16 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | Mistral Vibe (`vibe`) | 3.0.4 | `VIBE_HOME` |
 | Gemini CLI (`gemini`), API key only | 0.66.0 | `GEMINI_CLI_HOME`/.gemini |
 
+DSH preview 0.2.1-rc.5 is installed at `/opt/dsh/node_modules/.bin/dsh`, disabled until explicitly configured ([dsh/README.md](dsh/README.md)).
+
 ## Terminal
 
 `ttyd` 1.7.7 serves it. A link a CLI opens (`BROWSER`, `xdg-open`) shows as plain text in a window of its own: `show-url`.
+
+## Coding workspace
+
+T3 Code 0.1.6 is installed at `/opt/t3/t3`. The authenticated home starts it on demand with a local Briq Agent ACP connection.
+Briq CLI 0.1.3 is installed with a complete integrity-checked npm lockfile. Its native sign-in uses `BRIQ_CONFIG_DIR` (default `RUNNER_LOGINS/config/briq`).
 
 ## Runner
 
@@ -37,8 +44,9 @@ Each one checked against its publisher's checksum at build, or recorded where no
 | Grok Build | `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9` | none published: recorded |
 | Mistral Vibe | `fa201f53a8f7574435c1b911218a4a537e3678831f9cbd7791e5fb32658de956` | the PyPI digest of its wheel |
 | Gemini CLI | `269734d35287fbd8ed2982534258ecf4a95f184b6e06e6732e0d6850c28701d9` | the npm registry integrity |
+| T3 Code | `7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6` | the publisher SHA256SUMS |
 | ttyd | `8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55` | its SHA256SUMS |
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-11-02`, 1437 MB compressed, digest `sha256:33ef5532ac6b83ee64b66555afdf27d5c35d401927ed7e66b882a511634950d0`, on `ghcr.io/briq-cloud/sandbox@sha256:4a635c082b235773b4174a1942183c70c94e035c773272140e605d76157afa5f`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-02 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-11-02.2`, 1719 MB compressed, digest `sha256:6af2681d6b70810ce8a1ad56fe80d8bbdb6d2d1dbdf48581e46be90efab238cd`, on `ghcr.io/briq-cloud/sandbox@sha256:4a635c082b235773b4174a1942183c70c94e035c773272140e605d76157afa5f`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-02.2 --repo briq-cloud/agent-home`.
