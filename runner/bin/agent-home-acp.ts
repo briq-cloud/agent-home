@@ -25,6 +25,7 @@ if (process.env.AGENT_HOME_BRIQ_TOKEN) headers.cookie = `briq_token=${process.en
 /** The client's folder, as a folder on the home. */
 function homeCwd(cwd: unknown): unknown {
   if (typeof cwd !== 'string') return cwd;
+  if (process.env.AGENT_HOME_LOCAL_CWD === '1') return cwd;
   if (process.env.AGENT_HOME_CWD) return process.env.AGENT_HOME_CWD;
   return cwd.startsWith('/work') ? cwd : `/work/${basename(cwd) || 'work'}`;
 }
@@ -53,6 +54,12 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const msg = JSON.parse(line);
     if ((msg.method === 'session/new' || msg.method === 'session/load') && msg.params) {
       msg.params.cwd = homeCwd(msg.params.cwd);
+      if (msg.method === 'session/new' && new URL(url).pathname === '/acp/auto' && process.env.AGENT_HOME_OPTIN_OPENROUTER !== undefined) {
+        const optin = process.env.AGENT_HOME_OPTIN_OPENROUTER === '1';
+        msg.params._meta = { ...msg.params._meta, agentHome: { ...msg.params._meta?.agentHome,
+          ...(process.env.AGENT_HOME_LOCAL_CWD === '1' ? { useCwd: true } : {}),
+          allowPaidApi: optin, maxEstimatedUsd: optin ? 0.1 : 0, decisionBudgetUsd: optin ? 0.001 : 0 } };
+      }
       out = JSON.stringify(msg);
     }
   } catch {}

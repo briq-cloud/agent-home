@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { Readable, Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
-import type { Cli } from '../providers/catalog.ts';
+import { effectiveCliEnv, type Cli } from '../providers/catalog.ts';
 import { log } from '../telemetry/log.ts';
 
 export type Id = string | number;
@@ -129,7 +129,7 @@ export class Agent {
     const [cmd, ...args] = this.cli.acp;
     const child = spawn(cmd as string, args, {
       cwd: this.cwd,
-      env: withEnv(this.env, this.cli.env),
+      env: effectiveCliEnv(this.cli, this.env),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     this.child = child;

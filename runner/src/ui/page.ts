@@ -7,6 +7,7 @@ for (const [file, type] of [
   ['home.js', 'text/javascript'],
   ['fleet.js', 'text/javascript'],
   ['extensions.js', 'text/javascript'],
+  ['services.js', 'text/javascript'],
   ['home.css', 'text/css'],
 ] as const)
   ASSETS.set(`/assets/${file}`, { type, body: readFileSync(new URL(`./web/${file}`, import.meta.url)) });

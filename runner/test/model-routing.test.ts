@@ -471,3 +471,14 @@ test('account priority overrides the default Claude family label while retaining
   assert.equal(h.decisions(), 0);
   assert.equal(h.requests.length, 0);
 });
+
+test('configured DSH preview is available only by explicit paid API selection', async (t) => {
+  const f = await setup(t);
+  f.bindings([binding({ id: 'dsh', cli: 'dsh', harness: 'dsh', provider: 'operator-configured', billing: 'use', compatibility: 'unknown', model: undefined, canonical: undefined })]);
+  const routing = new Routing(f.options);
+  await assert.rejects(routing.select({ task: 'mock task', explicit: { cli: 'dsh' } }), /unavailable or disallowed/);
+  assert.equal((await routing.select({ task: 'mock task', explicit: { cli: 'dsh' }, allowPaidApi: true })).cli, 'dsh');
+  await assert.rejects(routing.select({ task: 'mock task', allowPaidApi: true }), /no eligible|unavailable|no .*route/i);
+  f.bindings([binding({ id: 'other', cli: 'other', harness: 'other', compatibility: 'unknown' })]);
+  await assert.rejects(routing.select({ task: 'mock task', explicit: { cli: 'other' } }), /unavailable or disallowed/);
+});

@@ -255,11 +255,33 @@ test('new and reloaded sessions expose persisted billing consent to clients', as
   }
 });
 
+test('local ACP project resolution determines the submitted root identity and fails closed', async (t) => {
+  const h = await fixture(t);
+  const seen: string[] = [];
+  h.options.projectForCwd = (cwd) => {
+    seen.push(cwd);
+    if (cwd !== '/home/work/repo') throw Error('outside workspace');
+    return 'local-repo';
+  };
+  const c = h.open();
+  const created = result(await c.request('session/new', { cwd: '/home/work/repo', _meta: { agentHome: { useCwd: true, projectId: 'home' } } }));
+  assert.equal(created._meta.agentHome.projectId, 'local-repo');
+  const reply = c.request('session/prompt', prompt(created.sessionId));
+  await c.wait((m) => m.method === '_runner/task');
+  assert.equal(h.submissions[0]!.projectId, 'local-repo');
+  h.finish(h.submissions[0]!.id!);
+  await reply;
+  const rejected = await c.request('session/new', { cwd: '/outside', _meta: { agentHome: { useCwd: true } } });
+  assert.equal(rejected.error?.code, -32602);
+  assert.deepEqual(seen, ['/home/work/repo', '/outside']);
+  assert.equal(h.submissions.length, 1);
+});
+
 test('Auto initialize/new are text-only and defer execution; private state ignores client cwd', async (t) => {
   const h = await fixture(t),
     c = h.open();
   const init = result(await c.request('initialize'));
-  assert.equal(init.agentInfo.name, 'agent-home-auto');
+  assert.equal(init.agentInfo.name, 'briq-agent');
   assert.equal(init.agentCapabilities.loadSession, true);
   assert.equal(init.agentCapabilities.promptCapabilities.image, false);
   const id = await session(c, {

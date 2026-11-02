@@ -1,5 +1,6 @@
 import { createFleet } from './fleet.js';
 import { createExtensions } from './extensions.js';
+import { createHomeServices } from './services.js';
 const $ = (tag, attrs = {}, ...kids) => {
   const el = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -12,7 +13,7 @@ const $ = (tag, attrs = {}, ...kids) => {
 };
 const byId = (id) => document.getElementById(id);
 // Panels stay mounted: changing tabs never resets a form or an ACP session.
-const homeTabs = ['chat', 'fleet', 'connections', 'tools'];
+const homeTabs = ['chat', 'fleet', 'connections', 'tools', 't3', 'terminal', 'briq'];
 const tabFromHash = () =>
   location.hash === '#keys-section' ? 'connections' : homeTabs.find((name) => location.hash === '#' + name);
 function showTab(name, navigate = true) {
@@ -118,6 +119,7 @@ const call = async (method, path, body, signal) => {
   });
   return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
 };
+createHomeServices({ call, byId });
 let refreshNotice = '';
 function report(error) {
   refreshNotice = '';
@@ -802,7 +804,7 @@ function render() {
     current = select.value;
   select.replaceChildren(
     features.orchestrator
-      ? $('option', { value: 'auto' }, 'Auto orchestrator')
+      ? $('option', { value: 'auto' }, 'Briq Agent')
       : $('option', { value: '' }, 'Auto · subscriptions'),
   );
   if (features.orchestrator && current === '' && session)

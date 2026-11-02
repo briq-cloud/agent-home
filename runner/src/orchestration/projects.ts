@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 export interface Project {
   id: string;
   root: string;
@@ -16,7 +17,15 @@ export class Projects {
     try {
       const saved = JSON.parse(readFileSync(file, 'utf8')) as Project[];
       if (!Array.isArray(saved)) throw Error('invalid project registry');
-      this.projects = saved.map((p) => this.validate(p));
+      this.projects = saved.flatMap((p) => {
+        try { return [this.validate(p)]; }
+        catch (error) {
+          // T3 worktrees are ephemeral. A removed one must not discard unrelated projects.
+          // Its old tasks cannot resolve a root; recreation receives the same canonical ID.
+          if (/^cwd-[a-f0-9]{48}$/.test(p.id) && (error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+          throw error;
+        }
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
@@ -42,6 +51,14 @@ export class Projects {
     const p = this.projects.find((p) => p.id === id);
     if (!p) throw Error('unknown project');
     return this.validate(p);
+  }
+  /** Local ACP clients name an existing cwd; preserve canonical roots and existing identities. */
+  forCwd(cwd: string): Project {
+    if (!isAbsolute(cwd)) throw Error('project cwd must be absolute');
+    const root = realpathSync(cwd);
+    const existing = this.projects.find((p) => p.root === root);
+    if (existing) return this.get(existing.id);
+    return this.put({ id: `cwd-${createHash('sha256').update(root).digest('hex').slice(0, 48)}`, root, revision: 'unversioned' });
   }
   put(input: Project): Project {
     const p = this.validate(input),

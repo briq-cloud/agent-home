@@ -307,7 +307,8 @@ export class Routing {
       binding.id !== 'abstain' &&
       !!binding.cli &&
       binding.signedIn === true &&
-      binding.compatibility === 'verified' &&
+      (binding.compatibility === 'verified' ||
+        (binding.harness === 'dsh' && binding.compatibility === 'unknown' && request.explicit?.cli === binding.cli)) &&
       binding.healthy !== false &&
       !binding.quotaBlocked &&
       (request.explicit !== undefined || binding.subscriptionAccount?.enabled !== false) &&

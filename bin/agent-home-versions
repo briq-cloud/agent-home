@@ -26,9 +26,16 @@ row "Grok Build (\`grok\`)" "$(ver grok --version)" "\`GROK_HOME\`"
 row "Mistral Vibe (\`vibe\`)" "$(ver vibe --version)" "\`VIBE_HOME\`"
 row "Gemini CLI (\`gemini\`), API key only" "$(ver gemini --version)" "\`GEMINI_CLI_HOME\`/.gemini"
 echo
+echo "DSH preview $(jq -r .version /opt/dsh/node_modules/@deepseek-ai/dsh/package.json) is installed at \`/opt/dsh/node_modules/.bin/dsh\`, disabled until explicitly configured ([dsh/README.md](dsh/README.md))."
+echo
 echo "## Terminal"
 echo
 echo "\`ttyd\` $(ver ttyd --version) serves it. A link a CLI opens (\`BROWSER\`, \`xdg-open\`) shows as plain text in a window of its own: \`show-url\`."
+echo
+echo "## Coding workspace"
+echo
+echo "T3 Code 0.1.6 is installed at \`/opt/t3/t3\`. The authenticated home starts it on demand with a local Briq Agent ACP connection."
+echo "Briq CLI $(ver briq --version) is installed with a complete integrity-checked npm lockfile. Its native sign-in uses \`BRIQ_CONFIG_DIR\` (default \`RUNNER_LOGINS/config/briq\`)."
 echo
 echo "## Runner"
 echo

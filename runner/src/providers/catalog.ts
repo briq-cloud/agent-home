@@ -1,5 +1,5 @@
-import { accessSync, constants } from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { accessSync, constants, existsSync } from 'node:fs';
+import { delimiter, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { SubscriptionAccount } from './accounts.ts';
 
@@ -9,6 +9,8 @@ export interface Cli {
   subscriptionAccount?: SubscriptionAccount;
   /** Its ACP agent, speaking JSON-RPC on stdin and stdout. */
   acp: string[];
+  /** Explicit adapter for agents that resume persisted sessions without native transcript replay. */
+  sessionRecovery?: 'resume';
   /** The vendor's own sign-in, which the runner runs and reads the page's address and code from. */
   login?: string[];
   /** A sign-in that asks questions first (a provider to pick): the command to run in the terminal. */
@@ -125,7 +127,21 @@ export const CLIS: Cli[] = [
 
 /** The CLIs, or `RUNNER_CLIS` (a JSON array of `Cli`) in their place: another CLI, or a test's. */
 export function clis(env: NodeJS.ProcessEnv): Cli[] {
-  const table = env.RUNNER_CLIS ? (JSON.parse(env.RUNNER_CLIS) as Cli[]) : CLIS;
+  if (env.RUNNER_DSH !== undefined && !['0', '1'].includes(env.RUNNER_DSH))
+    throw Error('RUNNER_DSH must be 0 or 1');
+  const table = env.RUNNER_CLIS ? (JSON.parse(env.RUNNER_CLIS) as Cli[]) : [...CLIS];
+  if (!env.RUNNER_CLIS && env.RUNNER_DSH === '1') {
+    const home = env.DSH_HOME, patch = env.RUNNER_DSH_PATCH;
+    if (!home || !isAbsolute(home) || !patch || !isAbsolute(patch) || !existsSync(patch))
+      throw Error('RUNNER_DSH requires absolute DSH_HOME and an existing absolute RUNNER_DSH_PATCH');
+    table.push({
+      name: 'dsh',
+      acp: ['/opt/dsh/node_modules/.bin/dsh', '--profile', 'acp', '--patch', patch],
+      apiKeys: ['AGENT_HOME_DSH_PROVIDER_KEY'],
+      sessionRecovery: 'resume',
+      env: { DSH_HOME: home, DSH_TELEMETRY_DISABLED: '1' },
+    });
+  }
   if (!Array.isArray(table) || table.length > 32) throw Error('RUNNER_CLIS must be an array with at most 32 entries');
   const seen = new Set<string>();
   for (const cli of table) {
@@ -149,6 +165,8 @@ export function clis(env: NodeJS.ProcessEnv): Cli[] {
       )
         throw Error('invalid CLI command');
     }
+    if (cli.sessionRecovery !== undefined && cli.sessionRecovery !== 'resume')
+      throw Error('invalid CLI session recovery');
     if (cli.authStatusMethod !== undefined && cli.authStatusMethod !== '_auth/status')
       throw Error('invalid ACP auth status method');
   }
@@ -206,6 +224,8 @@ const KEEP = [
   'MISTRAL_API_KEY',
   'GEMINI_API_KEY',
   'GOOGLE_API_KEY',
+  // DSH's operator-configured provider patch names this one credential only.
+  'AGENT_HOME_DSH_PROVIDER_KEY',
 ];
 
 export function cliEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -234,6 +254,15 @@ export function which(name: string, path = ''): string | undefined {
   return undefined;
 }
 
+// DSH receives one provider credential and an isolated home. In particular, no native
+// subscription folders, ambient vendor keys, runner tokens or arbitrary process flags.
+const DSH_KEEP = new Set([
+  'PATH', 'LANG', 'LC_ALL', 'TERM', 'TZ', 'USER', 'SHELL', 'TMPDIR',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'NODE_EXTRA_CA_CERTS', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE',
+  'DSH_HOME', 'AGENT_HOME_DSH_PROVIDER_KEY',
+]);
+
 /** Effective native environment shared by sign-in, status and native process launch. */
 export function effectiveCliEnv(cli: Cli, inherited: Record<string, string | undefined>): Record<string, string> {
   const env = Object.fromEntries(
@@ -242,6 +271,16 @@ export function effectiveCliEnv(cli: Cli, inherited: Record<string, string | und
   for (const [name, value] of Object.entries(cli.env ?? {})) {
     if (value === null) delete env[name];
     else env[name] = value;
+  }
+  if (nativeHarness(cli) === 'dsh') {
+    if (!env.DSH_HOME || !isAbsolute(env.DSH_HOME)) throw Error('DSH requires an absolute isolated DSH_HOME');
+    return {
+      ...Object.fromEntries(Object.entries(env).filter(([name]) => DSH_KEEP.has(name))),
+      HOME: env.DSH_HOME,
+      DSH_TELEMETRY_DISABLED: '1',
+      NO_BROWSER: '1',
+      NO_OPEN_BROWSER: '1',
+    };
   }
   return env;
 }
