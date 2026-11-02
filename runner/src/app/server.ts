@@ -22,6 +22,7 @@ import { ProviderMutations } from './provider-mutations.ts';
 import { AutoConn } from '../acp/auto.ts';
 import { Accounts, createAccount, updateAccount } from '../providers/accounts.ts';
 import { prepareAutoProfiles, AUTO_POOL_SOURCE } from '../providers/auto-models.ts';
+import { HomeServices } from './home-services.ts';
 
 /**
  * The agent home runner (ADR 0021 in github.com/up-lab/briq; this folder's README): an ACP agent
@@ -42,6 +43,7 @@ const port = config.port;
 const base = clis(env);
 const childEnv = cliEnv(env);
 const stateDir = config.stateDir;
+const homeServices = new HomeServices({ env, stateDir, cwd: config.cwd, token, runnerPort: port });
 const logins = env.RUNNER_LOGINS ?? '/work/.logins';
 const accounts = new Accounts({ stateDir, logins });
 const keys = new Keys({
@@ -193,6 +195,11 @@ function endpoint(name: string) {
                   hub,
                   stateDir,
                   defaultProject: 'home',
+                  projectForCwd: (cwd) => {
+                    const project = application.projects.forCwd(cwd);
+                    application.context.setProjectRevision(project.id, project.revision);
+                    return project.id;
+                  },
                 })
               : new ClientConn(hub, name || null);
           return { closed: conn.run(stream as never) };
@@ -356,6 +363,23 @@ const server = createServer(async (req, res) => {
   }
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
+    if (parts[0] === 'home-services') {
+      res.setHeader('cache-control', 'no-store');
+      if (parts.length === 1 && req.method === 'GET') return json(res, 200, homeServices.status());
+      if (parts.length === 2 && parts[1] === 't3' && req.method === 'POST') return json(res, 200, await homeServices.start());
+      if (parts.length === 3 && parts[1] === 't3' && parts[2] === 'pair' && req.method === 'POST')
+        return json(res, 200, await homeServices.pair());
+      if (parts.length === 3 && parts[1] === 't3' && parts[2] === 'routing' && req.method === 'PUT') {
+        const input = await body(req);
+        if (Object.keys(input).length !== 1 || typeof input.optinOpenRouter !== 'boolean')
+          return json(res, 400, { error: 'Expected optinOpenRouter boolean' });
+        return json(res, 200, homeServices.setOpenRouter(input.optinOpenRouter));
+      }
+      if (parts.length === 2 && parts[1] === 'briq' && req.method === 'GET') return json(res, 200, await homeServices.briqStatus());
+      if (parts.length === 3 && parts[1] === 'briq' && parts[2] === 'login' && req.method === 'POST')
+        return json(res, 200, await homeServices.briqLogin());
+      return json(res, 404, { error: 'Unknown home service action' });
+    }
     if (config.orchestrator && (await application.http(req, res, url, () => body(req)))) return;
     if (parts[0] === 'accounts') {
       res.setHeader('cache-control', 'no-store');
@@ -671,6 +695,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const)
   process.once(signal, () => {
     void application.stop().finally(async () => {
       await copilotAccounts.close();
+      await homeServices.stop();
       hub.stop();
       server.close();
       process.exit(0);

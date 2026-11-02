@@ -31,6 +31,7 @@ test(
           ['/assets/home.js', 'home.js'],
           ['/assets/fleet.js', 'fleet.js'],
           ['/assets/extensions.js', 'extensions.js'],
+          ['/assets/services.js', 'services.js'],
           ['/assets/home.css', 'home.css'],
         ].map(
           async ([url, file]) =>
@@ -164,7 +165,7 @@ test(
     assert.equal(await page.getByRole('tab', { name: 'Fleet', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('#panel-chat').isVisible(), false);
     await page.getByRole('tab', { name: 'Fleet', exact: true }).press('End');
-    assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.getByRole('tab', { name: 'Briq', exact: true }).getAttribute('aria-selected'), 'true');
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     assert.equal(await page.getByLabel('Message', { exact: true }).inputValue(), 'Keep this chat draft');
     await page.getByRole('tab', { name: 'Connections', exact: true }).click();

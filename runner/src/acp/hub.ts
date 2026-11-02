@@ -271,7 +271,7 @@ export class Hub {
     this.extensions = opts.extensions;
     this.env = opts.env;
     this.cwd = opts.cwd;
-    this.route = opts.route?.length ? opts.route : opts.clis.map((c) => c.name);
+    this.route = opts.route?.length ? opts.route : opts.clis.filter((c) => nativeHarness(c) !== 'dsh').map((c) => c.name);
     this.signedIn = opts.signedIn ?? (async () => null);
     for (const cli of opts.clis) this.add(cli);
   }
@@ -635,7 +635,17 @@ export class Hub {
           (await this.alone(e, async () => {
             prepared = await this.sessionParams(cli, params);
             this.protectMcpDispatch(e, prepared.params);
-            return e.agent.request('session/load', prepared.params);
+            let method = 'session/load';
+            if (e.agent.cli.sessionRecovery === 'resume') {
+              const initialized = (await e.agent.ensure()) as {
+                agentCapabilities?: { sessionCapabilities?: { resume?: unknown } };
+              };
+              const resume = initialized?.agentCapabilities?.sessionCapabilities?.resume;
+              if (!resume || typeof resume !== 'object' || Array.isArray(resume))
+                throw new RpcFailure({ code: -32601, message: 'agent does not advertise session resume' });
+              method = 'session/resume';
+            }
+            return e.agent.request(method, prepared.params);
           })) as Record<string, unknown>,
           'sessionId',
         );

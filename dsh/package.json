@@ -1,0 +1,8 @@
+{
+  "name": "agent-home-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.2.1-rc.5"
+  }
+}

@@ -119,6 +119,29 @@ RUN V="${GEMINI_VERSION:-$(npm view @google/gemini-cli version)}" \
   && mkdir -p /etc/gemini-cli \
   && echo '{"security":{"auth":{"selectedType":"gemini-api-key","enforcedType":"gemini-api-key"}},"general":{"enableAutoUpdate":false,"enableAutoUpdateNotification":false},"privacy":{"usageStatisticsEnabled":false}}' > /etc/gemini-cli/settings.json
 
+# Briq CLI: the native browser login and cloud commands, with an exact locked dependency closure.
+COPY briq-cli /opt/briq-cli
+RUN cd /opt/briq-cli && npm ci --ignore-scripts --no-fund --no-audit \
+  && ln -s /opt/briq-cli/node_modules/.bin/briq /usr/local/bin/briq \
+  && briq --version \
+  && npm cache clean --force
+
+# Optional DSH ACP harness: exact preview and full dependency closure, registry integrity
+# verified by npm ci. Disabled in the runner until RUNNER_DSH=1 and a provider patch is configured.
+# No lifecycle scripts or runtime package installation are needed.
+COPY dsh /opt/dsh
+RUN cd /opt/dsh && npm ci --ignore-scripts --no-fund --no-audit \
+  && ./node_modules/.bin/dsh --version \
+  && npm cache clean --force
+
+# T3 Code: official standalone Linux release, fixed version and publisher SHA-256.
+# T3 is started explicitly from the authenticated home; its state never shares CLI credentials.
+RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0.1.6-linux-x64.tar.gz -o /tmp/t3.tar.gz \
+  && echo '7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6  /tmp/t3.tar.gz' | sha256sum -c - \
+  && printf 'T3 Code\t7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6\tthe publisher SHA256SUMS\n' >> /etc/agent-home/downloads \
+  && mkdir -p /opt/t3 && tar --strip-components=1 -xzf /tmp/t3.tar.gz -C /opt/t3 && rm /tmp/t3.tar.gz \
+  && test -x /opt/t3/t3
+
 # The terminal page: ttyd, one static binary.
 RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/releases/latest | jq -r .tag_name)}" \
   && R="https://github.com/tsl0922/ttyd/releases/download/${V}" \
@@ -137,6 +160,8 @@ RUN cd /opt/agent-home-runner \
   && npm cache clean --force \
   && printf '#!/bin/sh\nexec node /opt/agent-home-runner/src/main.ts "$@"\n' > /usr/local/bin/agent-home-runner \
   && chmod 755 /usr/local/bin/agent-home-runner \
+  && printf '#!/bin/sh\nexec node /opt/agent-home-runner/bin/briq-agent-acp.ts "$@"\n' > /usr/local/bin/briq-agent-acp \
+  && chmod 755 /usr/local/bin/briq-agent-acp \
   && node --input-type=module -e "await import('/opt/agent-home-runner/src/providers/catalog.ts')"
 
 # A link a CLI opens (a sign-in page) shows in the terminal instead: `show-url`, as BROWSER and as

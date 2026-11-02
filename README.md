@@ -24,7 +24,10 @@ Auto considers subscriptions first. API execution and decision-model calls requi
 Dynamic decisions are available by default, but never run without an OpenRouter key and a positive
 per-task `decisionBudgetUsd`; set `RUNNER_DYNAMIC_ROUTING=0` to disable them globally. Without both
 gates, Auto uses its configured subscription/default route without a decision-model call.
-The page has Chat, Fleet, Connections and Tools tabs. The terminal opens separately.
+The page has Chat, Fleet, Connections, Tools, T3 Code, Terminal and Briq tabs.
+The named **Briq Agent** uses the existing Auto orchestrator at `/acp/auto`.
+T3 Code is installed and starts on demand with Briq Agent preconfigured as a local ACP agent;
+the shared Claude/Codex CLIs stay owned by the runner. [Workspace setup](docs/workspace.md).
 Raw `/acp/<cli-or-profile>` remains available for full vendor ACP capabilities.
 `/acp` remains the compatibility endpoint for subscription load balancing.
 

@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Projects } from '../src/orchestration/projects.ts';
+
+test('local ACP working directories register immutable confined project roots and reuse identities', (t) => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'local-acp-cwd-')));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const workspace = join(dir, 'workspace'), nested = join(workspace, 'repo'), outside = join(dir, 'outside');
+  mkdirSync(nested, { recursive: true }); mkdirSync(outside);
+  const registry = new Projects(join(dir, 'projects.json'), workspace);
+  registry.put({ id: 'home', root: workspace, revision: 'root-revision' });
+  assert.equal(registry.forCwd(workspace).id, 'home');
+  const project = registry.forCwd(nested);
+  assert.equal(project.root, nested);
+  assert.equal(registry.forCwd(nested).id, project.id);
+  assert.equal(new Projects(join(dir, 'projects.json'), workspace).forCwd(nested).id, project.id);
+  assert.throws(() => registry.forCwd(outside), /inside RUNNER_CWD/);
+  assert.throws(() => registry.forCwd('repo'), /absolute/);
+  symlinkSync(outside, join(workspace, 'escape'));
+  assert.throws(() => registry.forCwd(join(workspace, 'escape')), /inside RUNNER_CWD/);
+  assert.equal(registry.list().length, 2);
+  rmSync(nested, { recursive: true });
+  const restarted = new Projects(join(dir, 'projects.json'), workspace);
+  assert.equal(restarted.get('home').revision, 'root-revision');
+  assert.throws(() => restarted.get(project.id), /unknown project/);
+  assert.throws(() => restarted.forCwd(nested), /ENOENT/);
+  mkdirSync(nested);
+  assert.equal(restarted.forCwd(nested).id, project.id);
+});

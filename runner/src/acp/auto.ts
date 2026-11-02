@@ -30,6 +30,7 @@ export type AutoOptions = {
   hub: Pick<Hub, 'loadSession' | 'detach'>;
   stateDir: string;
   defaultProject?: string;
+  projectForCwd?: (cwd: string) => string;
 };
 // Connections share a home process; durable files remain the source of truth.
 const observers = new Map<string, Set<(session: Session) => void>>();
@@ -61,7 +62,8 @@ function acceptance(value: unknown): Acceptance | undefined {
 
 /**
  * Durable virtual ACP sessions over Engine tasks. Disconnecting only drops observers;
- * explicit session/cancel stops the task. The client never supplies an execution cwd.
+ * explicit session/cancel stops the task. Local clients may explicitly resolve a confined cwd
+ * into the immutable project registry; execution always uses the registered project root.
  * Session files contain routing/context opt-ins and checkpoint references, never keys.
  */
 export class AutoConn {
@@ -301,7 +303,7 @@ export class AutoConn {
     if (method === 'initialize')
       return {
         protocolVersion: 1,
-        agentInfo: { name: 'agent-home-auto', title: 'Agent home Auto', version: '0.1.0' },
+        agentInfo: { name: 'briq-agent', title: 'Briq Agent', version: '0.1.0' },
         agentCapabilities: {
           loadSession: true,
           promptCapabilities: { image: false, audio: false, embeddedContext: false },
@@ -311,6 +313,13 @@ export class AutoConn {
     if (method === 'session/new') {
       const opts = object(object(params._meta).agentHome);
       if (opts.allowPaidApi !== undefined && typeof opts.allowPaidApi !== 'boolean') invalid('Invalid allowPaidApi');
+      if (opts.useCwd !== undefined && typeof opts.useCwd !== 'boolean') invalid('Invalid useCwd');
+      let projectId = text(opts.projectId ?? this.options.defaultProject ?? 'home', 'projectId');
+      if (opts.useCwd === true) {
+        if (!this.options.projectForCwd) invalid('Local project cwd is unavailable');
+        try { projectId = this.options.projectForCwd(text(params.cwd, 'cwd', 4096)); }
+        catch { invalid('Project cwd must be an existing directory inside the home workspace'); }
+      }
       let context: EngineSubmission['context'];
       if (opts.context !== undefined) {
         const input = object(opts.context);
@@ -328,7 +337,7 @@ export class AutoConn {
       const session: Session = {
         version: 1,
         id: `auto-${randomUUID()}`,
-        projectId: text(opts.projectId ?? this.options.defaultProject ?? 'home', 'projectId'),
+        projectId,
         lastTaskId: null,
         requestedCli: opts.cli === undefined ? undefined : text(opts.cli, 'requested CLI'),
         modeId: opts.modeId === undefined ? undefined : text(opts.modeId, 'modeId'),
@@ -338,7 +347,7 @@ export class AutoConn {
         context,
         acceptance: acceptance(opts.acceptance),
       };
-      // No route, CLI process, model call or client cwd is consumed at creation.
+      // Creation resolves project metadata only; no route, CLI process or model call starts.
       this.save(session);
       return {
         sessionId: session.id,

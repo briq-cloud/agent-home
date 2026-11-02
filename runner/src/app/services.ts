@@ -246,7 +246,7 @@ export class Application {
             c.subscriptionAccount && billing !== 'subscription' && !hasApiKey
               ? null
               : await this.options.signedIn(c.name),
-          compatibility: 'verified',
+          compatibility: harness === 'dsh' ? 'unknown' : 'verified',
           model: p?.model,
           canonical: p?.autoEligible ? p.canonical : undefined,
           quotaBlocked: Boolean(this.options.hub.limits()[c.name]),

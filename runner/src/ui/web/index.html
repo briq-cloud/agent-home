@@ -22,6 +22,9 @@
     <button id="tab-fleet" role="tab" aria-controls="panel-fleet" aria-selected="false" tabindex="-1">Fleet</button>
     <button id="tab-connections" role="tab" aria-controls="panel-connections" aria-selected="false" tabindex="-1">Connections</button>
     <button id="tab-tools" role="tab" aria-controls="panel-tools" aria-selected="false" tabindex="-1">Tools</button>
+    <button id="tab-t3" role="tab" aria-controls="panel-t3" aria-selected="false" tabindex="-1">T3 Code</button>
+    <button id="tab-terminal" role="tab" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">Terminal</button>
+    <button id="tab-briq" role="tab" aria-controls="panel-briq" aria-selected="false" tabindex="-1">Briq</button>
   </nav>
   <div id="panel-connections" role="tabpanel" aria-labelledby="tab-connections" hidden>
   <section aria-labelledby="agents-title">
@@ -41,7 +44,7 @@
   </div>
   <div id="panel-chat" role="tabpanel" aria-labelledby="tab-chat">
   <section class="chat-shell" aria-labelledby="chat-title" id="chat">
-    <div class="chat-header"><div><p class="eyebrow">YOUR AGENT HOME</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="auto">Auto orchestrator</option></select><button id="new-chat">New chat</button></div></div>
+    <div class="chat-header"><div><p class="eyebrow">YOUR AGENT HOME</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="auto">Briq Agent</option></select><button id="new-chat">New chat</button></div></div>
     <label class="api-choice"><input type="checkbox" id="allow-paid"> Allow Auto to use API-key profiles for this conversation (usage billed)</label>
     <p id="chat-status" role="status" class="muted">Choose an agent, or let your home choose.</p>
     <div id="chat-messages" role="log" aria-label="Conversation"><div class="empty-chat"><span class="chat-spark">✳</span><h3>A quick check, a real conversation.</h3><p>Send a message through your home’s ACP connection.</p></div></div>
@@ -54,6 +57,33 @@
   </div>
   <div id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" hidden>
     <section aria-labelledby="tools-title"><div class="section-title"><div><p class="eyebrow">SHARED CAPABILITIES</p><h1 id="tools-title">Tools</h1></div></div><p id="tools-disabled" class="muted" hidden>Shared tools are disabled for this home.</p><div id="extensions-root"></div></section>
+  </div>
+  <div id="panel-t3" role="tabpanel" aria-labelledby="tab-t3" hidden>
+    <section aria-labelledby="t3-title"><p class="eyebrow">YOUR CODING WORKSPACE</p><h1 id="t3-title">T3 Code</h1>
+      <p>T3 Code uses Briq Agent for your connected CLIs, shared tools and durable tasks. Sign in to the CLIs in Connections, then select Briq Agent in T3.</p>
+      <p id="t3-status" role="status">Checking T3 Code…</p>
+      <div class="actions"><button id="t3-start">Start T3 Code</button><button id="t3-pair" disabled>Create browser pairing link</button><a id="t3-open" class="button" target="_blank" rel="noopener noreferrer" hidden>Open T3 Code ↗</a><button id="services-refresh">Refresh status</button></div>
+      <p id="t3-notice" role="status" class="muted"></p>
+      <label class="api-choice"><input type="checkbox" id="t3-openrouter"> Allow OpenRouter API profiles and paid routing decisions for new Briq Agent connections in T3</label>
+      <p class="muted">Requires your OpenRouter key in Connections. Admission estimates: $0.10 for execution and $0.001 for routing per task; actual CLI charges are unknown. Reconnect the Briq Agent in T3 after changing this choice.</p>
+      <p>Pairing links expire after five minutes and can be used once. Keep them private. The terminal and CLI sign-ins remain available here while T3 runs.</p>
+      <p id="dsh-service" class="muted"></p>
+    </section>
+  </div>
+  <div id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden>
+    <section aria-labelledby="terminal-title"><p class="eyebrow">THIS HOME</p><h1 id="terminal-title">Terminal</h1>
+      <p>Open your persistent terminal to run commands, inspect projects or complete an interactive CLI sign-in.</p>
+      <a class="button" href="/terminal/" target="_blank" rel="noopener">Open terminal ↗</a>
+      <p>Use <code>briq login</code> for Briq, or manage your agent subscriptions in Connections.</p>
+    </section>
+  </div>
+  <div id="panel-briq" role="tabpanel" aria-labelledby="tab-briq" hidden>
+    <section aria-labelledby="briq-title"><p class="eyebrow">CLOUD TOOLS</p><h1 id="briq-title">Briq connection</h1>
+      <p>Connect the Briq CLI on this home through its browser sign-in. Shared Briq MCP tools are configured separately in Tools.</p>
+      <p id="briq-status" role="status">Check the connection to see whether the CLI is signed in.</p>
+      <div class="actions"><button id="briq-check">Check connection</button><button id="briq-login">Sign in to Briq</button><a id="briq-login-open" class="button" hidden target="_blank" rel="noopener noreferrer">Approve Briq sign-in ↗</a></div>
+      <p id="briq-login-code" role="status"></p>
+    </section>
   </div>
   <footer><span>One home. Your agents. Your subscriptions.</span><span id="notice" role="status"></span></footer>
 </main>

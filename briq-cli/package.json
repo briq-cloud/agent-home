@@ -1,0 +1,8 @@
+{
+  "name": "agent-home-briq-cli",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@briq-cloud/cli": "0.1.3"
+  }
+}

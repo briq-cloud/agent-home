@@ -37,6 +37,7 @@ test(
           ['/assets/home.js', '../src/ui/web/home.js'],
           ['/assets/fleet.js', '../src/ui/web/fleet.js'],
           ['/assets/extensions.js', '../src/ui/web/extensions.js'],
+          ['/assets/services.js', '../src/ui/web/services.js'],
           ['/assets/home.css', '../src/ui/web/home.css'],
         ].map(
           async ([url, path]) => [url, await readFile(fileURLToPath(new URL(path!, import.meta.url)), 'utf8')] as const,
@@ -279,6 +280,7 @@ test(
           ['/assets/home.js', '../src/ui/web/home.js'],
           ['/assets/fleet.js', '../src/ui/web/fleet.js'],
           ['/assets/extensions.js', '../src/ui/web/extensions.js'],
+          ['/assets/services.js', '../src/ui/web/services.js'],
           ['/assets/home.css', '../src/ui/web/home.css'],
         ].map(async ([url, file]) => [url!, await readFile(new URL(file!, import.meta.url), 'utf8')] as const),
       ),
