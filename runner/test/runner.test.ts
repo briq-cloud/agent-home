@@ -96,15 +96,32 @@ before(async () => {
       ]),
       GOOGLE_API_KEY: 'placeholder',
     },
-    stdio: ['ignore', 'inherit', 'inherit'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
-  for (let i = 0; i < 50; i++) {
+  let spawnFailed = false, startupOutput = '';
+  runner.once('error', () => { spawnFailed = true; });
+  const capture = (chunk: Buffer) => { startupOutput = (startupOutput + chunk.toString()).slice(-12_000); };
+  runner.stdout?.on('data', capture);
+  runner.stderr?.on('data', capture);
+  // Match the application/account fixtures' bounded startup contract. Keep
+  // diagnostic output private rather than emitting child environment details.
+  const healthStarted = Date.now(), healthDeadline = healthStarted + 15_000;
+  const readinessFailure = (category: 'spawn_error' | 'process_exit' | 'health_deadline') => {
+    writeFileSync(join(dir, 'startup-output.log'), startupOutput, { mode: 0o600 });
+    return new Error(`runner readiness failed: ${category}; elapsed_ms=${Date.now() - healthStarted}`);
+  };
+  while (Date.now() < healthDeadline) {
+    if (spawnFailed) throw readinessFailure('spawn_error');
+    if (runner.exitCode !== null || runner.signalCode !== null) throw readinessFailure('process_exit');
     try {
-      if ((await fetch(`http://127.0.0.1:${PORT}/healthz`)).ok) return;
+      const response = await fetch(`http://127.0.0.1:${PORT}/healthz`, { signal: AbortSignal.timeout(300) });
+      if (response.ok) return;
     } catch {}
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error('runner did not start');
+  const category = spawnFailed ? 'spawn_error' :
+    runner.exitCode !== null || runner.signalCode !== null ? 'process_exit' : 'health_deadline';
+  throw readinessFailure(category);
 });
 
 after(() => {
@@ -439,7 +456,11 @@ test('actual local handoff button and direct navigation establish a first-party 
         await source.getByRole('link', { name: 'Open home' }).click();
         page = await popup;
       }
-      await page.locator('#tab-t3').waitFor();
+      // Static tabs render before the module normalizes unknown fragments.
+      const expectedHash = kind === 'fragment-network-path' ? '#chat' : hash;
+      await page.waitForURL((url) => url.origin === base && url.pathname === '/' &&
+        url.search === '' && url.hash === expectedHash);
+      await page.locator(`#tab-${expectedHash.slice(1)}[aria-selected="true"]`).waitFor();
       const final = new URL(page.url());
       assert.equal(final.origin, base);
       assert.equal(final.pathname, '/');
