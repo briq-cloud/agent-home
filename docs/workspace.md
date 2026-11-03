@@ -67,3 +67,27 @@ deployment's API origin before starting the home when using a nonproduction envi
 The image also installs the pinned DSH preview. Its experimental ACP route requires explicit
 operator configuration and selection, and is excluded from default Auto routing.
 See [DSH configuration and lifecycle limits](../dsh/README.md).
+
+## Auto Agent settings
+
+The **Auto Agent** tab owns the existing routing configuration UI. Connections
+contains provider key save/removal and CLI sign-ins; saving a key sends
+`auto: false` and does not prepare models. The Auto Agent OpenRouter **Use Auto**
+button still calls `POST /routing/models` to prepare the existing default models
+with automatic harness selection. No routing policy or new stored fields are added.
+
+Current settings and scope:
+
+- Claude account `enabled`: `PATCH /accounts/:id` changes eligibility for new
+  automatic work. Explicit account selection and active sessions stay available.
+- Model profiles: `provider`, `harness`, `model`, optional `name`, and OpenRouter
+  `autoEligible` use the existing `POST /profiles`; profiles can also be removed.
+  Preparing defaults uses the existing catalog checks, not a new routing model.
+- T3 sessions `optinOpenRouter`: `PUT /home-services/t3/routing` applies to new
+  Briq Agent connections in T3; reconnect to apply. It does not grant paid consent
+  to Chat or Fleet.
+- Chat `allowPaidApi` and Fleet paid-use consent remain per conversation/task.
+  Shared MCP connections and skills remain in Tools.
+
+Tab selection is remembered under `agent-home-tab`; `#auto-agent` opens the
+settings directly. No credentials are rendered or entered on this tab.
