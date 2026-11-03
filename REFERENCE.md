@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-02. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-03. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -8,7 +8,7 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 
 | CLI | Version | Sign-in kept under |
 | --- | --- | --- |
-| Claude Code (`claude`) | 2.1.309 | `CLAUDE_CONFIG_DIR` |
+| Claude Code (`claude`) | 2.1.311 | `CLAUDE_CONFIG_DIR` |
 | Codex (`codex`) | 0.166.0 | `CODEX_HOME` |
 | Copilot CLI (`copilot`) | 1.0.105 | `COPILOT_HOME` |
 | Cursor (`agent`) | 2026.10.22-27dcf5f | `XDG_CONFIG_HOME`/cursor |
@@ -37,7 +37,7 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 | Download | sha256 | Checked against |
 | --- | --- | --- |
-| Claude Code | `4d704a8aecbe038affa3000f498ae17c1b4f753add8facb8764120affc99b658` | its release manifest |
+| Claude Code | `86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada` | its release manifest |
 | Codex | `1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254` | the GitHub release digest |
 | Copilot CLI | `aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2` | the GitHub release digest |
 | Cursor | `85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294` | none published: recorded |
@@ -49,4 +49,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-11-02.3`, 1719 MB compressed, digest `sha256:6c7bf131b0346267e7a538fc34a2690762a81f7bee92a869f40ed57952619ee2`, on `ghcr.io/briq-cloud/sandbox@sha256:4a635c082b235773b4174a1942183c70c94e035c773272140e605d76157afa5f`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-02.3 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-11-03`, 1720 MB compressed, digest `sha256:19450448b067fe735467875742332589000a43ec8c3342e457763e5dffbbb330`, on `ghcr.io/briq-cloud/sandbox@sha256:4a635c082b235773b4174a1942183c70c94e035c773272140e605d76157afa5f`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-03 --repo briq-cloud/agent-home`.
