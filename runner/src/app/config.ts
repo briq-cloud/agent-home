@@ -50,6 +50,7 @@ export function configuration(env: NodeJS.ProcessEnv) {
     maxTurns,
     orchestrator: flag('RUNNER_ORCHESTRATOR', true),
     dynamicRouting: flag('RUNNER_DYNAMIC_ROUTING', true),
+    empiricalRouting: flag('RUNNER_EMPIRICAL_ROUTING', false),
     delegation: flag('RUNNER_DELEGATION', false),
     memory,
     extensions: flag('RUNNER_EXTENSIONS', true),

@@ -5,6 +5,7 @@ import { Agent, type Rpc, RpcFailure } from './agent.ts';
 import { effectiveCliEnv, nativeHarness, type Cli } from '../providers/catalog.ts';
 import type { SubscriptionAccount } from '../providers/accounts.ts';
 import { log } from '../telemetry/log.ts';
+import { PerformanceLedger, endpointFingerprint, type ObservationContext, type TurnObservation } from '../telemetry/performance.ts';
 import { parseAcpAuthStatus } from '../auth/status.ts';
 import {
   ExtensionRegistry,
@@ -70,6 +71,8 @@ class Session {
   firstCall: (() => void) | undefined;
   /** Set while a prompt waits for a slot. */
   unqueue: (() => void) | undefined;
+  readonly observations = new Set<TurnObservation>();
+  freshObservation = false;
   homeContext?: string;
   homeContextDelivered = false;
   private nextHeld = 1;
@@ -214,6 +217,8 @@ interface Engine {
 }
 
 export interface HubOptions {
+  /** Deterministic local measurement clock; no timestamps supplied by agents. */
+  now?: () => number;
   extensions?: HubExtensions;
   beforeStart?: (cli: string) => Promise<() => void>;
   clis: Cli[];
@@ -251,6 +256,8 @@ export class Hub {
   private readonly authProbes = new WeakMap<Engine, Promise<boolean | null>>();
   private readonly slots: Slots;
   private readonly route: string[];
+  readonly observations: PerformanceLedger;
+  private readonly now: () => number;
   private readonly signedIn: (cli: string) => Promise<boolean | null>;
   private readonly stateDir: string;
   private readonly beforeStart: HubOptions['beforeStart'];
@@ -265,6 +272,8 @@ export class Hub {
   private readonly cwd: string;
 
   constructor(opts: HubOptions) {
+    this.now = opts.now ?? Date.now;
+    this.observations = new PerformanceLedger(opts.stateDir, this.now);
     this.slots = new Slots(opts.maxTurns);
     this.stateDir = opts.stateDir;
     this.beforeStart = opts.beforeStart;
@@ -274,6 +283,10 @@ export class Hub {
     this.route = opts.route?.length ? opts.route : opts.clis.filter((c) => nativeHarness(c) !== 'dsh').map((c) => c.name);
     this.signedIn = opts.signedIn ?? (async () => null);
     for (const cli of opts.clis) this.add(cli);
+    for (const [cli, health] of this.observations.health()) {
+      if (health.cooldownUntil && health.cooldownUntil > this.now()) this.limited.set(cli, health.cooldownUntil);
+      if (health.nearQuota) this.used.set(cli, NEAR_LIMIT);
+    }
   }
 
   /** Owner composition only; updates apply when a native session is opened or
@@ -604,6 +617,7 @@ export class Hub {
     })) as Record<string, unknown>;
     const s = this.open(e, cli, r.sessionId as string);
     s.loaded = without(r, 'sessionId');
+    s.freshObservation = true;
     s.peers.add(peer);
     e.agent.known.add(s.id);
     s.homeContext = prepared.context;
@@ -664,7 +678,8 @@ export class Hub {
     return s.loaded;
   }
 
-  async prompt(cli: string, params: Rpc['params'], peer: Peer): Promise<unknown> {
+  async prompt(cli: string, params: Rpc['params'], peer: Peer, context: ObservationContext = {}): Promise<unknown> {
+    const queuedAt = this.now();
     this.assertSignInIdle(cli);
     const e = this.engine(cli);
     const s = this.known(e, params?.sessionId);
@@ -687,9 +702,16 @@ export class Hub {
     );
     s.unqueue = undefined;
     if (!release) {
+      const c = e.agent.cli;
+      const cancelled = this.observations.begin({ cli, harness: nativeHarness(c), provider: context.provider ?? c.profile?.provider ?? nativeHarness(c),
+        model: context.model ?? c.profile?.model ?? null, taskCategory: null, endpointIdentity: context.endpointIdentity ?? endpointFingerprint(c.env?.ANTHROPIC_BASE_URL ?? c.env?.OPENAI_BASE_URL) }, s.id, context, Math.max(0, this.now() - queuedAt), false, false, false);
+      this.recordObservation(s, cancelled.started);
+      const result = cancelled.end(this.now(), 'cancelled', undefined);
+      this.observations.finish(cancelled, result); this.recordObservation(s, result);
       s.setTurn({ state: 'idle', stopReason: 'cancelled' });
       return { stopReason: 'cancelled' };
     }
+    let observation: TurnObservation | undefined;
     try {
       this.assertSignInIdle(cli);
       s.setTurn({ state: 'running' });
@@ -710,10 +732,22 @@ export class Hub {
         });
         s.homeContextDelivered = true;
       }
+      const c = e.agent.cli;
+      observation = this.observations.begin({ cli, harness: nativeHarness(c), provider: context.provider ?? c.profile?.provider ?? nativeHarness(c),
+        model: context.model ?? c.profile?.model ?? null, taskCategory: null, endpointIdentity: context.endpointIdentity ?? endpointFingerprint(c.env?.ANTHROPIC_BASE_URL ?? c.env?.OPENAI_BASE_URL) }, s.id, context, Math.max(0, this.now() - queuedAt), s.freshObservation, !c.profile);
+      s.freshObservation = false;
+      s.observations.add(observation);
+      if (s.observations.size > 1) for (const turn of s.observations) turn.overlap();
+      this.recordObservation(s, observation.started);
       const r = (await e.agent.request('session/prompt', dispatched)) as {
         stopReason?: string;
         usage?: unknown;
       };
+      const measured = observation;
+      if (measured) {
+        const result = measured.end(this.now(), r?.stopReason === 'end_turn' ? 'completed' : r?.stopReason === 'cancelled' ? 'cancelled' : 'error', r?.usage);
+        this.observations.finish(measured, result); this.recordObservation(s, result); s.observations.delete(measured); observation = undefined;
+      }
       // The session's token totals, when the CLI gives them (ACP's `usage`, unstable).
       s.setTurn({
         state: 'idle',
@@ -723,13 +757,40 @@ export class Hub {
       return r;
     } catch (err) {
       s.setTurn({ state: 'idle', stopReason: 'error' });
-      if (err instanceof Error && LIMIT_RE.test(err.message)) this.limit(cli);
+      const quota = err instanceof Error && LIMIT_RE.test(err.message);
+      if (quota) this.limit(cli);
+      if (observation) {
+        const result = observation.end(this.now(), 'error', undefined, quota ? 'quota' : 'provider');
+        this.observations.finish(observation, result); this.recordObservation(s, result); s.observations.delete(observation); observation = undefined;
+      }
       throw err;
     } finally {
+      if (observation) {
+        const result = observation.end(this.now(), 'error', undefined, 'provider');
+        this.observations.finish(observation, result); this.recordObservation(s, result); s.observations.delete(observation); observation = undefined;
+      }
       s.firstCall?.();
       s.firstCall = undefined;
       release();
     }
+  }
+
+  private recordObservation(s: Session, event: import('../telemetry/performance.ts').ObservationEvent): void {
+    try { s.record({ jsonrpc: '2.0', method: '_runner/observation', params: event }); }
+    catch { log.warn('observation log unavailable'); }
+  }
+
+  recordVerification(cli: string, sessionId: string, taskId: string, status: 'PASS' | 'FAIL' | 'UNKNOWN'): void {
+    const s = this.engines.get(cli)?.sessions.get(sessionId);
+    const event = this.observations.verify(cli, sessionId, taskId, status);
+    if (s && event) this.recordObservation(s, event);
+  }
+
+  observedHealth(cli: string): { inflight: number; nearQuota: boolean; cooldownUntil: string | null } {
+    const sessions = this.engines.get(cli)?.sessions;
+    return { inflight: sessions ? [...sessions.values()].reduce((sum, s) => sum + s.observations.size, 0) : 0,
+      nearQuota: (this.used.get(cli) ?? 0) >= NEAR_LIMIT,
+      cooldownUntil: (this.limited.get(cli) ?? 0) > this.now() ? new Date(this.limited.get(cli)!).toISOString() : null };
   }
 
   /** Whether a turn of the CLI runs or waits. */
@@ -858,8 +919,9 @@ export class Hub {
     );
   }
 
-  private limit(cli: string, until = Date.now() + LIMITED_MS): void {
+  private limit(cli: string, until = this.now() + LIMITED_MS): void {
     this.limited.set(cli, until);
+    this.observations.record({ version: 1, kind: 'health', cli, at: this.now(), cooldownUntil: until, nearQuota: (this.used.get(cli) ?? 0) >= NEAR_LIMIT });
     log.info('cli at its limit', { cli, until: new Date(until).toISOString() });
   }
 
@@ -884,6 +946,13 @@ export class Hub {
         (value as { unifiedWindows?: Record<string, { utilization?: number }> }).unifiedWindows ?? {},
       );
       this.used.set(cli, Math.max(0, ...windows.map((w) => (typeof w?.utilization === 'number' ? w.utilization : 0))));
+      this.observations.record({ version: 1, kind: 'health', cli, at: this.now(), cooldownUntil: this.limited.get(cli) ?? null, nearQuota: (this.used.get(cli) ?? 0) >= NEAR_LIMIT });
+    }
+    if (msg.method === 'session/update' && s.observations.size === 1) {
+      const observation = [...s.observations][0]!;
+      const update = msg.params?.update;
+      if (update?.sessionUpdate === 'agent_message_chunk' && update.content?.type === 'text' && typeof update.content.text === 'string' && update.content.text.length) observation.text(this.now());
+      if (update?.sessionUpdate === 'usage_update') observation.updateCost(update.cost);
     }
     if (msg.method === 'session/update' && MODEL_UPDATES.has(msg.params?.update?.sessionUpdate)) {
       s.firstCall?.();

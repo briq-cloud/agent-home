@@ -64,6 +64,8 @@ async function handle(m: Msg): Promise<unknown> {
       const taskStart = fullText.lastIndexOf(taskMarker);
       const text = taskStart < 0 ? fullText : fullText.slice(taskStart + taskMarker.length);
       if (text === 'die') process.exit(1);
+      if (text === 'cancelled') return { stopReason: 'cancelled' };
+      if (text === 'approval-refused') throw Object.assign(new Error('approval rejected: private-fixture-detail'), { code: -32000 });
       if (text === 'limit')
         throw Object.assign(new Error("You've hit your usage limit. Try again later."), { code: -32603 });
       if (text === 'slow') await new Promise((r) => setTimeout(r, 500));

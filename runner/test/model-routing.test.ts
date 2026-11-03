@@ -482,3 +482,69 @@ test('configured DSH preview is available only by explicit paid API selection', 
   f.bindings([binding({ id: 'other', cli: 'other', harness: 'other', compatibility: 'unknown' })]);
   await assert.rejects(routing.select({ task: 'mock task', explicit: { cli: 'other' } }), /unavailable or disallowed/);
 });
+
+test('empirical opt-in only breaks equivalent known-model/category ties after the existing decision', async t => {
+  const h = await setup(t);
+  h.bindings([binding({ endpointIdentity: 'endpoint-one' }), binding({ id: 'other', cli: 'claude-other', endpointIdentity: 'endpoint-one' })]);
+  const row = (cli: string, p50: number) => ({ cli, harness: 'claude', provider: 'anthropic', model: 'vendor/exact', taskCategory: 'change', endpointIdentity: 'endpoint-one',
+    samples: 10, ttftSamples: 10, completed: 10, errors: 0, cancelled: 0, interrupted: 0,
+    ttftMs: { p50, p95: p50 }, elapsedMs: { p50: 1000, p95: 1000 }, tokensPerSecond: null, verification: { pass: 0, fail: 0, unknown: 10 } });
+  const observations = () => [row('claude', 100), row('claude-other', 20)];
+  const input = { task: 'Implement tests', decisionBudgetUsd: 0.01 };
+  assert.equal((await new Routing({ ...h.options, observations }).select(input)).cli, 'claude', 'OFF retains the prior decision');
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations }).select(input)).cli, 'claude-other');
+  assert.equal(h.decisions(), 2, 'one existing classifier/decision per request; no extra LLM call');
+  h.bindings([binding({ endpointIdentity: 'endpoint-two' }), binding({ id: 'other', cli: 'claude-other', endpointIdentity: 'endpoint-two' })]);
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations }).select(input)).cli, 'claude', 'changed endpoints cannot reuse old timing samples');
+  h.bindings([binding(), binding({ id: 'other', cli: 'claude-other', quotaBlocked: true })]);
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations }).select(input)).cli, 'claude');
+  h.bindings([binding(), binding({ id: 'other', cli: 'claude-other', signedIn: false })]);
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations }).select(input)).cli, 'claude');
+});
+
+test('observed load ties retain operator priority, explicit selection and paid admission gates', async t => {
+  const h = await setup(t), owned = (extra: Partial<Binding>) => binding({ subscriptionAccount: { enabled: true, priority: 1 }, inflight: 0, nearQuota: false, ...extra });
+  h.bindings([owned({ inflight: 2 }), owned({ id: 'free', cli: 'free' })]);
+  const routing = new Routing({ ...h.options, dynamic: false, empiricalRouting: true });
+  assert.equal((await routing.select({ task: 'work' })).cli, 'free');
+  assert.equal((await routing.select({ task: 'work', explicit: { cli: 'claude' } })).cli, 'claude');
+  h.bindings([owned({ inflight: 2 }), owned({ id: 'free', cli: 'free', subscriptionAccount: { enabled: true, priority: 2 } })]);
+  assert.equal((await routing.select({ task: 'work' })).cli, 'claude');
+  h.bindings([owned({ signedIn: false }), owned({ id: 'paid', cli: 'paid', billing: 'use', provider: 'openrouter', subscriptionAccount: undefined })]);
+  await assert.rejects(routing.select({ task: 'work' }), /no eligible/);
+  await assert.rejects(routing.select({ task: 'work', allowPaidApi: true, maxEstimatedUsd: 0 }), /budget|no eligible/);
+});
+
+
+test('empirical ties preserve a classifier-selected second route when history is unknown or insufficient', async t => {
+  const h = await setup(t);
+  h.result({ model: 'cloudflare/clef-flash', usage: { cost: 0.001 }, answers: { type: { choice: 'change' }, route: { choice: 'other' } } });
+  const bindings = [binding({ endpointIdentity: 'endpoint-one' }), binding({ id: 'other', cli: 'claude-other', endpointIdentity: 'endpoint-one' })];
+  const row = (cli: string, p50: number) => ({ cli, harness: 'claude', provider: 'anthropic', model: 'vendor/exact', taskCategory: 'change', endpointIdentity: 'endpoint-one',
+    samples: 10, ttftSamples: 10, completed: 10, errors: 0, cancelled: 0, interrupted: 0,
+    ttftMs: { p50, p95: p50 }, elapsedMs: { p50: 1000, p95: 1000 }, tokensPerSecond: null, verification: { pass: 0, fail: 0, unknown: 10 } });
+  const history = [row('claude', 20), row('claude-other', 100)];
+  const cases = [
+    { label: 'no observations', rows: [], bindings },
+    { label: 'unknown historical model', rows: history.map(r => ({ ...r, model: null })), bindings },
+    { label: 'unknown historical category', rows: history.map(r => ({ ...r, taskCategory: null })), bindings },
+    { label: 'unknown historical endpoint', rows: history.map(r => ({ ...r, endpointIdentity: null })), bindings },
+    { label: 'unknown current endpoint', rows: history, bindings: bindings.map(b => ({ ...b, endpointIdentity: undefined })) },
+    { label: 'nine samples below threshold', rows: history.map(r => ({ ...r, ttftSamples: 9 })), bindings },
+    { label: 'equal measured timing', rows: history.map(r => ({ ...r, ttftMs: { p50: 100, p95: 100 } })), bindings },
+  ];
+  const input = { task: 'Implement tests', decisionBudgetUsd: 0.01 };
+  for (const scenario of cases) {
+    h.bindings(scenario.bindings);
+    const route = await new Routing({ ...h.options, empiricalRouting: true, observations: () => scenario.rows }).select(input);
+    assert.equal(route.cli, 'claude-other', scenario.label + ' must preserve the current semantic choice');
+    assert.equal(route.source, 'decision');
+  }
+  h.bindings(bindings);
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations: () => history }).select(input)).cli, 'claude', 'strictly better comparable timing may improve the choice');
+  h.bindings(bindings.map((b, i) => ({ ...b, inflight: i ? 1 : 0, nearQuota: false })));
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations: () => [] }).select(input)).cli, 'claude', 'known lower inflight load may strictly improve');
+  h.bindings(bindings.map((b, i) => ({ ...b, inflight: 0, nearQuota: !!i })));
+  assert.equal((await new Routing({ ...h.options, empiricalRouting: true, observations: () => [] }).select(input)).cli, 'claude', 'known quota pressure may strictly improve');
+  assert.equal(h.decisions(), cases.length + 3, 'one existing decision per request, no additional classifier calls');
+});
