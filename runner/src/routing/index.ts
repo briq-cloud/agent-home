@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { MINIMUM_SAMPLES, type RouteObservation } from '../telemetry/performance.ts';
 
 export const TASK_TYPES = {
   lookup: 'Read existing source, retrieve facts and summarize evidence.',
@@ -24,13 +25,17 @@ export type Binding = {
   tools?: boolean;
   modalities?: string[];
   healthy?: boolean;
+  inflight?: number;
+  nearQuota?: boolean;
   quotaBlocked?: boolean;
   subscriptionAccount?: { enabled: boolean; priority: number };
   endpointTag?: string;
+  endpointIdentity?: string;
 };
 export type Availability = { checkedAt: string; bindings: Binding[] };
 export type Route = {
   cli: string;
+  endpointIdentity?: string;
   model?: string;
   routeId?: string;
   type?: TaskType;
@@ -115,6 +120,8 @@ export type RoutingOptions = {
   openRouterKey: () => string | undefined | Promise<string | undefined>;
   decisionClient?: (key: string) => DecisionClient;
   dynamic?: boolean;
+  empiricalRouting?: boolean;
+  observations?: () => RouteObservation[];
   defaultRouteId?: string;
   /** Only the application without an operator-selected default enables pool fallback. */
   autoFallback?: boolean;
@@ -249,6 +256,18 @@ export function portfolio(type: TaskType, candidates: Candidate[]): Portfolio {
   return { type, candidates: selected.slice(0, 5) };
 }
 
+/** Observations break ties only within an operator-equivalent account family. Unknown timings never become zero. */
+export function compareObservedAccounts(a: Binding, b: Binding, category: TaskType | undefined, rows: RouteObservation[]): number {
+  if ((a.subscriptionAccount?.priority ?? 0) !== (b.subscriptionAccount?.priority ?? 0) ||
+    a.billing !== b.billing || a.harness !== b.harness || a.provider !== b.provider || a.model !== b.model || a.canonical !== b.canonical || a.endpointTag !== b.endpointTag || a.endpointIdentity !== b.endpointIdentity) return 0;
+  if (a.nearQuota !== b.nearQuota) return Number(a.nearQuota === true) - Number(b.nearQuota === true);
+  if (numeric(a.inflight) && numeric(b.inflight) && a.inflight !== b.inflight) return a.inflight - b.inflight;
+  if (!category || !a.model || !b.model || !a.endpointIdentity || a.endpointIdentity !== b.endpointIdentity) return 0;
+  const find = (binding: Binding) => rows.find(r => r.cli === binding.cli && r.harness === binding.harness && r.provider === binding.provider && r.model === binding.model && r.endpointIdentity === binding.endpointIdentity && r.taskCategory === category && r.ttftSamples >= MINIMUM_SAMPLES);
+  const left = find(a), right = find(b);
+  return left?.ttftMs && right?.ttftMs ? left.ttftMs.p50 - right.ttftMs.p50 : 0;
+}
+
 export class Routing {
   private readonly options: RoutingOptions;
   private readonly now: () => number;
@@ -319,7 +338,7 @@ export class Routing {
       (!request.modality || binding.modalities === undefined || binding.modalities.includes(request.modality))
     );
   }
-  private async inventory(request: Selection): Promise<Binding[]> {
+  private async inventory(request: Selection, allAccounts = false): Promise<Binding[]> {
     const available = await this.options.availability();
     if (!fresh(available.checkedAt, this.now(), 60_000)) throw new Error('routing availability stale');
     const ids = new Set<string>();
@@ -328,14 +347,16 @@ export class Routing {
       ids.add(b.id);
       return this.eligible(b, request);
     });
-    if (request.explicit) return eligible;
+    if (request.explicit || allAccounts) return eligible;
     // Select one eligible account per native subscription family before model decisions.
     const families = new Map<string, Binding>();
     const family = (b: Binding) => JSON.stringify([b.harness, b.model ?? null, b.canonical ?? null]);
     for (const b of eligible) {
       if (!b.subscriptionAccount || b.billing !== 'subscription') continue;
       const existing = families.get(family(b));
-      if (!existing || b.subscriptionAccount.priority < existing.subscriptionAccount!.priority)
+      if (!existing || b.subscriptionAccount.priority < existing.subscriptionAccount!.priority ||
+        (this.options.empiricalRouting && b.subscriptionAccount.priority === existing.subscriptionAccount!.priority &&
+          compareObservedAccounts(b, existing, undefined, []) < 0))
         families.set(family(b), b);
     }
     return eligible.filter(
@@ -385,6 +406,7 @@ export class Routing {
     if (!binding) throw new Error('no eligible configured route');
     return {
       cli: binding.cli,
+      ...(binding.endpointIdentity ? { endpointIdentity: binding.endpointIdentity } : {}),
       model: binding.model,
       routeId: binding.id,
       source: binding.billing === 'subscription' ? 'subscription' : 'default',
@@ -445,6 +467,7 @@ export class Routing {
       if (binding.billing === 'use' && request.maxEstimatedUsd !== undefined) await this.apiBudget(binding, request);
       return {
         cli: binding.cli,
+        ...(binding.endpointIdentity ? { endpointIdentity: binding.endpointIdentity } : {}),
         model: request.explicit.model ?? binding.model,
         routeId: binding.id,
         source: 'explicit',
@@ -597,14 +620,26 @@ export class Routing {
     // Decisions are hints. Dispatch must re-read live account availability.
     if (request.deadlineUtc && Date.parse(request.deadlineUtc) <= this.now())
       throw new Error('routing deadline elapsed');
-    const current = (await this.inventory(request)).find(
+    const live = await this.inventory(request, this.options.empiricalRouting === true);
+    let current = live.find(
       (b) => b.id === choice.id && b.cli === choice.cli && b.model === choice.model && b.canonical === choice.canonical,
     );
+    if (current?.subscriptionAccount && current.billing === 'subscription' && live.some(b =>
+      b.subscriptionAccount && b.billing === 'subscription' && b.harness === current!.harness && b.model === current!.model && b.canonical === current!.canonical &&
+      b.subscriptionAccount.priority < current!.subscriptionAccount!.priority)) current = undefined;
     if (!current) return this.fallback(request, 'selected route changed before dispatch', usage.cost);
+    if (this.options.empiricalRouting) {
+      const equivalent = live.filter(b => (b.subscriptionAccount?.priority ?? 0) === (current!.subscriptionAccount?.priority ?? 0) &&
+        b.billing === current!.billing && b.harness === current!.harness && b.provider === current!.provider && b.model === current!.model && b.canonical === current!.canonical && b.endpointTag === current!.endpointTag && b.endpointIdentity === current!.endpointIdentity);
+      const observations = this.options.observations?.() ?? [];
+      current = equivalent.reduce((selected, candidate) =>
+        compareObservedAccounts(candidate, selected, type as TaskType, observations) < 0 ? candidate : selected, current);
+    }
     return {
-      cli: choice.cli,
-      model: choice.model,
-      routeId: choice.id,
+      cli: current.cli,
+      ...(current.endpointIdentity ? { endpointIdentity: current.endpointIdentity } : {}),
+      model: current.model,
+      routeId: current.id,
       type: type as TaskType,
       source: 'decision',
       decisionCostUsd: usage.cost,

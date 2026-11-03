@@ -88,6 +88,7 @@ export interface EngineOptions {
   now?: () => number;
   memoryEnabled?: boolean;
   modelIsConfigured?: (cli: string, model: string) => boolean;
+  observeVerification?: (cli: string, sessionId: string, taskId: string, status: 'PASS' | 'FAIL' | 'UNKNOWN') => void;
   beforeDispatch?: (task: Task, submission: EngineSubmission, route: Route) => void | Promise<void>;
   verifier?: AcceptanceVerifier;
   delegateServer?: (task: Task) => Record<string, unknown> | undefined;
@@ -1044,7 +1045,7 @@ export class Engine {
         active,
         this.nativePrompt(
           active,
-          this.options.hub.prompt(route.cli, { sessionId: id, prompt: [{ type: 'text', text: prompt }] }, active.peer),
+          this.options.hub.prompt(route.cli, { sessionId: id, prompt: [{ type: 'text', text: prompt }] }, active.peer, { taskId: task.id, model: route.model, taskCategory: route.type, endpointIdentity: route.endpointIdentity }),
         ),
       );
       if (active.abort.signal.aborted) return;
@@ -1076,6 +1077,7 @@ export class Engine {
         }
       }
       if (active.abort.signal.aborted) return;
+      this.options.observeVerification?.(route.cli, id, task.id, verification.status === 'passed' ? 'PASS' : verification.status === 'failed' ? 'FAIL' : 'UNKNOWN');
       const outputRef = this.putOutput(task.projectId, {
         text: active.text,
         truncated: active.truncated,

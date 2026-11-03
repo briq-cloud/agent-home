@@ -16,6 +16,7 @@ import { Engine, type EngineSubmission } from '../orchestration/engine.ts';
 import { Projects } from '../orchestration/projects.ts';
 import { Delegation } from '../orchestration/delegation.ts';
 import { nextEligible, type OffpeakPolicy } from '../scheduling/offpeak.ts';
+import { endpointFingerprint } from '../telemetry/performance.ts';
 import { commandBilling } from '../auth/status.ts';
 import { DEFAULT_AUTO_PROFILE } from '../providers/auto-models.ts';
 import { TextBatchAdapter, BatchSubmissionUnknownError, type BatchAdapterOptions } from '../scheduling/batch.ts';
@@ -138,6 +139,8 @@ export class Application {
     this.routing = new Routing({
       stateDir: config.stateDir,
       dynamic: config.dynamicRouting,
+      empiricalRouting: config.empiricalRouting,
+      observations: () => options.hub.observations.report().routes,
       defaultRouteId: config.defaultRoute ?? DEFAULT_AUTO_PROFILE,
       autoFallback: config.defaultRoute === undefined,
       openRouterKey: () => keys.key('openrouter'),
@@ -165,6 +168,7 @@ export class Application {
       delegateServer: (task) => this.delegation.server(task),
       memoryEnabled: config.memory,
       modelIsConfigured: (cli, model) => options.table().some((c) => c.name === cli && c.profile?.model === model),
+      observeVerification: (cli, sessionId, taskId, status) => options.hub.recordVerification(cli, sessionId, taskId, status),
       beforeDispatch: (task, input, route) => {
         if (input.schedule === undefined) return;
         if (!config.deferred) throw Error('deferred scheduling disabled before dispatch');
@@ -249,7 +253,13 @@ export class Application {
           compatibility: harness === 'dsh' ? 'unknown' : 'verified',
           model: p?.model,
           canonical: p?.autoEligible ? p.canonical : undefined,
+          endpointIdentity: endpointFingerprint(
+            harness === 'claude' ? effectiveEnv.ANTHROPIC_BASE_URL ?? provider?.claude?.baseUrl :
+            harness === 'codex' ? effectiveEnv.OPENAI_BASE_URL ?? provider?.codex?.baseUrl : undefined,
+          ) ?? undefined,
           quotaBlocked: Boolean(this.options.hub.limits()[c.name]),
+          inflight: this.options.hub.observedHealth(c.name).inflight,
+          nearQuota: this.options.hub.observedHealth(c.name).nearQuota,
           subscriptionAccount: c.subscriptionAccount,
           tools: true,
           modalities: ['text'],
@@ -289,7 +299,7 @@ export class Application {
     const parts = url.pathname.split('/').filter(Boolean),
       method = req.method;
     if (
-      ![
+      url.pathname !== '/routing/observations' && ![
         'projects',
         'tasks',
         'artifacts',
@@ -308,6 +318,11 @@ export class Application {
       return true;
     };
     try {
+      if (url.pathname === '/routing/observations' && method === 'GET') {
+        const report = this.options.hub.observations.report();
+        return reply(200, { ...report, empiricalRouting: this.options.config.empiricalRouting,
+          health: this.options.table().slice(0, 256).map(c => ({ cli: c.name, ...this.options.hub.observedHealth(c.name) })) });
+      }
       if (url.pathname === '/features' && method === 'GET')
         return reply(200, {
           orchestrator: true,

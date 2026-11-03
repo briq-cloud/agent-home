@@ -522,3 +522,22 @@ test('provider batch processing requires a separate opt-in and cannot run throug
     403,
   );
 });
+
+test('local observation report is authenticated, bounded and preserves unknown measurement provenance', async () => {
+  assert.equal((await fetch(`http://127.0.0.1:${port}/routing/observations`)).status, 401);
+  const response = await api('GET', '/routing/observations');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const report = await response.json() as any;
+  assert.equal(report.version, 1);
+  assert.equal(report.empiricalRouting, false);
+  assert.equal(report.minimumSamples, 10);
+  assert.ok(report.recent.length <= 100);
+  assert.ok(report.retention.maximumEvents <= 2000);
+  assert.equal(JSON.stringify(report).includes(TOKEN), false);
+  for (const turn of report.recent) {
+    assert.ok(['PASS', 'FAIL', 'UNKNOWN'].includes(turn.verification));
+    assert.equal('prompt' in turn, false);
+    assert.equal('response' in turn, false);
+  }
+});
