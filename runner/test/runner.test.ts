@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createServer } from 'node:http';
+import { createServer, request as httpRequest } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 
 /** The runner against the mock agent, over WebSocket as an app would reach it. */
@@ -376,6 +376,83 @@ test('serves the page through its link once, then by cookie', async () => {
   assert.match(await page.text(), /<title>Agent home<\/title>/);
   assert.equal((await fetch(`${base}/status`, { headers: { cookie } })).status, 200);
   assert.equal((await fetch(`${base}/`, { headers: { cookie: 'agent_home_runner=wrong' } })).status, 401);
+});
+
+test('browser bootstrap keeps Strict cookies and excludes secret request data from its document', async () => {
+  const base = `http://127.0.0.1:${PORT}`;
+  const response = await fetch(`${base}/?token=${TOKEN}&extra=private-test-query`, {
+    headers: { accept: 'text/html' }, redirect: 'manual',
+  });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  assert.match(response.headers.get('set-cookie') ?? '', /HttpOnly; Secure; SameSite=Strict/);
+  const body = await response.text();
+  assert.equal(body.includes(TOKEN), false);
+  assert.equal(body.includes('private-test-query'), false);
+  assert.equal(body.includes('?token='), false);
+  const nonce = /<script nonce="([A-Za-z0-9+/=]+)">/.exec(body)?.[1];
+  assert.ok(nonce);
+  assert.equal(response.headers.get('content-security-policy'),
+    `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+  assert.match(body, /history\.replaceState/);
+  assert.match(body, /href="\/"/);
+  const navigate = await new Promise<number | undefined>((resolve, reject) => {
+    const req = httpRequest(`${base}/?token=${TOKEN}`, {
+      headers: { accept: 'application/json', 'sec-fetch-mode': 'navigate' },
+    }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject); req.end();
+  });
+  assert.equal(navigate, 200, 'navigation metadata also selects the first-party bootstrap');
+  const wrong = await fetch(`${base}/?token=wrong`, { headers: { accept: 'text/html' } });
+  assert.equal(wrong.status, 401);
+  assert.equal((await fetch(`${base}/status?token=${TOKEN}`)).status, 200);
+  assert.equal((await fetch(`${base}/status`, {
+    headers: { authorization: `Bearer ${TOKEN}`, cookie: 'agent_home_runner=wrong' },
+  })).status, 200);
+});
+
+const chrome = process.env.RUNNER_CHROME_BIN ?? ['/usr/bin/google-chrome', '/usr/bin/chromium',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'].find(existsSync);
+test('actual local handoff button and direct navigation establish a first-party Strict cookie', {
+  skip: !chrome && 'No Chrome installed', timeout: 30_000,
+}, async (t) => {
+  const { chromium } = await import('playwright-core');
+  const browser = await chromium.launch({ headless: true, executablePath: chrome });
+  t.after(() => browser.close());
+  const base = `http://localhost:${PORT}`;
+  for (const kind of ['direct', 'file-popup', 'fragment-network-path']) {
+    const context = await browser.newContext();
+    try {
+      const hash = kind === 'fragment-network-path' ? '#//other.invalid/path' : '#t3';
+      const link = `${base}/?token=${TOKEN}&extra=private-test-query${hash}`;
+      let page;
+      if (kind === 'direct') {
+        page = await context.newPage();
+        await page.goto(link);
+      } else {
+        const file = join(home, `handoff-${kind}.html`);
+        writeFileSync(file, `<a href="${link.replaceAll('&', '&amp;')}" target="_blank" rel="noopener noreferrer">Open home</a>`);
+        const source = await context.newPage();
+        await source.goto(new URL('file://' + file).href);
+        const popup = context.waitForEvent('page');
+        await source.getByRole('link', { name: 'Open home' }).click();
+        page = await popup;
+      }
+      await page.locator('#tab-t3').waitFor();
+      const final = new URL(page.url());
+      assert.equal(final.origin, base);
+      assert.equal(final.pathname, '/');
+      assert.equal(final.search, '');
+      // The app normalizes unknown fragments to Chat after bootstrap navigation.
+      assert.equal(final.hash, kind === 'fragment-network-path' ? '#chat' : hash);
+      const cookies = await context.cookies(base);
+      const cookie = cookies.find((value) => value.name === 'agent_home_runner');
+      assert.equal(cookie?.sameSite, 'Strict');
+      assert.equal(cookie?.httpOnly, true);
+      assert.equal(cookie?.secure, true);
+    } finally { await context.close(); }
+  }
 });
 
 test('puts the terminal behind the same door, its WebSocket too, without the runner cookie', async () => {

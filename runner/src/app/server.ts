@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { type IncomingMessage, type ServerResponse, createServer } from 'node:http';
 import { createNodeHttpHandler, createNodeWebSocketUpgradeHandler } from '@agentclientprotocol/sdk/experimental/node';
 import { AcpServer } from '@agentclientprotocol/sdk/experimental/server';
@@ -423,11 +423,27 @@ const server = createServer(async (req, res) => {
       });
     if (url.pathname === '/routing/models' && req.method === 'GET')
       return json(res, 200, { profiles: keys.profiles().filter((p) => p.autoEligible), source: AUTO_POOL_SOURCE });
-    // The page's link carries the key once: kept as a cookie for this origin, then dropped from
-    // the address. SameSite=Strict: no other site's page sends it.
+    // A cross-site link needs a committed first-party document before Strict cookies
+    // accompany navigation. An immediate HTTP redirect keeps the entire chain cross-site.
     if (url.searchParams.has('token') && req.method === 'GET' && !parts.length) {
+      const cookie = `${RUNNER_COOKIE}=${url.searchParams.get('token')}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`;
+      const html = req.headers['sec-fetch-mode'] === 'navigate' ||
+        (req.headers.accept ?? '').split(',').some((value) => value.split(';')[0]?.trim().toLowerCase() === 'text/html');
+      if (html) {
+        const nonce = randomBytes(18).toString('base64');
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'set-cookie': cookie,
+          'cache-control': 'no-store',
+          'referrer-policy': 'no-referrer',
+          'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+        });
+        // The document contains no request data or credentials. Clear the query before
+        // rendering, preserve only the fragment, and always navigate to our fixed root.
+        return res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Opening Agent home</title><script nonce="${nonce}">history.replaceState(null, '', '/' + location.hash); addEventListener('load', () => location.reload(), { once: true });</script></head><body><p>Opening Agent home…</p><a href="/">Continue to Agent home</a></body></html>`);
+      }
       res.writeHead(303, {
-        'set-cookie': `${RUNNER_COOKIE}=${url.searchParams.get('token')}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`,
+        'set-cookie': cookie,
         location: '/',
       });
       return res.end();
