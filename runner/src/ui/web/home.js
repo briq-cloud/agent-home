@@ -13,7 +13,7 @@ const $ = (tag, attrs = {}, ...kids) => {
 };
 const byId = (id) => document.getElementById(id);
 // Panels stay mounted: changing tabs never resets a form or an ACP session.
-const homeTabs = ['chat', 'fleet', 'connections', 'tools', 't3', 'terminal', 'briq'];
+const homeTabs = ['chat', 'fleet', 'auto-agent', 'connections', 'tools', 't3', 'terminal', 'briq'];
 const tabFromHash = () =>
   location.hash === '#keys-section' ? 'connections' : homeTabs.find((name) => location.hash === '#' + name);
 function showTab(name, navigate = true) {
@@ -610,17 +610,6 @@ function card(c) {
       $('span', { class: 'tag ' + state[1] }, state[0]),
     ),
   );
-  if (c.subscriptionAccount) {
-    const account = c.subscriptionAccount;
-    box.append($('span', { class: 'muted' }, account.enabled ? 'Included in Auto' : 'Excluded from new Auto tasks'));
-    box.append(
-      $(
-        'button',
-        { type: 'button', class: 'text-button', onclick: (event) => toggleAccount(account, event.currentTarget) },
-        account.enabled ? 'Exclude from Auto' : 'Include in Auto',
-      ),
-    );
-  }
   if (c.statusSource === 'sign-in')
     box.append($('span', { class: 'muted' }, 'Sign-in completion recorded here · not a live account check'));
   if (c.signedIn === null)
@@ -677,7 +666,7 @@ function card(c) {
     const actions = $('div', { class: 'card-actions' });
     if (c.signedIn !== false)
       actions.append($('button', { class: 'text-button', onclick: () => selectAgent(c.name) }, 'Chat →'));
-    if (c.profile) actions.append($('button', { onclick: () => dropProfile(c.name) }, 'Remove'));
+    if (c.profile) actions.append($('a', { href: '#auto-agent' }, 'Manage profile →'));
     else if (c.signInWith === 'terminal')
       actions.append($('a', { href: '/terminal/', target: '_blank', rel: 'noopener' }, 'Sign in in terminal ↗'));
     else if (!isKey)
@@ -697,64 +686,39 @@ function card(c) {
   return box;
 }
 function keyCard(p) {
-  const box = $(
-    'article',
-    { class: 'card', 'data-provider': p.id },
-    $(
-      'div',
-      { class: 'row' },
-      product(p.id, p.name, p.billing === 'plan' ? 'Coding plan' : 'Billed by provider'),
-      $('span', { class: 'tag ' + (p.set ? 'ok' : 'off') }, p.set ? 'Key saved' : 'No key'),
-    ),
-  );
+  const box = $('article', { class: 'card', 'data-provider': p.id },
+    $('div', { class: 'row' }, product(p.id, p.name, p.billing === 'plan' ? 'Coding plan' : 'Billed by provider'),
+      $('span', { class: 'tag ' + (p.set ? 'ok' : 'off') }, p.set ? 'Key saved' : 'No key')));
   if (!p.set) {
-    const input = $('input', {
-      type: 'password',
-      placeholder: 'Paste your API key',
-      'aria-label': p.name + ' key',
-      autocomplete: 'off',
-    });
-    box.append(
-      input,
-      $('button', { class: 'primary', onclick: () => putKey(p.id, input.value.trim()) }, 'Save & use Auto'),
-    );
-  } else {
-    const own = profiles.filter((q) => q.provider === p.id);
-    const autoCount = own.filter((q) => q.autoEligible === true).length;
-    if (p.id === 'openrouter')
-      box.append(
-        $('span', { class: 'muted' }, autoCount ? 'Auto ready · ' + autoCount + ' models' : 'Auto models not ready'),
-      );
-    else if (p.cli) box.append($('span', { class: 'muted' }, 'Ready in ' + (names[p.cli] || p.cli)));
-    else if (own.length)
-      box.append(
-        $(
-          'span',
-          { class: 'muted' },
-          'Ready · ' +
-            own.map((q) => (q.model === 'openrouter/auto' ? 'Auto' : q.model || 'Provider default')).join(', '),
-        ),
-      );
-    const actions = $('div', { class: 'card-actions' });
-    if (p.id === 'openrouter') {
-      actions.append(
-        $(
-          'button',
-          { class: 'text-button', onclick: () => selectAgent(features.orchestrator ? 'auto' : '') },
-          'Chat →',
-        ),
-        $(
-          'button',
-          { class: autoCount ? '' : 'primary', onclick: useAutoModels },
-          autoCount ? 'Refresh Auto models' : 'Use Auto',
-        ),
-      );
-    } else if (p.cli || own.length)
-      actions.append($('button', { class: 'text-button', onclick: () => selectAgent(p.cli || own[0].name) }, 'Chat →'));
-    else actions.append($('button', { class: 'primary', onclick: () => addProfile(p.id, 'auto', 'auto') }, 'Use Auto'));
-    actions.append($('button', { onclick: () => putKey(p.id, '') }, 'Remove key'));
-    box.append(actions);
-  }
+    const input = $('input', { type: 'password', placeholder: 'Paste your API key', 'aria-label': p.name + ' key', autocomplete: 'off' });
+    box.append(input, $('button', { class: 'primary', onclick: () => putKey(p.id, input.value.trim()) }, 'Save key'));
+  } else box.append($('button', { onclick: () => putKey(p.id, '') }, 'Remove key'));
+  box.append($('a', { href: '#auto-agent' }, 'Configure model profiles in Auto Agent →'));
+  if (messages['key:' + p.id]) box.append($('p', { class: 'message', role: 'status' }, messages['key:' + p.id]));
+  box.dataset.renderSignature = JSON.stringify([p, messages['key:' + p.id]]);
+  return box;
+}
+function autoAccountCard(c) {
+  const account = c.subscriptionAccount;
+  const box = $('article', { class: 'card', 'data-agent': c.name }, product(harnessOf(c), agentLabel(c), 'Automatic selection'),
+    $('span', { class: 'muted' }, account.enabled ? 'Included in Auto' : 'Excluded from new Auto tasks'),
+    $('button', { type: 'button', onclick: (event) => toggleAccount(account, event.currentTarget) }, account.enabled ? 'Exclude from Auto' : 'Include in Auto'));
+  if (messages[c.name]) box.append($('p', { role: 'status', class: 'message' }, messages[c.name]));
+  box.dataset.renderSignature = JSON.stringify([account, messages[c.name]]);
+  return box;
+}
+function autoProviderCard(p) {
+  const own = profiles.filter((profile) => profile.provider === p.id);
+  const count = own.filter((profile) => profile.autoEligible === true).length;
+  const box = $('article', { class: 'card', 'data-provider': p.id }, product(p.id, p.name, 'Model profiles'));
+  if (!p.set) box.append($('a', { href: '#connections' }, 'Add provider key in Connections →'));
+  else if (p.id === 'openrouter') box.append(
+    $('span', { class: 'muted' }, count ? 'Auto ready · ' + count + ' models' : 'Auto models not ready'),
+    $('button', { class: 'primary', onclick: useAutoModels }, count ? 'Refresh Auto models' : 'Use Auto'));
+  else if (!p.cli && !own.length) box.append($('button', { onclick: () => addProfile(p.id, 'auto', 'auto') }, 'Use default model'));
+  for (const profile of own) box.append($('div', { class: 'row' },
+    $('span', {}, profile.name + ' · ' + (profile.model || 'Provider default') + ' · ' + (names[profile.harness] || profile.harness)),
+    $('button', { onclick: () => dropProfile(profile.name) }, 'Remove profile')));
   if (p.set && p.harnesses.length) {
     const details = $('details', {}, $('summary', {}, 'Advanced'));
     const harness = $('select', { 'aria-label': p.name + ' harness' }, $('option', { value: 'auto' }, 'Auto'));
@@ -785,20 +749,19 @@ function keyCard(p) {
     );
     box.append(details);
   }
-  if (messages['key:' + p.id]) box.append($('p', { class: 'message', role: 'status' }, messages['key:' + p.id]));
-  box.dataset.renderSignature = JSON.stringify([
-    p,
-    profiles.filter((profile) => profile.provider === p.id),
-    messages['key:' + p.id],
-    features.orchestrator,
-  ]);
+  if (messages['auto:' + p.id]) box.append($('p', { class: 'message', role: 'status' }, messages['auto:' + p.id]));
+  box.dataset.renderSignature = JSON.stringify([p, own, messages['auto:' + p.id]]);
   return box;
 }
 function render() {
-  renderCards(byId('clis'), agents, 'data-agent', card);
+  const connectedAgents = agents.filter((agent) => agent.name !== 'auto');
+  renderCards(byId('clis'), connectedAgents, 'data-agent', card);
   renderCards(byId('keys'), Object.values(providers), 'data-provider', keyCard);
+  renderCards(byId('auto-accounts'), connectedAgents.filter((agent) => agent.subscriptionAccount), 'data-agent', autoAccountCard);
+  renderCards(byId('auto-models'), Object.values(providers), 'data-provider', autoProviderCard);
+  byId('auto-status').textContent = features.orchestrator ? 'Briq Agent is available in Chat and T3.' : 'Briq Agent orchestration is disabled; Chat can still select an eligible subscription automatically.';
   byId('connection-count').textContent =
-    agents.filter((c) => c.signedIn === true && (c.statusSource !== 'sign-in' || signIns[c.name]?.state === 'done'))
+    connectedAgents.filter((c) => c.signedIn === true && (c.statusSource !== 'sign-in' || signIns[c.name]?.state === 'done'))
       .length + ' ready';
   const select = byId('chat-agent'),
     current = select.value;
@@ -809,7 +772,7 @@ function render() {
   );
   if (features.orchestrator && current === '' && session)
     select.append($('option', { value: '' }, 'Existing subscription conversation'));
-  for (const c of agents)
+  for (const c of connectedAgents)
     select.append(
       $(
         'option',
@@ -963,28 +926,22 @@ function autoModelsMessage(models) {
   );
 }
 async function useAutoModels() {
-  messages['key:openrouter'] = 'Preparing Auto models…';
+  messages['auto:openrouter'] = 'Preparing Auto models…';
   render();
   try {
     const r = await call('POST', '/routing/models', {});
-    messages['key:openrouter'] = r.ok ? autoModelsMessage(r.body) : r.body.error || 'Could not prepare Auto models';
+    messages['auto:openrouter'] = r.ok ? autoModelsMessage(r.body) : r.body.error || 'Could not prepare Auto models';
     await load();
-    if (r.ok && features.orchestrator) selectAgent('auto');
   } catch (error) {
-    messages['key:openrouter'] = 'Could not prepare Auto models. Use Auto to retry.';
+    messages['auto:openrouter'] = 'Could not prepare Auto models. Use Auto to retry.';
     render();
   }
 }
 async function putKey(id, key) {
   try {
-    const r = key ? await call('PUT', '/keys/' + id, { key, auto: true }) : await call('DELETE', '/keys/' + id);
-    messages['key:' + id] = r.ok
-      ? id === 'openrouter' && key
-        ? autoModelsMessage(r.body.models)
-        : ''
-      : r.body.error || 'Could not save the key';
+    const r = key ? await call('PUT', '/keys/' + id, { key, auto: false }) : await call('DELETE', '/keys/' + id);
+    messages['key:' + id] = r.ok ? (key ? 'Key saved. Configure model profiles in Auto Agent.' : 'Key removed.') : r.body.error || 'Could not save the key';
     await load();
-    if (r.ok && key && id === 'openrouter' && features.orchestrator) selectAgent('auto');
   } catch (error) {
     messages['key:' + id] = 'Could not save the key. Please try again.';
     render();
@@ -992,7 +949,7 @@ async function putKey(id, key) {
 }
 async function addProfile(provider, harness, model, extra = {}) {
   const r = await call('POST', '/profiles', { provider, harness, model, ...extra });
-  messages['key:' + provider] = r.ok ? '' : r.body.error || 'Could not configure the provider';
+  messages['auto:' + provider] = r.ok ? '' : r.body.error || 'Could not configure the provider';
   await load();
 }
 async function dropProfile(name) {

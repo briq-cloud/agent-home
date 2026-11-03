@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node src/main.ts",
-    "test": "node --test test/*.test.ts",
+    "test": "node --test --test-concurrency=2 test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "benchmark": "node benchmarks/foundation.ts"
   },

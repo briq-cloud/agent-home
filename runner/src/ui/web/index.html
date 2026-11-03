@@ -20,6 +20,7 @@
   <nav class="home-tabs" role="tablist" aria-label="Workspace">
     <button id="tab-chat" role="tab" aria-controls="panel-chat" aria-selected="true" tabindex="0">Chat <span id="chat-attention" class="tab-badge" hidden>Approval</span></button>
     <button id="tab-fleet" role="tab" aria-controls="panel-fleet" aria-selected="false" tabindex="-1">Fleet</button>
+    <button id="tab-auto-agent" role="tab" aria-controls="panel-auto-agent" aria-selected="false" tabindex="-1">Auto Agent</button>
     <button id="tab-connections" role="tab" aria-controls="panel-connections" aria-selected="false" tabindex="-1">Connections</button>
     <button id="tab-tools" role="tab" aria-controls="panel-tools" aria-selected="false" tabindex="-1">Tools</button>
     <button id="tab-t3" role="tab" aria-controls="panel-t3" aria-selected="false" tabindex="-1">T3 Code</button>
@@ -33,19 +34,35 @@
     <div class="grid" id="clis"><p class="muted">Loading agents…</p></div>
     <details class="fleet-composer"><summary>Add a Claude subscription account</summary>
       <form id="account-form" class="fleet-new-form"><label for="account-label">Account label</label><input id="account-label" aria-label="Claude account label" maxlength="80" placeholder="Work or personal" required><button id="add-account" type="submit">Add Claude account</button></form>
-      <p class="muted">Each account has its own sign-in; credentials are not copied. Auto picks eligible accounts for new tasks. Existing chats keep their account.</p>
+      <p class="muted">Each account has its own sign-in; credentials are not copied. Existing chats keep their account. Choose eligible accounts in <a href="#auto-agent">Auto Agent</a>.</p>
       <p id="account-notice" class="message" role="status" aria-live="polite"></p>
     </details>
   </section>
   <section aria-labelledby="keys-title" id="keys-section">
-    <div class="section-title"><div><p class="eyebrow">BRING YOUR OWN PROVIDER</p><h2 id="keys-title">Keys &amp; models</h2></div><span class="muted">Stored on this home</span></div>
+    <div class="section-title"><div><p class="eyebrow">BRING YOUR OWN PROVIDER</p><h2 id="keys-title">Provider keys</h2></div><span class="muted">Stored on this home</span></div>
     <div class="grid" id="keys"></div>
   </section>
+  </div>
+  <div id="panel-auto-agent" role="tabpanel" aria-labelledby="tab-auto-agent" hidden>
+    <section aria-labelledby="auto-title"><p class="eyebrow">AUTOMATIC ROUTING</p><h1 id="auto-title">Auto Agent</h1>
+      <p>Briq Agent chooses from eligible connected accounts and model profiles for new tasks. These settings do not switch an active conversation’s account.</p>
+      <p id="auto-status" class="muted"></p>
+      <p>Manage sign-ins and provider keys in <a href="#connections">Connections</a>. Shared skills and MCP connections stay in <a href="#tools">Tools</a>. Paid API use still needs consent for the conversation or task.</p>
+    </section>
+    <section aria-labelledby="auto-accounts-title"><h2 id="auto-accounts-title">Subscription accounts</h2><p class="muted">Include or exclude Claude accounts from automatic selection. Excluded accounts remain available when selected explicitly.</p><div id="auto-accounts" class="grid"></div></section>
+    <section aria-labelledby="auto-models-title"><h2 id="auto-models-title">Model profiles</h2><p class="muted">Prepare the default OpenRouter models in one click, or configure a profile below. Saving a key in Connections does not prepare models or approve paid tasks.</p><div id="auto-models" class="grid"></div></section>
+    <section aria-labelledby="auto-t3-title"><h2 id="auto-t3-title">T3 sessions</h2>
+      <label class="api-choice"><input type="checkbox" id="t3-openrouter"> Allow OpenRouter API profiles and paid routing decisions for new Briq Agent connections in T3</label>
+      <p class="muted">Requires your OpenRouter key in Connections. Admission estimates: $0.10 for execution and $0.001 for routing per task; actual CLI charges are unknown. Reconnect the Briq Agent in T3 after changing this choice.</p>
+      <p class="muted">This setting does not change Chat or Fleet paid-use consent.</p>
+      <p id="auto-t3-notice" role="status" class="muted"></p>
+    </section>
   </div>
   <div id="panel-chat" role="tabpanel" aria-labelledby="tab-chat">
   <section class="chat-shell" aria-labelledby="chat-title" id="chat">
     <div class="chat-header"><div><p class="eyebrow">YOUR AGENT HOME</p><h2 id="chat-title">Chat</h2></div><div class="actions"><label class="sr-only" for="chat-agent">Agent</label><select id="chat-agent"><option value="auto">Briq Agent</option></select><button id="new-chat">New chat</button></div></div>
     <label class="api-choice"><input type="checkbox" id="allow-paid"> Allow Auto to use API-key profiles for this conversation (usage billed)</label>
+    <p class="muted">Choose eligible accounts and models in <a href="#auto-agent">Auto Agent settings</a>.</p>
     <p id="chat-status" role="status" class="muted">Choose an agent, or let your home choose.</p>
     <div id="chat-messages" role="log" aria-label="Conversation"><div class="empty-chat"><span class="chat-spark">✳</span><h3>A quick check, a real conversation.</h3><p>Send a message through your home’s ACP connection.</p></div></div>
     <div id="permissions" aria-live="polite"></div>
@@ -53,7 +70,7 @@
   </section>
   </div>
   <div id="panel-fleet" role="tabpanel" aria-labelledby="tab-fleet" hidden>
-  <section aria-labelledby="tasks-title"><div class="section-title"><div><p class="eyebrow">PROJECT EXECUTION</p><h2 id="tasks-title">Tasks</h2></div><span class="muted">Continues while disconnected</span></div><div id="task-list" class="grid"><p class="muted">Auto conversations appear here.</p></div></section>
+  <section aria-labelledby="tasks-title"><div class="section-title"><div><p class="eyebrow">PROJECT EXECUTION</p><h2 id="tasks-title">Tasks &amp; agents</h2></div><span class="muted">Continues while disconnected</span></div><div id="task-list" class="grid"><p class="muted">Auto conversations appear here.</p></div></section>
   </div>
   <div id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" hidden>
     <section aria-labelledby="tools-title"><div class="section-title"><div><p class="eyebrow">SHARED CAPABILITIES</p><h1 id="tools-title">Tools</h1></div></div><p id="tools-disabled" class="muted" hidden>Shared tools are disabled for this home.</p><div id="extensions-root"></div></section>
@@ -64,8 +81,7 @@
       <p id="t3-status" role="status">Checking T3 Code…</p>
       <div class="actions"><button id="t3-start">Start T3 Code</button><a id="t3-open" class="button" href="/api/services/t3/open" target="_blank" rel="noopener noreferrer" hidden>Open T3 Code ↗</a><button id="t3-pair" disabled>Create browser pairing link</button><a id="t3-pair-open" class="button" target="_blank" rel="noopener noreferrer" hidden>Pair this browser ↗</a><button id="services-refresh">Refresh status</button></div>
       <p id="t3-notice" role="status" class="muted"></p>
-      <label class="api-choice"><input type="checkbox" id="t3-openrouter"> Allow OpenRouter API profiles and paid routing decisions for new Briq Agent connections in T3</label>
-      <p class="muted">Requires your OpenRouter key in Connections. Admission estimates: $0.10 for execution and $0.001 for routing per task; actual CLI charges are unknown. Reconnect the Briq Agent in T3 after changing this choice.</p>
+      <p>Configure paid routing for new T3 sessions in <a href="#auto-agent">Auto Agent settings</a>.</p>
       <p>Pairing links expire after five minutes and can be used once. Keep them private. The terminal and CLI sign-ins remain available here while T3 runs.</p>
       <p id="dsh-service" class="muted"></p>
     </section>

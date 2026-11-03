@@ -53,6 +53,10 @@ test('owner account HTTP APIs isolate sign-in/status/native env and preserve a r
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  let spawnFailed = false;
+  child.once('error', () => {
+    spawnFailed = true;
+  });
   let logs = '';
   child.stdout.on('data', (b) => {
     logs = (logs + b).slice(-16000);
@@ -61,7 +65,7 @@ test('owner account HTTP APIs isolate sign-in/status/native env and preserve a r
     logs = (logs + b).slice(-16000);
   });
   t.after(async () => {
-    if (child.exitCode === null) {
+    if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
       const done = new Promise<void>((resolve) => child.once('exit', () => resolve()));
       child.kill('SIGTERM');
       const timer = setTimeout(() => child.kill('SIGKILL'), 3000);
@@ -80,18 +84,30 @@ test('owner account HTTP APIs isolate sign-in/status/native env and preserve a r
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: AbortSignal.timeout(5000),
     });
+  // Match the application integration fixture's startup contract. Importing the
+  // server may take longer than an attempt-count loop under concurrent load.
+  const healthStarted = Date.now(),
+    healthDeadline = healthStarted + 15_000;
   let ready = false;
-  for (let i = 0; i < 150; i++) {
+  const readinessFailure = (category: 'spawn_error' | 'process_exit' | 'health_deadline') =>
+    new Error(`runner readiness failed: ${category}; elapsed_ms=${Date.now() - healthStarted}`);
+  while (Date.now() < healthDeadline) {
+    if (spawnFailed) throw readinessFailure('spawn_error');
+    if (child.exitCode !== null || child.signalCode !== null) throw readinessFailure('process_exit');
     try {
-      if ((await api('GET', '/healthz')).ok) {
+      const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(300) });
+      if (response.ok) {
         ready = true;
         break;
       }
     } catch {}
-    if (child.exitCode !== null) throw Error(logs);
-    await pause(20);
+    await pause(50);
   }
-  assert.ok(ready, logs);
+  if (!ready) {
+    const category = spawnFailed ? 'spawn_error' :
+      child.exitCode !== null || child.signalCode !== null ? 'process_exit' : 'health_deadline';
+    throw readinessFailure(category);
+  }
   assert.equal((await api('GET', '/accounts', undefined, 'wrong')).status, 401);
   const initial = (await (await api('GET', '/accounts')).json()) as any;
   assert.equal(initial.accounts.length, 1);

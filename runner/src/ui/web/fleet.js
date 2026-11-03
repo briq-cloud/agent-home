@@ -36,7 +36,7 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   const artifacts = new Map(), drafts = new Map();
   let messageRequestId, createRequestId, detailGeneration = 0;
   root.classList.remove('grid'); root.classList.add('fleet');
-  document.getElementById('tasks-title').textContent = 'Fleet';
+  document.getElementById('tasks-title').textContent = 'Tasks & agents';
   const notice = element('p', { class: 'fleet-notice', role: 'status', 'aria-live': 'polite' });
   const project = element('select', { 'aria-label': 'Fleet project' });
   const filter = element('select', { 'aria-label': 'Task status filter' },
@@ -45,6 +45,7 @@ export function createFleet({ root, request, getAgents, getFeatures }) {
   const search = element('input', { 'aria-label': 'Filter loaded tasks', placeholder: 'Filter titles, IDs, routes or waits' });
   const lookup = element('input', { 'aria-label': 'Full task ID', placeholder: 'Inspect a full task ID', maxlength: '256' });
   const capacity = element('p', { class: 'muted fleet-capacity' });
+  root.before(element('p', { class: 'muted' }, 'Inspect delegated tasks and agents, results, retries and cancellations. ', element('a', { href: '#auto-agent' }, 'Auto Agent settings')));
   const draining = element('div', { class: 'fleet-draining', role: 'status', hidden: true });
   const summary = element('p', { class: 'muted', role: 'status' });
   const tree = element('nav', { class: 'fleet-tree', 'aria-label': 'Task hierarchy' });

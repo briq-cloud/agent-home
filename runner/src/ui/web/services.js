@@ -26,8 +26,12 @@ export function createHomeServices({ call, byId }) {
   byId('t3-openrouter').onchange = async () => {
     const choice = byId('t3-openrouter');
     choice.disabled = true;
-    try { render(await request('PUT', '/t3/routing', { optinOpenRouter: choice.checked })); }
-    catch (error) { choice.checked = !choice.checked; failure(error); }
+    const notice = byId('auto-t3-notice') || byId('t3-notice');
+    try {
+      render(await request('PUT', '/t3/routing', { optinOpenRouter: choice.checked }));
+      notice.textContent = 'Routing choice saved for new T3 sessions. Reconnect Briq Agent in T3 to apply it.';
+    }
+    catch (error) { choice.checked = !choice.checked; notice.textContent = error.message; }
     finally { choice.disabled = false; }
   };
   byId('t3-start').onclick = async () => {

@@ -52,6 +52,8 @@ test(
     ];
     const signIns: Record<string, any> = {};
     const mutations: Array<{ method: string; path: string; body: any }> = [];
+    let keySaved = false;
+    let modelProfiles: any[] = [];
     let rejectAdd = true,
       holdNextStatus = false,
       statusHeld = false,
@@ -78,7 +80,7 @@ test(
         return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg"/>' });
       if (path === '/status') {
         const snapshot = {
-          clis: accounts.map((account) => ({
+          clis: [{ name: 'auto', signedIn: true }, ...accounts.map((account) => ({
             name: account.cli,
             subscriptionAccount: { ...account },
             billing: account.isDefault ? 'use' : signIns[account.cli]?.state === 'done' ? 'subscription' : 'unknown',
@@ -86,7 +88,7 @@ test(
             statusSource: 'sdk',
             signedIn: signIns[account.cli]?.state === 'done',
             signIn: signIns[account.cli]?.state || 'idle',
-          })),
+          }))],
           features: { orchestrator: true, extensions: false },
           limited: {},
         };
@@ -139,9 +141,19 @@ test(
       }
       if (path === '/keys')
         return reply({
-          providers: [{ id: 'openrouter', name: 'OpenRouter', set: false, billing: 'use', harnesses: ['claude'] }],
-          profiles: [],
+          providers: [{ id: 'openrouter', name: 'OpenRouter', set: keySaved, billing: 'use', harnesses: ['claude'] }],
+          profiles: modelProfiles,
         });
+      if (path === '/keys/openrouter' && req.method() === 'PUT') {
+        mutations.push({ method: req.method(), path, body: req.postDataJSON() });
+        keySaved = true;
+        return reply({});
+      }
+      if (path === '/routing/models' && req.method() === 'POST') {
+        mutations.push({ method: req.method(), path, body: req.postDataJSON() });
+        modelProfiles = [{ name: 'prepared-model', provider: 'openrouter', harness: 'claude', model: 'provider/pinned', autoEligible: true }];
+        return reply({ created: modelProfiles, unavailable: [] });
+      }
       if (path === '/usage') return reply({ clis: [] });
       if (path === '/features')
         return reply({ orchestrator: true, concurrency: { coordinators: 1, children: 1, maxDepth: 1 } });
@@ -151,13 +163,16 @@ test(
     });
     await page.goto('http://accounts.test/');
     await page.getByRole('tab', { name: 'Connections', exact: true }).click();
-    await page.locator('[data-agent="claude"]').waitFor();
-    await page.locator('[data-agent="claude"]').getByText('Claude Code · API key', { exact: true }).waitFor();
+    await page.locator('#panel-connections [data-agent="claude"]').waitFor();
+    await page.locator('#panel-connections [data-agent="claude"]').getByText('Claude Code · API key', { exact: true }).waitFor();
     assert.equal(
-      await page.locator('[data-agent="claude"]').getByText('Claude Code · Subscription', { exact: true }).count(),
+      await page.locator('#panel-connections [data-agent="claude"]').getByText('Claude Code · Subscription', { exact: true }).count(),
       0,
       'default API-key authentication must not be called a subscription',
     );
+    assert.equal(await page.locator('#panel-connections [data-agent="auto"]').count(), 0);
+    assert.equal(await page.locator('#chat-agent option[value="auto"]').count(), 1);
+    assert.equal(await page.locator('#panel-connections').getByRole('button', { name: /from Auto|in Auto/ }).count(), 0);
     // Navigation keeps the same mounted form/session state and supports keyboard tabs.
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await page.getByLabel('Message', { exact: true }).fill('Keep this chat draft');
@@ -177,7 +192,7 @@ test(
     await page.getByText('Account could not be added. Try again.', { exact: true }).waitFor();
     assert.equal(await page.getByLabel('Claude account label').inputValue(), label);
     await page.getByRole('button', { name: 'Add Claude account', exact: true }).click();
-    const card = page.locator('[data-agent="claude-account-work"]');
+    const card = page.locator('#panel-connections [data-agent="claude-account-work"]');
     await card.getByText(label, { exact: true }).waitFor();
     await card.getByText('Claude Code · Account', { exact: true }).waitFor();
     assert.equal(
@@ -216,8 +231,10 @@ test(
     const holdDeadline = Date.now() + 2000;
     while (!statusHeld && Date.now() < holdDeadline) await page.waitForTimeout(10);
     assert.equal(statusHeld, true);
-    await card.getByRole('button', { name: 'Exclude from Auto', exact: true }).click();
-    await card.getByText('Excluded from new Auto tasks', { exact: true }).waitFor();
+    await page.getByRole('tab', { name: 'Auto Agent', exact: true }).click();
+    const autoCard = page.locator('#auto-accounts [data-agent="claude-account-work"]');
+    await autoCard.getByRole('button', { name: 'Exclude from Auto', exact: true }).click();
+    await autoCard.getByText('Excluded from new Auto tasks', { exact: true }).waitFor();
     assert.deepEqual(mutations.at(-1), { method: 'PATCH', path: '/accounts/work', body: { enabled: false } });
     holdFreshStatus = true;
     const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname === '/status');
@@ -225,20 +242,30 @@ test(
     await staleResponse;
     await page.waitForTimeout(50);
     assert.equal(
-      await card.getByText('Excluded from new Auto tasks', { exact: true }).count(),
+      await autoCard.getByText('Excluded from new Auto tasks', { exact: true }).count(),
       1,
       'a status response begun before PATCH must not undo acknowledged selection',
     );
     holdFreshStatus = false;
     for (const release of releaseFresh) release();
-    assert.equal(
-      await card.getByRole('button', { name: 'Chat →', exact: true }).count(),
-      1,
-      'excluded accounts remain explicitly selectable',
-    );
-    await card.getByRole('button', { name: 'Include in Auto', exact: true }).click();
-    await card.getByText('Included in Auto', { exact: true }).waitFor();
+    // Connection actions stay in Connections; Auto Agent only owns eligibility.
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
+    await card.getByRole('button', { name: 'Chat →', exact: true }).waitFor({ state: 'visible' });
+    await card.getByText('Signed in', { exact: true }).first().waitFor();
+    await card.getByRole('button', { name: 'Chat →', exact: true }).click();
+    assert.equal(await page.getByRole('tab', { name: 'Chat', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.getByLabel('Agent', { exact: true }).inputValue(), 'claude-account-work',
+      'excluded accounts remain explicitly selectable after a status refresh');
+    await page.getByLabel('Agent', { exact: true }).selectOption('auto');
+    await page.getByLabel('Agent', { exact: true }).selectOption('claude-account-work');
+    assert.equal(await page.getByLabel('Agent', { exact: true }).inputValue(), 'claude-account-work');
+    assert.equal(mutations.at(-1)?.body.enabled, false, 'manual selection must not re-enable Auto eligibility');
+    await page.getByRole('tab', { name: 'Auto Agent', exact: true }).click();
+    await autoCard.getByText('Excluded from new Auto tasks', { exact: true }).waitFor();
+    await autoCard.getByRole('button', { name: 'Include in Auto', exact: true }).click();
+    await autoCard.getByText('Included in Auto', { exact: true }).waitFor();
     assert.deepEqual(mutations.at(-1)?.body, { enabled: true });
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
     await page.waitForTimeout(250);
     assert.equal(await page.getByLabel('Claude account label').inputValue(), 'Keep another account draft');
     assert.equal(await page.getByLabel('OpenRouter key').inputValue(), 'keep-owner-key-draft');
@@ -266,6 +293,33 @@ test(
     await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await page.goBack();
     assert.equal(await page.getByRole('tab', { name: 'Tools', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'Fleet', exact: true }).press('ArrowRight');
+    assert.equal(await page.getByRole('tab', { name: 'Auto Agent', exact: true }).getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#panel-auto-agent input[type="password"]').count(), 0);
+    assert.equal(await page.locator('#panel-auto-agent #t3-openrouter').count(), 1);
+    assert.equal(await page.locator('#panel-t3 #t3-openrouter').count(), 0);
+    await page.goto('http://accounts.test/');
+    assert.equal(await page.getByRole('tab', { name: 'Auto Agent', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByRole('tab', { name: 'Connections', exact: true }).click();
+    await page.getByLabel('OpenRouter key').fill('synthetic-provider-key');
+    await page.getByRole('button', { name: 'Save key', exact: true }).click();
+    await page.getByText('Key saved.', { exact: false }).first().waitFor();
+    assert.equal(mutations.at(-1)?.path, '/keys/openrouter');
+    assert.equal(mutations.at(-1)?.body.auto, false);
+    assert.equal(mutations.filter(item => item.path === '/routing/models').length, 0);
+    assert.equal(await page.locator('#panel-connections').getByRole('button', { name: 'Use Auto', exact: true }).count(), 0);
+    await page.getByRole('tab', { name: 'Auto Agent', exact: true }).click();
+    await page.getByRole('button', { name: 'Use Auto', exact: true }).click();
+    await page.getByRole('button', { name: 'Refresh Auto models', exact: true }).waitFor();
+    assert.equal(mutations.at(-1)?.path, '/routing/models');
+    assert.equal(await page.getByRole('tab', { name: 'Auto Agent', exact: true }).getAttribute('aria-selected'), 'true');
+    await page.getByText('Advanced', { exact: true }).click();
+    await page.getByLabel('OpenRouter model').fill('keep-profile-draft');
+    await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    await page.getByRole('tab', { name: 'Auto Agent', exact: true }).click();
+    assert.equal(await page.getByLabel('OpenRouter model').inputValue(), 'keep-profile-draft');
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, []);
   },
 );
