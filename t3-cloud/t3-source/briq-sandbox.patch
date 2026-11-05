@@ -1,5 +1,5 @@
 diff --git a/apps/server/src/auth/RpcAuthorization.test.ts b/apps/server/src/auth/RpcAuthorization.test.ts
-index 8044740a..f9407fea 100644
+index 8044740a..7db6b7f1 100644
 --- a/apps/server/src/auth/RpcAuthorization.test.ts
 +++ b/apps/server/src/auth/RpcAuthorization.test.ts
 @@ -15,6 +15,7 @@ import {
@@ -21,28 +21,64 @@ index 8044740a..f9407fea 100644
    it("declares exactly one scope for every RPC in the server group", () => {
      expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
    });
+@@ -401,3 +406,32 @@ it.effect("denies manual cleanup before the handler without settings permission"
+     expect(handled).toBe(false);
+   }).pipe(Effect.scoped),
+ );
++
++it.effect.each(["central", "invalid"])("denies signed file URLs before their handler in %s mode", (role) =>
++  Effect.gen(function* () {
++    const group = WsRpcGroup.omit(
++      ...[...WsRpcGroup.requests.keys()].filter(
++        (tag): tag is Exclude<keyof typeof RPC_REQUIRED_SCOPES, typeof WS_METHODS.assetsCreateUrl> =>
++          tag !== WS_METHODS.assetsCreateUrl,
++      ),
++    );
++    let handled = 0;
++    const client = yield* RpcTest.makeClient(group).pipe(Effect.provide(Layer.mergeAll(
++      group.toLayerHandler(WS_METHODS.assetsCreateUrl, () => Effect.sync(() => {
++        handled++;
++        return { relativeUrl: "/api/assets/fixture", expiresAt: 1 };
++      })),
++      RpcAuthorization.layer([AuthFilesystemReadScope, AuthOrchestrationReadScope], undefined,
++        { T3_CLOUD_ROLE: role }),
++    )));
++    for (const resource of [
++      { _tag: "attachment", attachmentId: "fixture" },
++      { _tag: "media-file", threadId: ThreadId.make("fixture"), path: "/fixture/credential", disposition: "attachment" },
++      { _tag: "draft-workspace-file", cwd: "/fixture", path: "credential" },
++    ] as const) {
++      expect(yield* client[WS_METHODS.assetsCreateUrl]({ resource }).pipe(Effect.flip))
++        .toMatchObject({ _tag: "EnvironmentAuthorizationError" });
++    }
++    expect(handled).toBe(0);
++  }).pipe(Effect.scoped),
++);
 diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
-index 6049121b..60a64129 100644
+index 6049121b..2849920c 100644
 --- a/apps/server/src/auth/RpcAuthorization.ts
 +++ b/apps/server/src/auth/RpcAuthorization.ts
-@@ -1,3 +1,4 @@
+@@ -1,3 +1,5 @@
++import { sandboxRpcAllowed } from "../briqSandboxAccess.ts";
 +import { sandboxRole } from "../briqSandbox.ts";
  import {
    CLIENT_GUARDED_RPC_SCOPES,
    type DeviceListInput,
-@@ -283,6 +284,15 @@ export const layer = (
+@@ -280,9 +282,17 @@ const requiredScopesForRpcCall = (
+ export const layer = (
+   scopes: ReadonlyArray<AuthEnvironmentScope>,
+   onAuthorized?: (method: string, payload: unknown) => Effect.Effect<void>,
++  sandboxEnvironment?: Readonly<Record<string, string | undefined>>,
  ) =>
    Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
      const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
-+    const role = sandboxRole();
-+    const sandboxDeniedScope = requiredScopes.find((scope) =>
-+      role !== "standalone" && (scope === AuthProvidersManageScope ||
-+        ((role === "central" || role === "invalid") &&
-+          [AuthTerminalOperateScope, AuthEnvironmentMaintainScope, AuthFilesystemWriteScope].some((denied) => denied === scope))));
-+    if (sandboxDeniedScope !== undefined) return Effect.fail(new EnvironmentAuthorizationError({
-+      message: "This operation is unavailable in sandbox mode. Manage connections on the cloud home and execution in its allocated environment.",
-+      requiredScope: sandboxDeniedScope,
-+    }));
++    const role = sandboxRole(sandboxEnvironment);
++    if (!sandboxRpcAllowed(rpc._tag, sandboxEnvironment) ||
++        (role === "child" && requiredScopes.includes(AuthProvidersManageScope)))
++      return Effect.fail(new EnvironmentAuthorizationError({
++        message: "This operation is unavailable on the cloud home. Open an allocated sandbox for workspace access.",
++        requiredScope: requiredScopes[0] ?? AuthOrchestrationReadScope,
++      }));
      const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
      if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
      return onAuthorized === undefined
@@ -125,6 +161,103 @@ index 00000000..2b50805d
 +    ...(event.payload?.modelSelection ? { modelSelection: event.payload.modelSelection } : {}) }, env)
 +    ?? (event.payload?.createdBy !== "user" ? "Only the allocated user thread can be created in this sandbox." : undefined);
 +}
+diff --git a/apps/server/src/briqSandboxAccess.test.ts b/apps/server/src/briqSandboxAccess.test.ts
+new file mode 100644
+index 00000000..4bebba30
+--- /dev/null
++++ b/apps/server/src/briqSandboxAccess.test.ts
+@@ -0,0 +1,36 @@
++import { describe, expect, it } from "vite-plus/test";
++import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
++import { sandboxHttpAllowed, sandboxRpcAllowed } from "./briqSandboxAccess.ts";
++
++const home = { T3_CLOUD_ROLE: "central" };
++describe("home access boundary", () => {
++  it("allows only the audited native bootstrap and allocator RPCs, failing closed for new methods", () => {
++    const allowed = new Set<string>([
++      WS_METHODS.serverProbe, WS_METHODS.serverGetConfig, WS_METHODS.subscribeServerConfig,
++      WS_METHODS.subscribeServerLifecycle, WS_METHODS.subscribeAuthAccess,
++      WS_METHODS.serverReportClientActivity, ORCHESTRATION_V2_WS_METHODS.subscribeShell,
++      ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread,
++    ]);
++    for (const method of [...WsRpcGroup.requests.keys(), "future.readFile"])
++      expect(sandboxRpcAllowed(method, home)).toBe(allowed.has(method));
++  });
++  it("denies workspace discovery, reads, signed assets, and internal thread creation even with write grants", () => {
++    for (const method of [WS_METHODS.projectsReadFile, WS_METHODS.projectsListEntries,
++      WS_METHODS.assetsCreateUrl, ORCHESTRATION_V2_WS_METHODS.dispatchCommand]) {
++      expect(sandboxRpcAllowed(method, home)).toBe(false);
++      expect(sandboxRpcAllowed(method, { T3_CLOUD_ROLE: "invalid" })).toBe(false);
++      expect(sandboxRpcAllowed(method, { T3_CLOUD_ROLE: "child" })).toBe(true);
++    }
++  });
++  it("matches registered HTTP routes rather than attacker-selected path prefixes", () => {
++    for (const [method, route] of [["GET", "/api/assets/*"], ["POST", "/api/attachments/upload/*"],
++      ["GET", "/api/guest/media"], ["*", "/api/device-hub/*"], ["*", "/mcp"],
++      ["POST", "/oauth/mcp/token"]]) {
++      expect(sandboxHttpAllowed(method!, route!, home)).toBe(false);
++      expect(sandboxHttpAllowed(method!, route!, { T3_CLOUD_ROLE: "child" })).toBe(true);
++    }
++    expect(sandboxHttpAllowed("GET", "*", home)).toBe(true);
++    expect(sandboxHttpAllowed("POST", "*", home)).toBe(false);
++    expect(sandboxHttpAllowed("GET", "*", { T3_CLOUD_ROLE: "invalid" })).toBe(false);
++  });
++});
+diff --git a/apps/server/src/briqSandboxAccess.ts b/apps/server/src/briqSandboxAccess.ts
+new file mode 100644
+index 00000000..861e5d85
+--- /dev/null
++++ b/apps/server/src/briqSandboxAccess.ts
+@@ -0,0 +1,49 @@
++import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
++import { sandboxRole } from "./briqSandbox.ts";
++
++type Environment = Readonly<Record<string, string | undefined>>;
++const HOME_RPCS: ReadonlySet<string> = new Set([
++  WS_METHODS.serverProbe,
++  WS_METHODS.serverGetConfig,
++  WS_METHODS.subscribeServerConfig,
++  WS_METHODS.subscribeServerLifecycle,
++  WS_METHODS.subscribeAuthAccess,
++  WS_METHODS.serverReportClientActivity,
++  ORCHESTRATION_V2_WS_METHODS.subscribeShell,
++  ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread,
++]);
++
++// A home is a connection/allocation surface, never a workspace. New RPCs are
++// unavailable until deliberately audited here; ordinary grants cannot widen it.
++export function sandboxRpcAllowed(method: string, env: Environment = process.env): boolean {
++  const role = sandboxRole(env);
++  return role === "standalone" || role === "child" || (role === "central" && HOME_RPCS.has(method));
++}
++
++const HOME_HTTP_ROUTES: ReadonlySet<string> = new Set([
++  "GET /.well-known/t3/environment",
++  "GET /ws",
++  "GET /api/auth/session",
++  "GET /api/orchestration/shell",
++  "GET /api/projects",
++  "POST /api/auth/browser-session",
++  "POST /oauth/token",
++  "POST /api/auth/websocket-ticket",
++  "POST /api/auth/websocket-ticket/:use",
++  "POST /api/auth/pairing-token",
++  "POST /api/auth/pairing-links/revoke",
++  "POST /api/auth/clients/revoke",
++  "POST /api/auth/clients/revoke-others",
++]);
++
++// Match the server's registered route, not a request-controlled path prefix.
++// The sole GET wildcard is the packaged static/SPA handler, whose filesystem
++// root and traversal checks remain upstream's. No API wildcard is admitted.
++export function sandboxHttpAllowed(
++  method: string, route: string, env: Environment = process.env,
++): boolean {
++  const role = sandboxRole(env);
++  if (role === "standalone" || role === "child") return true;
++  if (role === "invalid") return false;
++  return (method === "GET" && route === "*") || HOME_HTTP_ROUTES.has(`${method} ${route}`);
++}
 diff --git a/apps/server/src/briqSandboxAllocator.ts b/apps/server/src/briqSandboxAllocator.ts
 new file mode 100644
 index 00000000..410ac502
@@ -203,6 +336,92 @@ index 00000000..410ac502
 +    }),
 +  };
 +});
+diff --git a/apps/server/src/http.test.ts b/apps/server/src/http.test.ts
+index 5f7df20c..71ad7a74 100644
+--- a/apps/server/src/http.test.ts
++++ b/apps/server/src/http.test.ts
+@@ -854,3 +854,50 @@ describe("downloadContentDisposition", () => {
+     );
+   });
+ });
++
++describe("sandbox home HTTP boundary", () => {
++  it("revokes previously usable asset/upload routes immediately when a child becomes central", async () => {
++    const environment = { T3_CLOUD_ROLE: "child" };
++    const handled: string[] = [];
++    const routes = Layer.effectDiscard(Effect.gen(function* () {
++      const router = yield* HttpRouter.HttpRouter;
++      yield* router.add("GET", `${ASSET_ROUTE_PREFIX}/*`, Effect.sync(() => {
++        handled.push("asset");
++        return HttpServerResponse.text("synthetic workspace bytes");
++      }));
++      yield* router.add("POST", `${ATTACHMENT_UPLOAD_ROUTE_PREFIX}/*`, Effect.sync(() => {
++        handled.push("upload");
++        return HttpServerResponse.empty({ status: 204 });
++      }));
++      yield* router.add("GET", "/api/guest/media", Effect.sync(() => {
++        handled.push("guest");
++        return HttpServerResponse.text("synthetic guest bytes");
++      }));
++      yield* router.add("GET", "/api/device-hub/*", Effect.sync(() => {
++        handled.push("device");
++        return HttpServerResponse.empty();
++      }));
++      yield* router.add("GET", "*", HttpServerResponse.text("packaged UI"));
++    })).pipe(Layer.provide(ServerHttp.makeSandboxAccess(environment)));
++    const { handler, dispose } = HttpRouter.toWebHandler(routes, { disableLogger: true });
++    const assetUrl = "https://home.example/api/assets/previously-valid.signature/credential?download=1";
++    try {
++      expect((await handler(new Request(assetUrl))).status).toBe(200);
++      expect(handled).toEqual(["asset"]);
++      for (const role of ["central", "invalid"]) {
++        environment.T3_CLOUD_ROLE = role;
++        for (const [url, method] of [[assetUrl, "GET"], [assetUrl, "HEAD"],
++          ["https://home.example/api/attachments/upload/previously-valid.signature", "POST"],
++          ["https://home.example/api/guest/media", "GET"],
++          ["https://home.example/api/device-hub/stream", "GET"]]) {
++          const response = await handler(new Request(url!, { method }));
++          expect(response.status).toBe(403);
++          expect(response.headers.get("cache-control")).toBe("no-store");
++        }
++        expect(handled).toEqual(["asset"]);
++      }
++      environment.T3_CLOUD_ROLE = "central";
++      expect((await handler(new Request("https://home.example/pair"))).status).toBe(200);
++    } finally { await dispose(); }
++  });
++});
+diff --git a/apps/server/src/http.ts b/apps/server/src/http.ts
+index e792a233..ae92634d 100644
+--- a/apps/server/src/http.ts
++++ b/apps/server/src/http.ts
+@@ -1,3 +1,5 @@
++import { sandboxRole } from "./briqSandbox.ts";
++import { sandboxHttpAllowed } from "./briqSandboxAccess.ts";
+ import * as Mime from "effect/http/Mime";
+ import {
+   AuthOrchestrationOperateScope,
+@@ -249,6 +251,20 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
+   return yield* HttpServerResponse.file(asset.path, { status, offset, bytesToRead, headers });
+ });
+ 
++export const makeSandboxAccess = (env?: Readonly<Record<string, string | undefined>>) => HttpRouter.middleware((httpEffect) =>
++  Effect.gen(function* () {
++    const { route, params } = yield* HttpRouter.RouteContext;
++    if (!sandboxHttpAllowed(route.method, route.path, env) ||
++        ((sandboxRole(env) === "central" || sandboxRole(env) === "invalid") &&
++          route.path === "/api/auth/websocket-ticket/:use" && params.use !== "rpc"))
++      return HttpServerResponse.text("Workspace access requires an allocated sandbox.", {
++        status: 403, headers: { "cache-control": "no-store" },
++      });
++    return yield* httpEffect;
++  }),
++).layer;
++export const layerSandboxAccess = makeSandboxAccess();
++
+ export const layerHttpCompression = HttpRouter.middleware(HttpMiddleware.compression(), {
+   global: true,
+ });
 diff --git a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts b/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
 index 821cf051..d5762976 100644
 --- a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
@@ -454,7 +673,7 @@ index a944f751..14b8fa29 100644
        config:
          Object.keys(secrets.config).length === 0
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
-index 452addfb..5dcbcdc3 100644
+index 452addfb..101bed16 100644
 --- a/apps/server/src/server.ts
 +++ b/apps/server/src/server.ts
 @@ -1,3 +1,7 @@
@@ -484,7 +703,15 @@ index 452addfb..5dcbcdc3 100644
  
  const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
  
-@@ -1093,6 +1107,7 @@ const layerMakeServer = Layer.unwrap(
+@@ -773,6 +787,7 @@ const layerMakeRoutes = Layer.mergeAll(
+   ),
+   Layer.provide(PreviewAutomationBroker.layer),
+   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(layerDesktopAppUpdate))),
++  Layer.provide(ServerHttp.layerSandboxAccess),
+   Layer.provide(layerCommandReadiness),
+   Layer.provide(ServerHttp.layerBrowserApiCors),
+   Layer.provide(ServerHttp.layerHttpCompression),
+@@ -1093,6 +1108,7 @@ const layerMakeServer = Layer.unwrap(
      return layerServerApplication.pipe(
        Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
        Layer.provideMerge(layerRuntimeServices),
