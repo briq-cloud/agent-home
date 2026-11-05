@@ -6,8 +6,10 @@ Native T3 retains its own authentication. The manager uses a separate owner key 
 header as the owner. Management mutations require the configured public Origin.
 
 Set `T3_CLOUD_PUBLIC_ORIGIN` to the exact HTTPS origin and `T3_CLOUD_OWNER_KEY` to a private,
-random key of at least 32 bytes. Open `/_cloud/` and enter the key in its sign-in form. Keep it
-out of URLs. The public `PORT` defaults to 8080. Native T3 and ttyd bind loopback ports 3773 and
+random key of at least 32 bytes. Central mode also requires a distinct private
+`T3_CLOUD_EDGE_TOKEN` of at least 32 cookie-compatible ASCII characters for the private sandbox
+transport. Open `/_cloud/` and enter only the owner key in its sign-in form. Keep both keys
+out of URLs and browser storage. The public `PORT` defaults to 8080. Native T3 and ttyd bind loopback ports 3773 and
 7681; expose only the public listener. Native T3 pairing is created by its CLI with a five-minute
 expiry. Pairing responses are private and must not be recorded or stored in browser storage.
 

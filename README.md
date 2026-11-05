@@ -59,7 +59,7 @@ flowchart LR
 | Harnesses | Unmodified vendor CLIs + official ACP adapters | Pinned per image. |
 | Subscription accounts | Native Claude login folders + private account registry | Add accounts explicitly; Auto skips observed quota limits for new work. Existing chats keep their account. |
 | Task orchestration | Our TypeScript executor + SQLite WAL | Durable DAGs, fenced leases, opt-in fleet slots, explicit retries. |
-| Model routing | OpenRouter metadata + Clef/Jev decision interface | Dynamic decisions enabled; key and per-task budget required. |
+| Model routing | OpenRouter metadata + `@openrouter/sdk` `alpha.decisions.create` | `cloudflare/clef-flash` by default; key and per-task budget required. |
 | Context caching | Our SHA-256 source/artifact store | Explicit files, revision checks, stable reference prefix. |
 | Prompt caching | Each vendor's native cache | No subscription traffic interception. |
 | Memory | SQLite FTS5 factual store; optional BGE-M3 search through OpenRouter | Explicit writes and current-source recall; semantic candidates require opt-in and paid consent. |
