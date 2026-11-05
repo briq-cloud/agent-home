@@ -108,6 +108,47 @@ test('serializes duplicate scoped mutations even before a native response exists
   const replies = f.received.filter(message => message.id === 1 || message.id === 2);
   assert.equal(replies.length, 2); assert.deepEqual(replies[0].result, replies[1].result);
 });
+test('serializes admission for distinct steer intents while keeping cancellation independent', async t => {
+  const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.broker.activeTurns.set('native-a', 'turn-a');
+  let releaseAdmission, enteredAdmission, queuedSecond;
+  const gate = new Promise(resolve => { releaseAdmission = resolve; });
+  const admitted = new Promise(resolve => { enteredAdmission = resolve; });
+  const queued = new Promise(resolve => { queuedSecond = resolve; });
+  const assertAllowed = f.broker.assertMutationAllowed.bind(f.broker); let checks = 0;
+  f.broker.assertMutationAllowed = async session => {
+    await assertAllowed(session);
+    if (++checks === 1) { enteredAdmission(); await gate; }
+  };
+  const serialize = f.store.serialized.bind(f.store); let threadAdmissions = 0;
+  f.store.serialized = (key, operation) => {
+    if (key === 'a' && ++threadAdmissions === 2) queuedSecond();
+    return serialize(key, operation);
+  };
+  const params = { threadId: 'native-a', expectedTurnId: 'turn-a', input: [{ type: 'text', text: 'steer' }] };
+  const first = f.session.receive(scoped(1, 'steer-first', 'turn/steer', params)); await admitted;
+  const second = f.session.receive(scoped(2, 'steer-second', 'turn/steer', params));
+  // The unfixed path completes the second steer; the guarded path queues its admission.
+  await Promise.race([queued, second]);
+  await f.session.receive(scoped(3, 'interrupt-a', 'turn/interrupt', { threadId: 'native-a', turnId: 'turn-a' }));
+  assert.equal(f.calls.filter(call => call.method === 'turn/interrupt').length, 1);
+  releaseAdmission(); await Promise.all([first, second]);
+  assert.equal(f.calls.filter(call => call.method === 'turn/steer').length, 1);
+  assert.ok(f.received.find(message => message.id === 2).error);
+});
+test('interrupt reaches native Codex while a scoped steer response is pending', async t => {
+  const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.broker.activeTurns.set('native-a', 'turn-a');
+  let nativeEntered, resolveNative;
+  const entered = new Promise(resolve => { nativeEntered = resolve; });
+  f.responses.set('turn/steer', () => new Promise(resolve => { resolveNative = resolve; nativeEntered(); }));
+  const pending = f.session.receive(scoped(1, 'steer-first', 'turn/steer', { threadId: 'native-a', expectedTurnId: 'turn-a', input: [{ type: 'text', text: 'steer' }] }));
+  await entered;
+  await f.session.receive(scoped(2, 'interrupt-a', 'turn/interrupt', { threadId: 'native-a', turnId: 'turn-a' }));
+  assert.equal(f.calls.filter(call => call.method === 'turn/interrupt').length, 1);
+  resolveNative({}); await pending;
+  assert.ok(f.received.find(message => message.id === 1).result);
+});
 test('denies config, auth, host execution, override fields, nontext input, and cross-thread requests', async t => {
   const f = await fixture(t);
   for (const [method, params] of [

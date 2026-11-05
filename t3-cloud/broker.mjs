@@ -204,11 +204,18 @@ export class CapabilityBroker {
       if (params.input !== undefined && !textInput(params.input)) return session.send(error(id));
       if (params.approvalPolicy !== undefined && params.approvalPolicy !== 'on-request') return session.send(error(id));
       if (params.sandbox !== undefined && params.sandbox !== 'workspace-write') return session.send(error(id));
-      if (['turn/interrupt', 'turn/steer'].includes(message.method)) {
-        const turnId = params.turnId ?? params.expectedTurnId;
+      if (message.method === 'turn/steer') return await this.store.serialized(binding.threadId, async () => {
+        const current = await this.binding(session);
+        if (!params.expectedTurnId || this.activeTurns.get(current.nativeThreadId) !== params.expectedTurnId) throw Error('Turn no longer active');
+        await this.assertMutationAllowed(session);
+        mutation = await this.beginMutation(session, message.method, operation);
+        const result = await this.app.request(message.method, params);
+        await this.deliverMutation(mutation, { id, result });
+      });
+      if (message.method === 'turn/interrupt') {
+        const turnId = params.turnId;
         if (!turnId || this.activeTurns.get(binding.nativeThreadId) !== turnId) return session.send(error(id));
         // Cancellation must remain independent of a pending turn/start or read response.
-        if (message.method === 'turn/steer') await this.assertMutationAllowed(session);
         mutation = await this.beginMutation(session, message.method, operation);
         const result = await this.app.request(message.method, params);
         return await this.deliverMutation(mutation, { id, result });
