@@ -1,0 +1,133 @@
+import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { createOwnerAuth, equalKey } from './cloud-auth.mjs';
+import { cloudProxy } from './cloud-proxy.mjs';
+import { managerPage } from './manager-ui.mjs';
+
+const privateHeaders = {
+  'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
+  'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY',
+};
+function json(res, status, body, extra = {}) {
+  res.writeHead(status, { ...privateHeaders, 'content-type': 'application/json', ...extra });
+  res.end(JSON.stringify(body));
+}
+async function body(req) {
+  if (!(req.headers['content-type'] ?? '').split(';')[0].trim().match(/^application\/json$/i)) throw Error('Invalid request');
+  let size = 0, text = '';
+  for await (const chunk of req) { size += chunk.length; if (size > 16384) throw Error('Invalid request'); text += chunk; }
+  const value = JSON.parse(text);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('Invalid request');
+  return value;
+}
+const only = (value, keys) => Object.keys(value).every(key => keys.includes(key));
+const threadId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
+const denySocket = socket => { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); };
+
+/** Central connection management only. Native T3 retains its own authentication and paths. */
+export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allocator, broker,
+  connections, allocatorToken, t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade }) {
+  if (!['central', 'standalone'].includes(role)) throw Error('Manager requires central or standalone role');
+  if (role === 'central' && (!threadId(ownerId) || typeof allocator?.allocate !== 'function' || typeof broker?.ownerRequest !== 'function'))
+    throw Error('Central sandbox runtime is required');
+  if (!connections) throw Error('Native connection adapters are required');
+  const auth = createOwnerAuth({ key: ownerKey, origin: publicOrigin });
+  const native = cloudProxy({ target: t3Target, publicOrigin: auth.origin, ownerBearer: req => auth.ownerBearer(req) });
+  const terminal = cloudProxy({ target: terminalTarget, publicOrigin: auth.origin, ownerBearer: req => auth.ownerBearer(req), terminal: true });
+  let allocating = 0;
+  const server = createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, auth.origin);
+      // Only a non-secret capability is public; native source uses this to refuse a local fallback.
+      if (url.pathname === '/_cloud/capabilities' && req.method === 'GET') return json(res, 200, { role });
+      if (!url.pathname.startsWith('/_cloud/') && url.pathname !== '/_cloud') return native.http(req, res);
+      const localAllocator = role === 'central' && url.pathname === '/_cloud/threads' && req.method === 'POST' &&
+        req.socket.remoteAddress === '127.0.0.1' && typeof allocatorToken === 'string' && allocatorToken.length >= 32 &&
+        equalKey(req.headers.authorization, `Bearer ${allocatorToken}`);
+      if (req.method === 'OPTIONS') return json(res, 403, { error: 'Cross-origin management is unavailable' });
+      if (!['GET', 'HEAD'].includes(req.method) && !localAllocator && !auth.mutation(req)) return json(res, 403, { error: 'Same-origin request required' });
+      if (url.pathname === '/_cloud/login' && req.method === 'POST') {
+        const input = await body(req);
+        if (!only(input, ['key']) || typeof input.key !== 'string') return json(res, 400, { error: 'Invalid sign-in request' });
+        const cookie = auth.login(input.key);
+        return cookie ? json(res, 200, { authenticated: true }, { 'set-cookie': cookie }) : json(res, 401, { error: 'Owner key not accepted' });
+      }
+      const authorized = localAllocator || auth.authorized(req);
+      if (['/_cloud', '/_cloud/'].includes(url.pathname) && req.method === 'GET') {
+        const nonce = randomBytes(18).toString('base64');
+        res.writeHead(200, { ...privateHeaders, 'content-type': 'text/html; charset=utf-8',
+          'content-security-policy': `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'` });
+        return res.end(managerPage({ nonce, authorized, role }));
+      }
+      if (!authorized) return json(res, 401, { error: 'Open /_cloud/ and sign in with your owner key' });
+      if (url.pathname === '/_cloud/logout' && req.method === 'POST') return json(res, 200, { authenticated: false }, { 'set-cookie': auth.logout(req) });
+      if (url.pathname.startsWith('/_cloud/terminal/') && req.method === 'GET') return terminal.http(req, res);
+      if (url.pathname === '/_cloud/connections' && req.method === 'GET') {
+        const codex = role === 'central' ? await broker.ownerRequest('account/read', { refreshToken: false }) : { unavailable: true };
+        return json(res, 200, { role, codex, ...(await connections.status()) });
+      }
+      if (url.pathname === '/_cloud/threads' && req.method === 'POST') {
+        if (role !== 'central') return json(res, 409, { error: 'Thread sandbox allocation requires a central runtime' });
+        const input = await body(req);
+        if (!only(input, ['threadId']) || !threadId(input.threadId)) return json(res, 400, { error: 'Invalid thread identity' });
+        if (allocating >= 8) return json(res, 429, { error: 'Sandbox allocation is busy' });
+        allocating++;
+        try { return json(res, 200, await allocator.allocate(ownerId, input.threadId)); }
+        finally { allocating--; }
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/_cloud/codex/')) {
+        if (role !== 'central') return json(res, 409, { error: 'Central Codex connection unavailable' });
+        const input = await body(req);
+        switch (url.pathname) {
+          case '/_cloud/codex/login':
+            if (!only(input, [])) break;
+            { const result = await broker.ownerRequest('account/login/start', { type: 'chatgpt' });
+              // Only native login metadata can leave this owner endpoint.
+              return json(res, 200, { type: result.type, loginId: result.loginId, authUrl: result.authUrl }); }
+          case '/_cloud/codex/cancel':
+            if (!only(input, ['loginId']) || typeof input.loginId !== 'string' || input.loginId.length > 256) break;
+            await broker.ownerRequest('account/login/cancel', { loginId: input.loginId });
+            return json(res, 200, { cancelled: true });
+          case '/_cloud/codex/logout':
+            if (!only(input, [])) break;
+            await broker.ownerRequest('account/logout', {});
+            return json(res, 200, { disconnected: true });
+        }
+        return json(res, 400, { error: 'Invalid connection operation' });
+      }
+      if (req.method === 'POST' && url.pathname.startsWith('/_cloud/claude/')) {
+        const input = await body(req);
+        if (url.pathname === '/_cloud/claude/login' && only(input, [])) return json(res, 200, await connections.claudeLogin());
+        if (url.pathname === '/_cloud/claude/input' && only(input, ['code']) && typeof input.code === 'string' && connections.claudeInput(input.code))
+          return json(res, 200, { accepted: true });
+        if (url.pathname === '/_cloud/claude/cancel' && only(input, [])) { connections.claudeCancel(); return json(res, 200, { cancelled: true }); }
+        return json(res, 400, { error: 'Invalid connection operation' });
+      }
+      if (url.pathname === '/_cloud/briq/login' && req.method === 'POST') {
+        const input = await body(req);
+        if (!only(input, [])) return json(res, 400, { error: 'Invalid connection operation' });
+        return json(res, 200, await connections.briqLogin());
+      }
+      if (url.pathname === '/_cloud/pair' && req.method === 'POST') {
+        const input = await body(req);
+        if (!only(input, [])) return json(res, 400, { error: 'Invalid pairing operation' });
+        return json(res, 200, await connections.pair(auth.origin));
+      }
+      return json(res, 404, { error: 'Unknown management operation' });
+    } catch {
+      if (!res.headersSent) json(res, 503, { error: 'Connection operation unavailable; inspect the configured runtime' });
+      else res.end();
+    }
+  });
+  server.requestTimeout = 30000; server.headersTimeout = 10000;
+  server.on('upgrade', (req, socket, head) => {
+    let path; try { path = new URL(req.url, auth.origin).pathname; } catch { return denySocket(socket); }
+    if (path === '/_cloud/bridge' && role === 'central' && bridgeUpgrade) return bridgeUpgrade(req, socket, head);
+    if (path.startsWith('/_cloud/')) {
+      if (path.startsWith('/_cloud/terminal/') && auth.authorized(req) && auth.mutation(req)) return terminal.upgrade(req, socket, head);
+      return denySocket(socket);
+    }
+    native.upgrade(req, socket, head);
+  });
+  return server;
+}

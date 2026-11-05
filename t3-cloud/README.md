@@ -1,0 +1,34 @@
+# T3 Cloud connections
+
+The public listener serves native T3 at `/` and owner connection management at `/_cloud/`.
+Native T3 retains its own authentication. The manager uses a separate owner key and an opaque,
+12-hour HttpOnly, SameSite=Strict session cookie (Secure on HTTPS). It never treats a gateway
+header as the owner. Management mutations require the configured public Origin.
+
+Set `T3_CLOUD_PUBLIC_ORIGIN` to the exact HTTPS origin and `T3_CLOUD_OWNER_KEY` to a private,
+random key of at least 32 bytes. Open `/_cloud/` and enter the key in its sign-in form. Keep it
+out of URLs. The public `PORT` defaults to 8080. Native T3 and ttyd bind loopback ports 3773 and
+7681; expose only the public listener. Native T3 pairing is created by its CLI with a five-minute
+expiry. Pairing responses are private and must not be recorded or stored in browser storage.
+
+The default product role is `central`; it additionally requires a stable `T3_CLOUD_OWNER_ID` and the real broker
+composition in `central-runtime.mjs`. The manager calls that same broker for Codex account
+operations. It does not start another Codex app server. Native T3's authenticated allocation RPC
+calls the local allocation route using a dedicated process-private token, which authorizes no
+other management operation. The owner identity comes from server configuration. Allocation
+failure must never fall back to executing a central thread locally. The central runtime and
+child image need independent security review and execution qualification before release.
+
+The explicit diagnostic mode `T3_CLOUD_ROLE=standalone` has native T3 connections, Claude's native sign-in, Briq's native
+browser sign-in, pairing, and an owner-protected terminal. Central Codex account operations and
+thread allocation are unavailable without the broker. The CLI's sign-in and an MCP capability
+are separate: a configured MCP token is reported as unverified, never as CLI authentication.
+
+Vendor sign-in runs the installed CLI, preserves its existing credential home, and exposes only
+its sign-in URL, device code, and state. The person approves in their own browser. Status comes
+from vendor status commands; no token files are read. The vendor helper is a narrow extraction
+of the existing Agent Home sign-in/status code, without its application or routing runtime.
+
+Run the bounded manager contract tests with `node --test --test-timeout=10000 t3-cloud/manager.test.mjs`.
+They use fake adapters and real loopback HTTP/WebSocket services; they do not qualify the broker,
+a provider login, the image, or cloud allocation.

@@ -17,4 +17,4 @@ export BRIQ_CONFIG_DIR="${BRIQ_CONFIG_DIR:-$XDG_CONFIG_HOME/briq}"
 node /opt/t3-cloud/prepare.mjs
 if [ "$#" -gt 0 ]; then exec "$@"; fi
 cd "$T3_CWD"
-exec /opt/t3/t3 serve --host "${T3_HOST:-0.0.0.0}" --port "${PORT:-8080}" --base-dir "$T3_STATE" --no-browser "$T3_CWD"
+exec node /opt/t3-cloud/manager-main.mjs
