@@ -11,7 +11,7 @@ const origin = 'https://cloud.example';
 const connections = { status: async () => ({claude: { authenticated: false }, briq: { authenticated: null }}), pair: async () => ({pairUrl: 'https://cloud.example/pair#token=short-lived'}) };
 async function fixture(t) {
   const seen = [];
-  const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged']); res.end(req.url); });
+  const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged','briq_token=forged']); res.end(req.url); });
   upstream.on('upgrade', (req,socket,head) => { seen.push(req.headers); socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'); if(head.length)socket.write(head); socket.pipe(socket); });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
   const allocations = [], rpc=[];
@@ -40,14 +40,14 @@ test('allocation-only capability cannot access owner APIs or change owner bindin
  r=await f.post('/_cloud/threads',{threadId:'thread-3'},{authorization:'Bearer wrong'});assert.equal(r.status,401);
 });
 test('native proxy preserves native credentials/path but removes owner credentials and forwarded origin',async t=>{
- const f=await fixture(t);let r=await f.send('/api/native?x=1',{headers:{authorization:`Bearer ${key}`,cookie:'native=yes; t3_cloud_owner=secret',host:'evil.example','x-forwarded-host':'evil.example'}});
+ const f=await fixture(t);let r=await f.send('/api/native?x=1',{headers:{authorization:`Bearer ${key}`,cookie:'native=yes; briq_token=edge; t3_cloud_owner=secret',host:'evil.example','x-forwarded-host':'evil.example'}});
  assert.equal(r.text,'/api/native?x=1');assert.equal(f.seen[0].authorization,undefined);assert.equal(f.seen[0].cookie,'native=yes');assert.equal(f.seen[0].host,'cloud.example');assert.equal(f.seen[0]['x-forwarded-host'],undefined);assert.deepEqual(r.headers['set-cookie'],['native=ok']);
  await f.send('/api/native',{headers:{authorization:'Bearer native-token'}});assert.equal(f.seen[1].authorization,'Bearer native-token');
 });
 test('terminal requires owner authentication and native WS proxies handshake plus frames',async t=>{
  const f=await fixture(t);assert.equal((await f.send('/_cloud/terminal/')).status,401);
  const socket=connect(f.manager.address().port,'127.0.0.1');t.after(()=>socket.destroy());await once(socket,'connect');
- socket.write('GET /native-ws HTTP/1.1\r\nHost: evil.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nAuthorization: Bearer native-token\r\nCookie: native=yes; t3_cloud_owner=secret\r\n\r\n');
+ socket.write('GET /native-ws HTTP/1.1\r\nHost: evil.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nAuthorization: Bearer native-token\r\nCookie: native=yes; briq_token=edge; t3_cloud_owner=secret\r\n\r\n');
  let data='';await new Promise((resolve,reject)=>{socket.on('error',reject);socket.on('data',chunk=>{data+=chunk;if(data.includes('\r\n\r\n'))resolve();});});assert.match(data,/101 Switching/);
  await new Promise(resolve=>setTimeout(resolve,10100)); assert.equal(socket.destroyed,false);
  const payload=Buffer.from([0x81,0x02,0x68,0x69]);const result=once(socket,'data');socket.write(payload);assert.deepEqual((await result)[0],payload);assert.equal(f.seen[0].authorization,'Bearer native-token');assert.equal(f.seen[0].cookie,'native=yes');
@@ -60,4 +60,8 @@ test('Codex owner login uses one native device-code flow and projects only devic
  assert.deepEqual(f.rpc,[['account/login/start',{type:'chatgptDeviceCode'}]]);
  assert.deepEqual(JSON.parse(r.text),{type:'chatgptDeviceCode',loginId:'native-login',verificationUrl:'https://auth.example/device',userCode:'TEST-CODE'});
  assert.equal(r.text.includes('never-export'),false);
+});
+
+test('gateway cookie alone cannot authorize owner management',async t=>{
+ const f=await fixture(t);assert.equal((await f.send('/_cloud/connections',{headers:{cookie:'briq_token=edge'}})).status,401);
 });

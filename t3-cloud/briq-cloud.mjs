@@ -1,3 +1,4 @@
+import { edgeToken, requireEdgeBinding, withoutEdgeEnvironment } from './edge-auth.mjs';
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -22,8 +23,9 @@ function endpoint(value) {
   return url.origin;
 }
 export class BriqCloud {
-  constructor({ directory, run = cli, env = process.env }) { Object.assign(this, { directory, run, env }); }
-  async create(binding, { image, bridgeUrl }) {
+  constructor({ directory, run = cli, env = process.env }) { Object.assign(this, { directory, run, env: withoutEdgeEnvironment(env) }); }
+  async create(binding, { image, bridgeUrl, edgeCredential }) {
+    edgeToken(edgeCredential); requireEdgeBinding(binding, edgeCredential);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${binding.allocationId}.json`);
     await writeFile(file, JSON.stringify({ stack: binding.stack, services: { sandbox: { image, size: 'medium',
@@ -32,10 +34,11 @@ export class BriqCloud {
         T3_CLOUD_PUBLIC_ORIGIN: 'https://{{self:host}}',
         T3_CLOUD_ROLE: 'child', T3_CLOUD_THREAD_ID: binding.threadId, T3_CLOUD_BINDING_ID: binding.allocationId,
         T3_CLOUD_BRIDGE_URL: bridgeUrl, T3_CLOUD_BRIDGE_TOKEN: { secret: 'CHILD_BRIDGE_TOKEN' },
+        T3_CLOUD_EDGE_TOKEN: { secret: 'CHILD_EDGE_TOKEN' },
         T3_CLOUD_EXEC_TOKEN_SHA256: digest(binding.execToken),
       } } } }), { mode: 0o600, flag: 'wx' });
-    const response = await this.run(['up', '-f', file, '--secret', 'CHILD_BRIDGE_TOKEN', '--no-wait'],
-      { env: { ...this.env, CHILD_BRIDGE_TOKEN: binding.bridgeToken } });
+    const response = await this.run(['up', '-f', file, '--secret', 'CHILD_BRIDGE_TOKEN', '--secret', 'CHILD_EDGE_TOKEN', '--no-wait'],
+      { env: { ...withoutEdgeEnvironment(this.env), CHILD_BRIDGE_TOKEN: binding.bridgeToken, CHILD_EDGE_TOKEN: edgeCredential } });
     if (response.briqs?.length !== 1 || response.stack !== binding.stack) throw Error('Unexpected allocation result');
     return response.briqs[0].id;
   }

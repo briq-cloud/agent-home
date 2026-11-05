@@ -1,3 +1,4 @@
+import { EDGE_COOKIE } from './edge-auth.mjs';
 import { request } from 'node:http';
 import { OWNER_COOKIE } from './cloud-auth.mjs';
 
@@ -11,7 +12,7 @@ export function cloudProxy({ target, publicOrigin, ownerBearer, terminal = false
     const out = { ...req.headers };
     if (terminal || ownerBearer(req)) delete out.authorization;
     const value = (req.headers.cookie ?? '').split(';').map(v => v.trim())
-      .filter(v => v && !v.startsWith(`${OWNER_COOKIE}=`)).join('; ');
+      .filter(v => v && !v.startsWith(`${OWNER_COOKIE}=`) && !v.startsWith(`${EDGE_COOKIE}=`)).join('; ');
     if (value) out.cookie = value; else delete out.cookie;
     // Never derive native origin checks from client-controlled proxy headers.
     out.host = external.host;
@@ -23,7 +24,7 @@ export function cloudProxy({ target, publicOrigin, ownerBearer, terminal = false
       const upstream = request({ hostname: '127.0.0.1', port, method: req.method, path: req.url, headers: headers(req) }, reply => {
         const out = { ...reply.headers };
         // An upstream cannot mint or replace the manager's owner session.
-        if (out['set-cookie']) out['set-cookie'] = out['set-cookie'].filter(v => !v.trim().startsWith(`${OWNER_COOKIE}=`));
+        if (out['set-cookie']) out['set-cookie'] = out['set-cookie'].filter(v => !v.trim().startsWith(`${OWNER_COOKIE}=`) && !v.trim().startsWith(`${EDGE_COOKIE}=`));
         if (terminal) Object.assign(out, { 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY' });
         res.writeHead(reply.statusCode ?? 502, out); reply.pipe(res);
       });
@@ -42,7 +43,7 @@ export function cloudProxy({ target, publicOrigin, ownerBearer, terminal = false
         for (const [name, value] of Object.entries(reply.headers)) {
           if (value === undefined) continue;
           for (const item of [value].flat()) {
-            if (name === 'set-cookie' && item.trim().startsWith(`${OWNER_COOKIE}=`)) continue;
+            if (name === 'set-cookie' && (item.trim().startsWith(`${OWNER_COOKIE}=`) || item.trim().startsWith(`${EDGE_COOKIE}=`))) continue;
             lines.push(`${name}: ${item}`);
           }
         }

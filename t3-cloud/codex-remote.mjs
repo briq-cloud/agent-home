@@ -1,3 +1,4 @@
+import { bridgeOptions } from './edge-auth.mjs';
 import WebSocket from 'ws';
 import { createInterface } from 'node:readline';
 
@@ -5,12 +6,8 @@ if (process.argv.slice(2).join(' ') === '--version') {
   process.stdout.write('codex-cli 0.166.0\n');
 } else {
   if (process.argv.slice(2).join(' ') !== 'app-server') throw Error('Only scoped app-server transport is available');
-  const url = new URL(process.env.T3_CLOUD_BRIDGE_URL);
-  const token = process.env.T3_CLOUD_BRIDGE_TOKEN;
-  if (url.protocol !== 'wss:' || url.username || url.password || url.search || url.hash || !token || token.length < 32)
-    throw Error('Missing sandbox bridge capability');
-  const socket = new WebSocket(url, { headers: { authorization: `Bearer ${token}` }, maxPayload: 2097152,
-    perMessageDeflate: false, handshakeTimeout: 15000 });
+  const { url, options } = bridgeOptions(process.env);
+  const socket = new WebSocket(url, options);
   let opened = false; const queued = [];
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   input.on('line', line => {

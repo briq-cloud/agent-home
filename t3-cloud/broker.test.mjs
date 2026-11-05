@@ -199,7 +199,7 @@ test('allocator serializes duplicate creates, reconciles unknown outcomes withou
   const store = new AllocationStore(directory); await store.initialize(); let creates = 0; let recovered = null;
   const cloud = { create: async () => { creates++; throw Error('unknown'); }, find: async () => recovered,
     endpoints: async () => ({ t3Url: 'https://t3.example', execUrl: 'wss://exec.example' }), descriptor: async () => ({ environmentId: 'environment-a' }), pair: async () => 'pairing-once' };
-  const allocator = new ThreadAllocator({ store, cloud, image: `example/image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', registerEnvironment: async () => {} });
+  const allocator = new ThreadAllocator({ store, cloud, image: `example/image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', edgeCredential: 'e'.repeat(32), registerEnvironment: async () => {} });
   await assert.rejects(allocator.allocate('owner', 'thread'));
   await assert.rejects(allocator.allocate('owner', 'thread')); assert.equal(creates, 1);
   recovered = 'bq_one';

@@ -1,9 +1,10 @@
+import { withoutEdgeEnvironment } from './edge-auth.mjs';
 import { execFile } from 'node:child_process';
 import { SignIn } from './vendor/auth/signin.ts';
 import { commandStatus } from './vendor/auth/status.ts';
 
 export function briqStatus(env, run = execFile) {
-  return new Promise(resolve => run('briq', ['--json', 'whoami'], {env, timeout:10000, maxBuffer:16384}, (error, stdout, stderr) => {
+  return new Promise(resolve => run('briq', ['--json', 'whoami'], {env:withoutEdgeEnvironment(env), timeout:10000, maxBuffer:16384}, (error, stdout, stderr) => {
     if (!error) { try { const value=JSON.parse(stdout); if (typeof value.apiUrl === 'string' && typeof value.source === 'string') return resolve(true); } catch {} }
     // Network errors and unavailable CLI commands do not establish sign-out.
     resolve(/not signed in|not authenticated|unauthenticated|unauthorized/i.test(stderr ?? '') ? false : null);
@@ -12,6 +13,7 @@ export function briqStatus(env, run = execFile) {
 
 // Keep credential files under each native CLI's existing home. No credentials are read here.
 export function nativeConnections(env = process.env) {
+  env = withoutEdgeEnvironment(env);
   const claude = new SignIn({ name: 'claude', login: ['claude', 'auth', 'login'] });
   const briq = new SignIn({ name: 'briq', login: ['briq', 'login'] });
   return {

@@ -1,3 +1,4 @@
+import { edgeToken, edgeAuthorized, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -8,6 +9,7 @@ import { startAppServer, CapabilityBroker } from './broker.mjs';
 // A single refresh owner. A stale lock needs explicit operator reconciliation;
 // an uncertain process lifetime never licenses a second app-server.
 export async function createCentralRuntime(env = process.env, dependencies = {}) {
+  const edgeCredential = edgeToken(env.T3_CLOUD_EDGE_TOKEN);
   const directory = env.T3_CLOUD_STATE;
   if (!directory || !isAbsolute(directory)) throw Error('Absolute central state directory required');
   await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -25,6 +27,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     const handle = await open(join(lock, 'owner.json'), 'wx', 0o600);
     try { await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); } finally { await handle.close(); }
     const store = new AllocationStore(join(directory, 'allocations')); await store.initialize();
+    for (const binding of await store.list()) if (binding.state !== 'revoked') requireEdgeBinding(binding, edgeCredential);
     app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex') });
     const broker = new CapabilityBroker({ store, app });
     // Re-register persisted execution capabilities and verify sticky selections before serving.
@@ -41,15 +44,15 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     }
     const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
     const allocator = new ThreadAllocator({ store, cloud, image: env.T3_CLOUD_CHILD_IMAGE,
-      bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
+      edgeCredential, bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
       registerEnvironment: binding => broker.registerEnvironment(binding) });
     websocket = new WebSocketServer({ noServer: true, maxPayload: 2097152, perMessageDeflate: false });
     async function bridgeUpgrade(req, socket, head) {
       let session;
       try {
-        if (stopped || req.headers.origin !== undefined || req.url !== '/_cloud/bridge') throw Error('Invalid bridge request');
+        if (stopped || req.headers.origin !== undefined || req.url !== '/_cloud/bridge' || !edgeAuthorized(req, edgeCredential)) throw Error('Invalid bridge request');
         const authorization = req.headers.authorization;
-        if (typeof authorization !== 'string' || !/^Bearer [a-zA-Z0-9_-]{43}$/.test(authorization)) throw Error('Missing capability');
+        if (authorization === `Bearer ${edgeCredential}` || typeof authorization !== 'string' || !/^Bearer [a-zA-Z0-9_-]{43}$/.test(authorization)) throw Error('Missing capability');
         let peer;
         session = await broker.connect(authorization.slice(7), value => new Promise((resolve, reject) => {
           if (peer?.readyState !== WebSocket.OPEN) return reject(Error('Sandbox reply transport unavailable'));

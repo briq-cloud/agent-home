@@ -1,3 +1,4 @@
+import { edgeToken, bridgeAddress, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, readFile, open, rename, readdir } from 'node:fs/promises';
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
@@ -80,12 +81,10 @@ export class AllocationStore {
   }
 }
 export class ThreadAllocator {
-  constructor({ store, cloud, image, bridgeUrl, registerEnvironment }) {
+  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment }) {
     if (!/^.+@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Child image must be pinned by digest');
-    const bridge = new URL(bridgeUrl);
-    if (bridge.protocol !== 'wss:' || bridge.username || bridge.password || bridge.search || bridge.hash)
-      throw Error('Child bridge requires a clean WSS URL');
-    Object.assign(this, { store, cloud, image, bridgeUrl, registerEnvironment });
+    bridgeAddress(bridgeUrl); edgeToken(edgeCredential);
+    Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment });
   }
   async allocate(ownerId, threadId) {
     identifier(ownerId); identifier(threadId);
@@ -93,15 +92,16 @@ export class ThreadAllocator {
       let binding = await this.store.load(threadId);
       if (binding && binding.ownerId !== ownerId) throw Error('Allocation belongs to another owner');
       if (binding?.state === 'revoked') throw Error('Allocation revoked');
+      if (binding) requireEdgeBinding(binding, this.edgeCredential);
       if (!binding) {
         binding = { version: 1, ownerId, threadId, allocationId: randomUUID(), projectId: randomUUID(),
           bridgeToken: randomBytes(32).toString('base64url'), execToken: randomBytes(32).toString('base64url'),
-          state: 'creating', nativeThreadId: null };
+          edgeTokenHash: digest(this.edgeCredential), state: 'creating', nativeThreadId: null };
         binding.stack = `t3-${binding.allocationId.replaceAll('-', '').slice(0, 24)}`;
         binding.execEnvironmentId = `briq-${binding.allocationId}`;
         await this.store.save(binding);
         try {
-          binding.briqId = await this.cloud.create(binding, { image: this.image, bridgeUrl: this.bridgeUrl });
+          binding.briqId = await this.cloud.create(binding, { image: this.image, bridgeUrl: this.bridgeUrl, edgeCredential: this.edgeCredential });
           binding.state = 'created'; await this.store.save(binding);
         } catch { binding.state = 'unknown'; await this.store.save(binding); throw Error('Allocation outcome unknown; reconcile before retry'); }
       }
