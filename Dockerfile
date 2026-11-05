@@ -6,7 +6,8 @@
 # the vendors' agent CLIs and a terminal page. Each CLI is the vendor's binary as published, at the
 # version this build resolved (a date tag never moves), with its self-update off: a newer CLI comes
 # with next week's build, never from inside a running home. Pass a version as a build arg to pin it;
-# empty means the vendor's current stable release. What is inside, with versions: REFERENCE.md.
+# empty means the vendor's current stable release, except Codex's explicit compatibility pin.
+# What is inside, with versions: REFERENCE.md.
 #
 # Every download is checked against the checksum its publisher gives (Claude Code's manifest, the
 # GitHub release's asset digest, ttyd's SHA256SUMS, PyPI's, the npm registry's integrity), and
@@ -18,7 +19,7 @@ ARG BASE=ghcr.io/briq-cloud/sandbox:latest
 FROM ${BASE} AS native-clis
 
 ARG CLAUDE_VERSION=
-ARG CODEX_VERSION=
+ARG CODEX_VERSION=0.166.0
 ARG COPILOT_VERSION=
 ARG CURSOR_VERSION=
 ARG GROK_VERSION=
@@ -56,7 +57,7 @@ COPY bin/gh-digest /usr/local/bin/gh-digest
 # Codex: its release package, as published (the binary, the code-mode host that runs its tools,
 # its bwrap and rg), under /opt/codex; the sign-in in a file under CODEX_HOME.
 ARG CODEX_SHA256=
-RUN V="${CODEX_VERSION:-$(curl -fsSL https://api.github.com/repos/openai/codex/releases/latest | jq -r .tag_name | sed 's/^rust-v//')}" \
+RUN V="${CODEX_VERSION:?Codex requires an explicit version}" \
   && A=codex-package-x86_64-unknown-linux-musl.tar.gz \
   && H="${CODEX_SHA256:-$(gh-digest openai/codex "rust-v${V}" "$A")}" \
   && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${V}/$A" -o "/tmp/$A" \
@@ -64,6 +65,8 @@ RUN V="${CODEX_VERSION:-$(curl -fsSL https://api.github.com/repos/openai/codex/r
   && printf 'Codex\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
   && mkdir -p /opt/codex && tar -xzf "/tmp/$A" -C /opt/codex && rm "/tmp/$A" \
   && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+  && test "$(codex --version)" = "codex-cli ${V}" \
+  && printf '%s\n' "$V" > /etc/agent-home/codex-version \
   && mkdir -p /etc/codex \
   && printf 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n' > /etc/codex/config.toml
 
@@ -167,7 +170,8 @@ RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0
 
 FROM native-clis AS t3-cloud
 COPY --from=t3-source /out/t3 /opt/t3
-RUN test -x /opt/t3/t3 \
+RUN test "$(cat /etc/agent-home/codex-version)" = "$(node -p 'require("/opt/t3/source.json").codex')" \
+  && test -x /opt/t3/t3 \
   && printf 'T3 Code source\t2359643cffa6ba9ee84d6f2694b935de54a8013e\tpinned source, lock and local patch\n' >> /etc/agent-home/downloads
 
 COPY t3-cloud /opt/t3-cloud

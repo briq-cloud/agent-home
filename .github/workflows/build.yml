@@ -80,7 +80,8 @@ jobs:
           while docker buildx imagetools inspect "$IMAGE:$t" > /dev/null 2>&1 || docker buildx imagetools inspect "$T3_IMAGE:$t" > /dev/null 2>&1; do n=$((n + 1)); t="$d.$n"; done
           echo "tag=$t" >> "$GITHUB_OUTPUT"
 
-      # Each CLI's current stable release and the GitHub assets' digests, resolved once here (with
+      # Each CLI's current stable release (Codex uses the source compatibility pin) and the
+      # GitHub assets' digests, resolved once here (with
       # the job's token: unauthenticated GitHub API calls are rate-limited) and passed in, so the
       # image has exactly these; the base by digest, so the image says which one it is built on.
       - name: Resolve the versions
@@ -89,7 +90,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          codex_release="$(node bin/resolve-gh-release.mjs openai/codex rust-v codex-package-x86_64-unknown-linux-musl.tar.gz)"
+          codex_version="$(node -p 'require("./t3-cloud/t3-source/source.json").codex')"
+          codex_release="$(node bin/resolve-gh-release.mjs openai/codex rust-v codex-package-x86_64-unknown-linux-musl.tar.gz "$codex_version")"
           copilot_release="$(node bin/resolve-gh-release.mjs github/copilot-cli v copilot-linux-x64.tar.gz)"
           read -r codex codex_sha256 <<< "$codex_release"
           read -r copilot copilot_sha256 <<< "$copilot_release"
@@ -181,6 +183,7 @@ jobs:
           done
           docker exec agent-home-smoke node -e "fetch('http://127.0.0.1:8090/terminal/',{headers:{authorization:'Bearer ci-smoke'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
           docker exec agent-home-smoke sh -c 'test ! -e /opt/t3 && test -e /opt/agent-home-runner'
+          docker exec agent-home-smoke sh -c 'test "$(codex --version)" = "codex-cli $(cat /etc/agent-home/codex-version)"'
 
       - name: Native T3 startup smoke test
         run: |
@@ -193,6 +196,7 @@ jobs:
           done
           docker exec t3-cloud-smoke node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
           docker exec t3-cloud-smoke sh -c 'test ! -e /opt/agent-home-runner && test ! -e /opt/dsh && test ! -e /usr/local/bin/briq-agent-acp'
+          docker exec t3-cloud-smoke node -e 'const assert=require("node:assert/strict"),fs=require("node:fs"),cp=require("node:child_process"),version=require("/opt/t3/source.json").codex;assert.equal(cp.execFileSync("codex",["--version"],{encoding:"utf8"}).trim(),`codex-cli ${version}`);assert.equal(fs.readFileSync("/etc/agent-home/codex-version","utf8").trim(),version)'
           # Uses the actual image-pinned native CLIs, without credentials or model calls.
           # A second bootstrap must preserve the definitions accepted during native startup.
           docker exec t3-cloud-smoke t3-cloud-start true

@@ -6,6 +6,13 @@ pnpm lock, Node 26.12.1 and pnpm 12.14.0. `source.json` records the source,
 lock and patch hashes. The resource monitor is the unchanged sidecar from the
 checksum-verified upstream v0.1.6 archive. No release executable is patched.
 
+The shared native CLI stage pins Codex 0.166.0, recorded in `source.json`, for
+the central app-server and child exec-server. CI resolves that exact release's
+package digest and checks the installed version against the packaged metadata.
+Local builds default to the same version; an empty Codex build argument fails.
+T3 builds also reject a Codex version override that differs from `source.json`;
+Agent Home builds may override the version independently.
+
 The patch adds `orchestration.allocateSandboxThread` to the native RPC group
 (`packages/contracts/src/rpc.ts`), protected by the same orchestration write
 scope as thread creation (`clientRpcPermissions.ts`, server
