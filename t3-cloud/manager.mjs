@@ -81,9 +81,9 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
         switch (url.pathname) {
           case '/_cloud/codex/login':
             if (!only(input, [])) break;
-            { const result = await broker.ownerRequest('account/login/start', { type: 'chatgpt' });
+            { const result = await broker.ownerRequest('account/login/start', { type: 'chatgptDeviceCode' });
               // Only native login metadata can leave this owner endpoint.
-              return json(res, 200, { type: result.type, loginId: result.loginId, authUrl: result.authUrl }); }
+              return json(res, 200, { type: result.type, loginId: result.loginId, verificationUrl: result.verificationUrl, userCode: result.userCode }); }
           case '/_cloud/codex/cancel':
             if (!only(input, ['loginId']) || typeof input.loginId !== 'string' || input.loginId.length > 256) break;
             await broker.ownerRequest('account/login/cancel', { loginId: input.loginId });

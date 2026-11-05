@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { equalSecret } from './allocations.mjs';
 
 const VERSION = 'codex-cli 0.166.0';
-const CONFIG = 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n[features]\ncollab = false\n';
+const CONFIG = 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n[features]\nmulti_agent = false\n';
 export async function startAppServer({ binary = 'codex', home, path = '/usr/local/bin:/usr/bin:/bin' }) {
   await mkdir(home, { recursive: true, mode: 0o700 });
   for (const [name, content] of [['config.toml', CONFIG], ['environments.toml', 'default = "none"\ninclude_local = false\n']]) {
@@ -201,7 +201,7 @@ export class CapabilityBroker {
   }
   async ownerRequest(method, params) {
     if (!['account/read', 'account/login/start', 'account/login/cancel', 'account/logout'].includes(method)) throw Error('Unsupported connection operation');
-    if (method === 'account/login/start' && (params?.type !== 'chatgpt' || Object.keys(params).some(key => !['type'].includes(key)))) throw Error('Only native ChatGPT sign-in supported');
+    if (method === 'account/login/start' && (params?.type !== 'chatgptDeviceCode' || Object.keys(params).some(key => !['type'].includes(key)))) throw Error('Only native ChatGPT sign-in supported');
     const response = await this.app.request(method, params);
     if (method === 'account/read') return { account: response.account ? { type: response.account.type, email: response.account.email, planType: response.account.planType } : null, requiresOpenaiAuth: response.requiresOpenaiAuth };
     return response;

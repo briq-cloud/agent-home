@@ -14,7 +14,7 @@ test('child selects native existing shim and launches only credential-free execu
   const runtime = await startChild({ T3_CLOUD_ROLE: 'child', T3_CLOUD_BINDING_ID: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', T3_CLOUD_THREAD_ID: 'thread',
     T3_CLOUD_BRIDGE_URL: 'wss://central.example/_cloud/bridge', T3_CLOUD_BRIDGE_TOKEN: 'a'.repeat(43),
     T3_CLOUD_EXEC_TOKEN_SHA256: digest('b'.repeat(43)), T3_CLOUD_PUBLIC_ORIGIN: 'https://child.example', BRIQ_API_KEY: 'must-not-inherit', OPENAI_API_KEY: 'must-not-inherit' }, {
-    root, checkVersion: () => ({ status: 0, stdout: 'codex-cli 0.166.0\n' }),
+    root, listen: { port: 0, host: '127.0.0.1' }, checkVersion: () => ({ status: 0, stdout: 'codex-cli 0.166.0\n' }),
     spawnProcess: (command, args, options) => { calls.push({ command, args, options }); const child = new EventEmitter(); child.kill = () => {}; return child; },
   });
   t.after(() => runtime.close());

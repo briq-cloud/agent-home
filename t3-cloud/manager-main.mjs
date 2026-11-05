@@ -14,26 +14,26 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
   const port = Number(env.PORT ?? 8080);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || [3773,7681].includes(port)) throw Error('Invalid public port');
   const allocatorToken = randomBytes(32).toString('base64url');
-  let runtime;
-  if (role === 'central') {
-    // Production composition must supply the real broker; tests can inject a fake runtime.
-    const factory = centralRuntime ?? (await import('./central-runtime.mjs')).createCentralRuntime;
-    runtime = await factory(env);
-  }
-  const connections = nativeConnections(env);
-  const server = createCloudManager({ role, publicOrigin: origin, ownerKey: env.T3_CLOUD_OWNER_KEY,
-    ownerId: env.T3_CLOUD_OWNER_ID, allocatorToken, connections, ...runtime });
+  let runtime, connections, server;
   const children = [];
   const sockets = new Set();
-  server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});
   let stopping = false;
   async function close() {
     if (stopping) return; stopping = true;
     for (const socket of sockets) socket.destroy();
-    server.closeAllConnections(); server.close(); connections.close();
+    server?.closeAllConnections(); server?.close(); connections?.close();
     for (const child of children) child.kill('SIGTERM');
     await runtime?.close?.();
   }
+  try {
+    if (role === 'central') {
+      const factory = centralRuntime ?? (await import('./central-runtime.mjs')).createCentralRuntime;
+      runtime = await factory(env);
+    }
+    connections = nativeConnections(env);
+    server = createCloudManager({ role, publicOrigin: origin, ownerKey: env.T3_CLOUD_OWNER_KEY,
+      ownerId: env.T3_CLOUD_OWNER_ID, allocatorToken, connections, ...runtime });
+    server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});
   const nativeEnv = { ...env, T3_CLOUD_ROLE: role };
   for (const key of Object.keys(nativeEnv)) if (key.startsWith('T3_CLOUD_')) delete nativeEnv[key];
   nativeEnv.T3_CLOUD_ROLE = role;
@@ -47,7 +47,6 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
     child.once('error',()=>{process.exitCode=1;void close();});
     child.once('exit',()=>{if(!stopping){process.exitCode=1;void close();}});
   }
-  try {
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,env.T3_HOST ?? '0.0.0.0',resolve);});
     launch('/opt/t3/t3',['serve','--host','127.0.0.1','--port','3773','--base-dir',env.T3_STATE,'--no-browser',env.T3_CWD],nativeEnv);
     const terminalEnv={...env};delete terminalEnv.T3_CLOUD_OWNER_KEY;delete terminalEnv.T3_CLOUD_ALLOCATOR_TOKEN;

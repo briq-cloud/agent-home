@@ -12,8 +12,10 @@ out of URLs. The public `PORT` defaults to 8080. Native T3 and ttyd bind loopbac
 expiry. Pairing responses are private and must not be recorded or stored in browser storage.
 
 The default product role is `central`; it additionally requires a stable `T3_CLOUD_OWNER_ID` and the real broker
-composition in `central-runtime.mjs`. The manager calls that same broker for Codex account
-operations. It does not start another Codex app server. Native T3's authenticated allocation RPC
+composition in `central-runtime.mjs`, an absolute `T3_CLOUD_STATE` directory, and a digest-pinned
+`T3_CLOUD_CHILD_IMAGE`. The manager calls that same broker for Codex account
+operations. Codex uses native device-code sign-in in that single app server; the owner opens
+the verification URL and enters the displayed code. It does not start another Codex app server. Native T3's authenticated allocation RPC
 calls the local allocation route using a dedicated process-private token, which authorizes no
 other management operation. The owner identity comes from server configuration. Allocation
 failure must never fall back to executing a central thread locally. The central runtime and
@@ -29,6 +31,6 @@ its sign-in URL, device code, and state. The person approves in their own browse
 from vendor status commands; no token files are read. The vendor helper is a narrow extraction
 of the existing Agent Home sign-in/status code, without its application or routing runtime.
 
-Run the bounded manager contract tests with `node --test --test-timeout=10000 t3-cloud/manager.test.mjs`.
+Run the bounded manager contract tests with `node --test --test-timeout=20000 t3-cloud/manager.test.mjs`.
 They use fake adapters and real loopback HTTP/WebSocket services; they do not qualify the broker,
 a provider login, the image, or cloud allocation.

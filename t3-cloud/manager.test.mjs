@@ -17,7 +17,7 @@ async function fixture(t) {
   const allocations = [], rpc=[];
   const manager = createCloudManager({role:'central',publicOrigin:origin,ownerKey:key,ownerId:'owner-1',allocatorToken:allocationKey,connections,
     allocator:{async allocate(owner,thread){allocations.push([owner,thread]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
-    broker:{async ownerRequest(method,params){rpc.push([method,params]); return {account:null};}},
+    broker:{async ownerRequest(method,params){rpc.push([method,params]); return method==='account/login/start'?{type:'chatgptDeviceCode',loginId:'native-login',userCode:'TEST-CODE',verificationUrl:'https://auth.example/device',accessToken:'never-export'}:{account:null};}},
     t3Target:`http://127.0.0.1:${upstream.address().port}`,terminalTarget:`http://127.0.0.1:${upstream.address().port}`});
   manager.listen(0,'127.0.0.1');await once(manager,'listening');
   t.after(()=>{manager.closeAllConnections();manager.close();upstream.closeAllConnections();upstream.close();});
@@ -49,5 +49,15 @@ test('terminal requires owner authentication and native WS proxies handshake plu
  const socket=connect(f.manager.address().port,'127.0.0.1');t.after(()=>socket.destroy());await once(socket,'connect');
  socket.write('GET /native-ws HTTP/1.1\r\nHost: evil.example\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nAuthorization: Bearer native-token\r\nCookie: native=yes; t3_cloud_owner=secret\r\n\r\n');
  let data='';await new Promise((resolve,reject)=>{socket.on('error',reject);socket.on('data',chunk=>{data+=chunk;if(data.includes('\r\n\r\n'))resolve();});});assert.match(data,/101 Switching/);
+ await new Promise(resolve=>setTimeout(resolve,10100)); assert.equal(socket.destroyed,false);
  const payload=Buffer.from([0x81,0x02,0x68,0x69]);const result=once(socket,'data');socket.write(payload);assert.deepEqual((await result)[0],payload);assert.equal(f.seen[0].authorization,'Bearer native-token');assert.equal(f.seen[0].cookie,'native=yes');
+});
+
+test('Codex owner login uses one native device-code flow and projects only device metadata',async t=>{
+ const f=await fixture(t);
+ const r=await f.post('/_cloud/codex/login',{}, {authorization:`Bearer ${key}`});
+ assert.equal(r.status,200);
+ assert.deepEqual(f.rpc,[['account/login/start',{type:'chatgptDeviceCode'}]]);
+ assert.deepEqual(JSON.parse(r.text),{type:'chatgptDeviceCode',loginId:'native-login',verificationUrl:'https://auth.example/device',userCode:'TEST-CODE'});
+ assert.equal(r.text.includes('never-export'),false);
 });

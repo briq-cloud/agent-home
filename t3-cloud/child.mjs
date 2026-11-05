@@ -2,7 +2,7 @@ import { childFrontdoor } from './child-frontdoor.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 
-export async function startChild(sourceEnv = process.env, { spawnProcess = spawn, checkVersion = spawnSync, root = '/work' } = {}) {
+export async function startChild(sourceEnv = process.env, { spawnProcess = spawn, checkVersion = spawnSync, root = '/work', listen = { port: 8080, host: '0.0.0.0' } } = {}) {
 const envInput = sourceEnv;
 const state = `${root}/.t3`; const codexHome = `${root}/.codex-empty`;
 const binding = envInput.T3_CLOUD_BINDING_ID; const threadId = envInput.T3_CLOUD_THREAD_ID;
@@ -39,7 +39,8 @@ for (const [command, args, environment] of [
   const child = spawnProcess(command, args, { cwd: root, env: environment, stdio: ['ignore', 'ignore', 'ignore'] });
   children.push(child); child.once('error', () => shutdown(1)); child.once('exit', () => shutdown(shuttingDown ? process.exitCode ?? 0 : 1));
 }
-await new Promise((resolve, reject) => { frontdoor.server.once('error', reject); frontdoor.server.listen(8080, '0.0.0.0', resolve); }).catch(error => { shutdown(1); throw error; });
+await new Promise((resolve, reject) => { frontdoor.server.once('error', reject); frontdoor.server.listen(listen, resolve); }).catch(error => { shutdown(1); throw error; });
+if (shuttingDown) { await frontdoor.close(); throw Error('Child runtime exited during startup'); }
 return { close: () => shutdown(0), children };
 }
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

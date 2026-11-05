@@ -37,6 +37,7 @@ export function cloudProxy({ target, publicOrigin, ownerBearer, terminal = false
       const pending = request({ hostname: '127.0.0.1', port, method: req.method, path: req.url, headers: headers(req) });
       pending.setTimeout(10000, () => pending.destroy());
       pending.once('upgrade', (reply, upstream, upstreamHead) => {
+        pending.setTimeout(0); upstream.setTimeout(0); socket.setTimeout(0);
         const lines = [`HTTP/1.1 ${reply.statusCode} ${reply.statusMessage}`];
         for (const [name, value] of Object.entries(reply.headers)) {
           if (value === undefined) continue;
