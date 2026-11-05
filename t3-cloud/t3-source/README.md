@@ -35,6 +35,15 @@ also covers imports and internal event writers (`orchestration-v2/EventStore.ts`
 `EventSink.ts`, `project/AgentSessionImporter.ts`). Native files, git, terminals
 and checkpoints remain in the child environment.
 
-This is an integration candidate. Release requires focused code/security review,
+The source integration candidate additionally implements durable root intent reservation,
+result persistence and adoption tied to the first committed native start event. Its startup
+recovery keeps the original run, attempt and provider turn, uses a read-only receipt when an
+outcome or committed start is known, and reconciles canonical history after adoption. Pending
+and denied receipts remain parked. The checked-in patch and its recorded hash have not yet
+been refreshed with that candidate; the packaged patch currently provides the allocation and
+role gates described above.
+
+This is an integration candidate with no native subprocess, cloud, or restart/recovery
+qualification. Release requires focused code/security review,
 image CI, and an actual native client check against the composed allocator,
 bridge and child runtime. Unit checks alone do not establish that conformance.

@@ -55,8 +55,10 @@ jobs:
           npm run mock
           BENCH_SUITE=medium npm run mock
 
-      - name: Check T3 bootstrap and release resolution
-        run: node --test t3-cloud/prepare.test.mjs bin/resolve-gh-release.test.mjs
+      - name: Check T3 runtime, bootstrap and release resolution
+        run: |
+          npm ci --prefix t3-cloud --omit=dev --ignore-scripts --no-fund --no-audit
+          node --test t3-cloud/*.test.mjs bin/resolve-gh-release.test.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -185,22 +187,43 @@ jobs:
           docker exec agent-home-smoke sh -c 'test ! -e /opt/t3 && test -e /opt/agent-home-runner'
           docker exec agent-home-smoke sh -c 'test "$(codex --version)" = "codex-cli $(cat /etc/agent-home/codex-version)"'
 
-      - name: Native T3 startup smoke test
+      # Empty central state initializes the actual pinned local app-server. Network isolation
+      # excludes cloud allocation and login; this smoke does not qualify turns or recovery.
+      - name: Offline central T3 startup smoke test
         run: |
           set -eu
-          docker run -d --name t3-cloud-smoke "$T3_IMAGE:${{ steps.date.outputs.tag }}"
-          trap 'docker rm -f t3-cloud-smoke > /dev/null' EXIT
+          smoke_env="$(mktemp)"
+          t3_smoke_id=
+          trap 'if [ -n "$t3_smoke_id" ]; then docker rm -fv "$t3_smoke_id" > /dev/null 2>&1 || true; fi; rm -f "$smoke_env"' EXIT
+          node --input-type=module - "$smoke_env" <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import { randomBytes } from 'node:crypto';
+          writeFileSync(process.argv[2], [
+            `T3_CLOUD_OWNER_KEY=${randomBytes(32).toString('base64url')}`,
+            `T3_CLOUD_EDGE_TOKEN=${randomBytes(32).toString('base64url')}`,
+            'T3_CLOUD_OWNER_ID=ci-smoke-owner',
+            'T3_CLOUD_STATE=/work/.t3-cloud',
+            'T3_CLOUD_PUBLIC_ORIGIN=https://t3-smoke.invalid',
+            `T3_CLOUD_CHILD_IMAGE=ghcr.io/briq-cloud/t3-cloud@sha256:${'0'.repeat(64)}`,
+            'BRIQ_API_URL=http://127.0.0.1:9',
+            'BRIQ_MCP_URL=https://127.0.0.1:9/mcp',
+            '',
+          ].join('\n'), { mode: 0o600 });
+          NODE
+          # Generated credentials stay in the private env file; never print or inspect it.
+          t3_smoke_id="$(docker run -d --network none --env-file "$smoke_env" --name t3-cloud-smoke "$T3_IMAGE:${{ steps.date.outputs.tag }}")"
           for n in $(seq 1 30); do
-            docker exec t3-cloud-smoke node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
+            docker exec "$t3_smoke_id" node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
             sleep 1
           done
-          docker exec t3-cloud-smoke node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-          docker exec t3-cloud-smoke sh -c 'test ! -e /opt/agent-home-runner && test ! -e /opt/dsh && test ! -e /usr/local/bin/briq-agent-acp'
-          docker exec t3-cloud-smoke node -e 'const assert=require("node:assert/strict"),fs=require("node:fs"),cp=require("node:child_process"),version=require("/opt/t3/source.json").codex;assert.equal(cp.execFileSync("codex",["--version"],{encoding:"utf8"}).trim(),`codex-cli ${version}`);assert.equal(fs.readFileSync("/etc/agent-home/codex-version","utf8").trim(),version)'
+          docker exec "$t3_smoke_id" node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          docker exec "$t3_smoke_id" node -e 'const assert=require("node:assert/strict");fetch("http://127.0.0.1:8080/_cloud/capabilities").then(async r=>{assert.equal(r.status,200);assert.deepEqual(await r.json(),{role:"central"})}).catch(()=>process.exit(1))'
+          docker exec "$t3_smoke_id" sh -c 'test -x /bin/bash && test -d /work/.t3-cloud/central.lock && test ! -e /opt/agent-home-runner && test ! -e /opt/dsh && test ! -e /usr/local/bin/briq-agent-acp'
+          docker exec "$t3_smoke_id" node -e 'const assert=require("node:assert/strict"),fs=require("node:fs"),cp=require("node:child_process"),version=require("/opt/t3/source.json").codex;assert.equal(cp.execFileSync("codex",["--version"],{encoding:"utf8"}).trim(),`codex-cli ${version}`);assert.equal(fs.readFileSync("/etc/agent-home/codex-version","utf8").trim(),version);assert.equal(cp.execFileSync("/opt/t3-cloud/bin/codex-remote",["--version"],{encoding:"utf8"}).trim(),`codex-cli ${version}`);assert.equal(process.versions.node,require("/opt/t3/source.json").node);assert.equal(require("/opt/t3-cloud/node_modules/ws/package.json").version,"8.22.0")'
           # Uses the actual image-pinned native CLIs, without credentials or model calls.
           # A second bootstrap must preserve the definitions accepted during native startup.
-          docker exec t3-cloud-smoke t3-cloud-start true
-          docker exec t3-cloud-smoke node -e 'const fs=require("node:fs"),assert=require("node:assert/strict");assert.match(fs.readFileSync("/work/.logins/codex/config.toml","utf8"),/bearer_token_env_var = "BRIQ_MCP_TOKEN"/);assert.equal(JSON.parse(fs.readFileSync("/work/.logins/claude/.claude.json","utf8")).mcpServers.briq.headers.Authorization,"Bearer \u0024{BRIQ_MCP_TOKEN}");assert.ok(fs.existsSync("/work/.t3/home/.agents/skills/briq/SKILL.md"));assert.ok(fs.existsSync("/work/.logins/claude/skills/briq/SKILL.md"))'
+          docker exec "$t3_smoke_id" t3-cloud-start true
+          docker exec "$t3_smoke_id" node -e 'const fs=require("node:fs"),assert=require("node:assert/strict");assert.match(fs.readFileSync("/work/.logins/codex/config.toml","utf8"),/bearer_token_env_var = "BRIQ_MCP_TOKEN"/);assert.equal(JSON.parse(fs.readFileSync("/work/.logins/claude/.claude.json","utf8")).mcpServers.briq.headers.Authorization,"Bearer \u0024{BRIQ_MCP_TOKEN}");assert.ok(fs.existsSync("/work/.t3/home/.agents/skills/briq/SKILL.md"));assert.ok(fs.existsSync("/work/.logins/claude/skills/briq/SKILL.md"))'
 
       - name: Publish the checked image
         id: publish

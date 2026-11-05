@@ -5,6 +5,7 @@
 !runner/skills/**
 !t3-cloud/skills/**
 runner/node_modules
+t3-cloud/node_modules
 
 benchmarks
 

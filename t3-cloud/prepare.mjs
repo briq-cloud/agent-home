@@ -23,7 +23,8 @@ export function prepare(env = process.env, run = spawnSync) {
     throw Error('Briq MCP requires an HTTPS endpoint without credentials, query or fragment');
   // Native commands own their config schema and preserve any existing Briq definition.
   // No model requests, sign-in probes, credential reads, or token literals are needed.
-  const invoke = (command, args, inspect = false) => run(command, args, { env,
+  const nativeEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.toUpperCase().startsWith('T3_CLOUD_')));
+  const invoke = (command, args, inspect = false) => run(command, args, { env: nativeEnv,
     stdio: inspect ? ['ignore', 'pipe', 'pipe'] : 'ignore', encoding: 'utf8', maxBuffer: 65536, timeout: 15000 });
   const absent = {
     codex: "Error: No MCP server named 'briq' found.",

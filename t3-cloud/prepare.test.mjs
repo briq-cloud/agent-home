@@ -17,10 +17,14 @@ function fixture(t) {
 }
 
 test('native configs reference credentials without serializing them; skills use native directories', t => {
-  const env = { ...fixture(t), BRIQ_MCP_TOKEN: 'private-test-value' };
+  const env = { ...fixture(t), BRIQ_MCP_TOKEN: 'private-test-value', T3_CLOUD_EDGE_TOKEN: 'edge-must-not-inherit',
+    T3_CLOUD_OWNER_KEY: 'owner-must-not-inherit', T3_CLOUD_ALLOCATOR_TOKEN: 'allocator-must-not-inherit',
+    T3_CLOUD_BRIDGE_TOKEN: 'bridge-must-not-inherit', t3_cloud_edge_token: 'mixed-case-must-not-inherit' };
   const calls = [];
   prepare(env, (command, args, options) => {
     calls.push({ command, args });
+    assert.deepEqual(Object.keys(options.env).filter(key => key.toUpperCase().startsWith('T3_CLOUD_')), []);
+    assert.equal(options.env.BRIQ_MCP_TOKEN, env.BRIQ_MCP_TOKEN);
     assert.equal(options.stdio === 'ignore' || Array.isArray(options.stdio), true);
     return args[1] === 'get' ? missing(command) : { status: 0 };
   });

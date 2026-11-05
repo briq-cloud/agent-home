@@ -175,6 +175,14 @@ RUN test "$(cat /etc/agent-home/codex-version)" = "$(node -p 'require("/opt/t3/s
   && printf 'T3 Code source\t2359643cffa6ba9ee84d6f2694b935de54a8013e\tpinned source, lock and local patch\n' >> /etc/agent-home/downloads
 
 COPY t3-cloud /opt/t3-cloud
+# Use the same pinned Node for the manager, child and scoped transport shim.
+# The runtime imports native TypeScript modules and requires bash for child execution.
+RUN ln -sf /opt/t3/node /usr/local/bin/node \
+  && test "$(node --version)" = "v$(node -p 'require("/opt/t3/source.json").node')" \
+  && test -x /bin/bash \
+  && cd /opt/t3-cloud \
+  && npm ci --omit=dev --ignore-scripts --no-fund --no-audit \
+  && npm cache clean --force
 COPY bin/t3-cloud-start /usr/local/bin/t3-cloud-start
 RUN chmod 755 /usr/local/bin/t3-cloud-start
 EXPOSE 8080
