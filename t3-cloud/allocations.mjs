@@ -3,6 +3,11 @@ import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypt
 import { join } from 'node:path';
 
 export const digest = value => createHash('sha256').update(value).digest('hex');
+export function canonicalJson(value) {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
 export function equalSecret(value, expected) {
   return typeof value === 'string' && typeof expected === 'string' && value.length > 0 &&
     timingSafeEqual(Buffer.from(digest(value)), Buffer.from(digest(expected)));
@@ -24,12 +29,33 @@ export class AllocationStore {
   }
   async save(binding) {
     const path = join(this.directory, `${identifier(binding.threadId)}.json`);
+    await this.atomicWrite(path, binding, this.directory);
+  }
+  async atomicWrite(path, value, parent) {
     const temporary = `${path}.${randomUUID()}.tmp`;
     const handle = await open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(JSON.stringify(binding)); await handle.sync(); } finally { await handle.close(); }
+    try { await handle.writeFile(JSON.stringify(value)); await handle.sync(); } finally { await handle.close(); }
     await rename(temporary, path);
-    const directory = await open(this.directory, 'r');
+    const directory = await open(parent, 'r');
     try { await directory.sync(); } finally { await directory.close(); }
+  }
+  async loadOperation(threadId, key) {
+    try { return JSON.parse(await readFile(join(this.directory, 'operations', identifier(threadId), `${identifier(key)}.json`), 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
+  async saveOperation(threadId, operation) {
+    const directory = join(this.directory, 'operations', identifier(threadId));
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await this.atomicWrite(join(directory, `${identifier(operation.key)}.json`), operation, directory);
+    for (const path of [join(this.directory, 'operations'), this.directory]) {
+      const parent = await open(path, 'r'); try { await parent.sync(); } finally { await parent.close(); }
+    }
+  }
+  async listOperations(threadId) {
+    let names;
+    try { names = await readdir(join(this.directory, 'operations', identifier(threadId))); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+    return Promise.all(names.filter(name => /^[a-zA-Z0-9_-]+\.json$/.test(name)).map(name => this.loadOperation(threadId, name.slice(0, -5))));
   }
   async mutationMarkers(threadId) {
     try { return await readdir(join(this.directory, 'pending-mutations', identifier(threadId))); }

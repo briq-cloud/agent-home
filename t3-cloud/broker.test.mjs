@@ -38,6 +38,76 @@ test('forces the allocated execution environment and persists native thread iden
   assert.equal(f.calls.length, 1);
   assert.ok(f.received.at(-1).error);
 });
+const scoped = (id, key, method, params) => ({ id, method: 'briq/operation/execute', params: { version: 1, threadId: 'a', key, method, params } });
+test('replays a durable scoped result after disconnect and broker restart without another native create', async t => {
+  const f = await fixture(t);
+  let resolveNative; let dispatched;
+  const started = new Promise(resolve => { dispatched = resolve; });
+  f.responses.set('thread/start', params => new Promise(resolve => { resolveNative = () => resolve({ thread: { id: 'native-a', environments: params.environments } }); dispatched(); }));
+  const request = scoped(1, 'thread-intent-a', 'thread/start', { model: 'mock' });
+  const pending = f.session.receive(request); await started; f.session.close(); resolveNative(); await pending;
+  assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'completed');
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' });
+  await session.receive({ ...request, id: 2 });
+  assert.equal(replies.at(-1).result.result.thread.id, 'native-a');
+  assert.equal(f.calls.filter(call => call.method === 'thread/start').length, 1);
+  await session.receive(scoped(3, 'thread-intent-a', 'thread/start', { model: 'changed' }));
+  assert.ok(replies.at(-1).error);
+  assert.equal(f.calls.filter(call => call.method === 'thread/start').length, 1);
+});
+test('retains scoped unknown outcomes and rejects native replay', async t => {
+  const f = await fixture(t); f.responses.set('thread/start', () => { throw Error('unknown native outcome'); });
+  const request = scoped(1, 'thread-intent-a', 'thread/start', {});
+  await f.session.receive(request); await f.session.receive({ ...request, id: 2 });
+  assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'uncertain');
+  assert.equal(f.calls.length, 1); assert.ok(f.received.at(-1).error);
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' }); await session.receive(request);
+  assert.ok(replies.at(-1).error); assert.equal(f.calls.length, 1);
+});
+test('a local send callback followed by disconnect still replays the same scoped receipt', async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'thread-intent-a', 'thread/start', {});
+  await f.session.receive(request);
+  const original = f.received.at(-1).result; f.session.close();
+  const replies = []; const session = await f.broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' }); await session.receive({ ...request, id: 2 });
+  assert.deepEqual(replies.at(-1).result, original);
+  assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'completed');
+  assert.equal(f.calls.length, 1);
+});
+test('requires a correlated adoption receipt before another scoped mutation and keeps adopted replay results', async t => {
+  const f = await fixture(t);
+  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  const request = scoped(1, 'thread-intent-a', 'thread/start', {});
+  await f.session.receive(request);
+  const resultHash = f.received.at(-1).result.resultHash;
+  const next = scoped(2, 'turn-intent-a', 'turn/start', { threadId: 'native-a', input: [{ type: 'text', text: 'hello' }] });
+  await f.session.receive(next); assert.ok(f.received.at(-1).error);
+  const adoption = { key: 'thread-intent-a', resultHash, eventSequence: 10, nativeId: 'native-a' };
+  await f.session.receive({ id: 3, method: 'briq/operation/adopt', params: { ...adoption, nativeId: 'native-b' } });
+  assert.ok(f.received.at(-1).error);
+  assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'completed');
+  await f.session.receive({ id: 4, method: 'briq/operation/adopt', params: adoption });
+  assert.deepEqual(f.received.at(-1).result, {});
+  await f.session.receive(next); assert.ok(f.received.at(-1).result);
+  await f.session.receive({ ...request, id: 5 });
+  assert.equal(f.received.at(-1).result.result.thread.id, 'native-a');
+  assert.equal(f.calls.filter(call => call.method === 'thread/start').length, 1);
+  assert.equal(f.calls.filter(call => call.method === 'turn/start').length, 1);
+  assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'adopted');
+});
+test('serializes duplicate scoped mutations even before a native response exists', async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'thread-intent-a', 'thread/start', {});
+  await Promise.all([f.session.receive(request), f.session.receive({ ...request, id: 2 })]);
+  assert.equal(f.calls.filter(call => call.method === 'thread/start').length, 1);
+  const replies = f.received.filter(message => message.id === 1 || message.id === 2);
+  assert.equal(replies.length, 2); assert.deepEqual(replies[0].result, replies[1].result);
+});
 test('denies config, auth, host execution, override fields, nontext input, and cross-thread requests', async t => {
   const f = await fixture(t);
   for (const [method, params] of [

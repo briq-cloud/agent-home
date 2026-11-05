@@ -27,6 +27,14 @@ T3 adopted the native outcome. Reconnects cannot start or steer another turn whi
 markers remain. Resume history does not clear an unknown outcome. Explicit correlated
 reconciliation is not implemented; normal reconnect and sleep/resume are not release-qualified.
 
+The broker also has a candidate scoped operation protocol. It journals an exact request hash
+before dispatch and saves the native result before attempting transport delivery. The same
+operation can retrieve that saved result across a broker restart; an uncertain operation never
+dispatches again. Its adoption call requires a matching result hash, native identity, and event
+sequence. Native T3 does not yet reserve these intents or send adoption after committing its
+events, and the shim does not yet reconnect using them. This protocol is not a qualified native
+reconnect path. Legacy mutation markers remain quarantined.
+
 The explicit diagnostic mode `T3_CLOUD_ROLE=standalone` has native T3 connections, Claude's native sign-in, Briq's native
 browser sign-in, pairing, and an owner-protected terminal. Central Codex account operations and
 thread allocation are unavailable without the broker. The CLI's sign-in and an MCP capability

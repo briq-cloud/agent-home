@@ -4,7 +4,7 @@ import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { equalSecret } from './allocations.mjs';
+import { equalSecret, canonicalJson, digest, identifier } from './allocations.mjs';
 
 const VERSION = 'codex-cli 0.166.0';
 const CONFIG = 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n[features]\nmulti_agent = false\n';
@@ -61,6 +61,7 @@ const fields = {
 };
 const notifications = new Set(['thread/started', 'thread/closed', 'thread/tokenUsage/updated', 'turn/started', 'turn/completed', 'turn/plan/updated', 'item/started', 'item/completed', 'item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/plan/delta', 'error']);
 const approvalMethods = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
+const mutationMethods = new Set(['thread/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 function error(id, message = 'Operation denied by sandbox binding') { return { id, error: { code: -32600, message } }; }
 function textInput(input) {
   return Array.isArray(input) && input.length <= 64 && input.every(item => item && item.type === 'text' &&
@@ -94,19 +95,24 @@ export class CapabilityBroker {
     return binding;
   }
   async assertMutationAllowed(session) {
+    if ((await this.store.listOperations(session.threadId)).some(operation => operation.state !== 'adopted'))
+      throw Error('Unadopted operation requires explicit reconciliation');
     for (const id of await this.store.mutationMarkers(session.threadId)) {
       const active = this.mutations.get(id);
       if (!active || active.session !== session || active.quarantined || active.session.closed || !active.locallyWritten)
         throw Error('Unadopted mutation requires explicit reconciliation');
     }
   }
-  async beginMutation(session, method) {
+  async beginMutation(session, method, operation) {
     // Internal attempt IDs are not durable client action identities. Markers remain until
     // explicit authoritative adoption; neither native results nor WS writes prove adoption.
-    const mutation = { id: randomUUID(), session, method, quarantined: false, locallyWritten: false };
+    const mutation = { id: randomUUID(), session, method, operation, quarantined: false, locallyWritten: false };
     this.mutations.set(mutation.id, mutation); session.mutations.add(mutation);
     try {
-      await this.store.markMutation(session.threadId, mutation.id, method);
+      if (operation) {
+        operation.record = { ...operation.record, state: 'started' };
+        await this.store.saveOperation(session.threadId, operation.record);
+      } else await this.store.markMutation(session.threadId, mutation.id, method);
       if (session.closed) throw Error('Sandbox disconnected');
       return mutation;
     } catch (error) {
@@ -115,6 +121,12 @@ export class CapabilityBroker {
   }
   async deliverMutation(mutation, message) {
     const { session } = mutation;
+    if (mutation.operation) {
+      const record = { ...mutation.operation.record, state: 'completed', result: message.result, resultHash: digest(canonicalJson(message.result)) };
+      await this.store.saveOperation(session.threadId, record);
+      mutation.operation.record = record;
+      message = { id: message.id, result: { result: record.result, resultHash: record.resultHash } };
+    }
     try {
       if (session.closed || mutation.quarantined) throw Error('Sandbox disconnected');
       if (await session.send(message) === false) throw Error('Sandbox reply undelivered');
@@ -124,11 +136,48 @@ export class CapabilityBroker {
       mutation.locallyWritten = true;
     } catch (error) { mutation.quarantined = true; throw error; }
   }
-  async receive(session, message) {
+  async executeOperation(session, message, binding, locked = false) {
+    const envelope = message.params;
+    if (!session.initialized || !envelope || Object.keys(envelope).sort().join(',') !== 'key,method,params,threadId,version' ||
+      envelope.version !== 1 || envelope.threadId !== binding.threadId || !mutationMethods.has(envelope.method) ||
+      !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw Error('Invalid operation envelope');
+    identifier(envelope.key);
+    if (!locked) return this.store.serialized(`operation-${digest(`${binding.allocationId}:${envelope.key}`)}`, () => this.executeOperation(session, message, binding, true));
+    binding = await this.binding(session);
+    const requestHash = digest(canonicalJson({ allocationId: binding.allocationId, threadId: binding.threadId, method: envelope.method, params: envelope.params }));
+    const stored = await this.store.loadOperation(binding.threadId, envelope.key);
+    if (stored) {
+      if (stored.requestHash !== requestHash || stored.allocationId !== binding.allocationId || !['completed', 'adopted'].includes(stored.state)) throw Error('Operation outcome unknown or payload conflict');
+      return session.send({ id: message.id, result: { result: stored.result, resultHash: stored.resultHash } });
+    }
+    const operation = { record: { version: 1, key: envelope.key, allocationId: binding.allocationId, threadId: binding.threadId,
+      method: envelope.method, params: envelope.params, requestHash } };
+    await this.receive(session, { id: message.id, method: envelope.method, params: envelope.params }, operation);
+  }
+  async adoptOperation(session, message, binding) {
+    const params = message.params;
+    if (!session.initialized || !params || Object.keys(params).sort().join(',') !== 'eventSequence,key,nativeId,resultHash' ||
+      !Number.isSafeInteger(params.eventSequence) || params.eventSequence < 1 || typeof params.nativeId !== 'string') throw Error('Invalid adoption receipt');
+    identifier(params.key);
+    await this.store.serialized(`adopt-${digest(binding.threadId)}`, async () => {
+      binding = await this.binding(session);
+      const record = await this.store.loadOperation(binding.threadId, params.key);
+      const nativeId = record?.result?.thread?.id ?? record?.result?.turn?.id ?? record?.params?.expectedTurnId ?? record?.params?.turnId;
+      if (!record || !['completed', 'adopted'].includes(record.state) || record.allocationId !== binding.allocationId ||
+        record.resultHash !== params.resultHash || !nativeId || nativeId !== params.nativeId) throw Error('Adoption does not match result');
+      if (record.state === 'adopted' && (record.adoption.nativeId !== params.nativeId || record.adoption.resultHash !== params.resultHash)) throw Error('Conflicting adoption');
+      if (record.state !== 'adopted') await this.store.saveOperation(binding.threadId, { ...record, state: 'adopted', adoption: { ...params } });
+    });
+    return session.send({ id: message.id, result: {} });
+  }
+  async receive(session, message, operation) {
     if (!message || typeof message !== 'object' || JSON.stringify(message).length > 2097152) return session.close();
     const id = message.id; let mutation;
     try {
       const binding = await this.binding(session);
+      if (message.method?.startsWith('briq/operation/') && typeof message.id !== 'number' && typeof message.id !== 'string') throw Error('Invalid request identity');
+      if (message.method === 'briq/operation/execute') return await this.executeOperation(session, message, binding);
+      if (message.method === 'briq/operation/adopt') return await this.adoptOperation(session, message, binding);
       if (!message.method && id !== undefined) {
         const approval = this.approvals.get(id);
         if (!approval || approval.session !== session || approval.threadId !== binding.nativeThreadId ||
@@ -160,7 +209,7 @@ export class CapabilityBroker {
         if (!turnId || this.activeTurns.get(binding.nativeThreadId) !== turnId) return session.send(error(id));
         // Cancellation must remain independent of a pending turn/start or read response.
         if (message.method === 'turn/steer') await this.assertMutationAllowed(session);
-        mutation = await this.beginMutation(session, message.method);
+        mutation = await this.beginMutation(session, message.method, operation);
         const result = await this.app.request(message.method, params);
         return await this.deliverMutation(mutation, { id, result });
       }
@@ -171,7 +220,7 @@ export class CapabilityBroker {
         if (message.method === 'thread/start') {
           if (current.nativeThreadId || current.nativeState === 'unknown') throw Error('Native thread already allocated or requires reconciliation');
           await this.assertMutationAllowed(session);
-          mutation = await this.beginMutation(session, message.method);
+          mutation = await this.beginMutation(session, message.method, operation);
           current.nativeState = 'unknown'; await this.store.save(current);
           response = await this.app.request(message.method, { ...params, cwd: '/work', environments: [environment], approvalPolicy: 'on-request', sandbox: 'workspace-write' });
           if (!response.thread?.id || !this.matchesEnvironment(response.thread, current)) throw Error('Native thread environment mismatch');
@@ -180,7 +229,7 @@ export class CapabilityBroker {
           if (message.method === 'turn/start') {
             if (this.activeTurns.has(current.nativeThreadId) || current.turnState === 'unknown') throw Error('Turn already active or outcome unknown');
             await this.assertMutationAllowed(session);
-            mutation = await this.beginMutation(session, message.method);
+            mutation = await this.beginMutation(session, message.method, operation);
             current.turnState = 'unknown'; await this.store.save(current);
           }
           response = await this.app.request(message.method, { ...params, ...(message.method === 'turn/start' ? { environments: [environment] } : {}) });
@@ -198,7 +247,13 @@ export class CapabilityBroker {
       if (mutation) await this.deliverMutation(mutation, { id, result: response });
       else if (!session.closed) await session.send({ id, result: response });
     } catch {
-      if (mutation) { mutation.quarantined = true; this.mutations.delete(mutation.id); session.mutations.delete(mutation); }
+      if (mutation) {
+        mutation.quarantined = true; this.mutations.delete(mutation.id); session.mutations.delete(mutation);
+        if (mutation.operation?.record.state === 'started') {
+          mutation.operation.record = { ...mutation.operation.record, state: 'uncertain' };
+          await this.store.saveOperation(session.threadId, mutation.operation.record);
+        }
+      }
       if (!session.closed) await session.send(error(id));
     }
   }
