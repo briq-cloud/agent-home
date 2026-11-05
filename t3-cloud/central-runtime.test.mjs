@@ -28,6 +28,12 @@ test('startup failure closes owned app-server and releases lock after exit',asyn
  await assert.rejects(createCentralRuntime({...f.env,T3_CLOUD_CHILD_IMAGE:'unpinned'},f.deps),/digest/);
  assert.equal(f.closed(),1);await assert.rejects(stat(join(f.directory,'central.lock')),{code:'ENOENT'});
 });
+test('composition projects only the explicit MCP capability into the actual executing CLI under the owner lock',async t=>{
+ const f=await fixture(t);let options;
+ const env={...f.env,BRIQ_MCP_TOKEN:'explicit-test-grant',BRIQ_API_URL:'https://api.example/v1',BRIQ_API_KEY:'not-an-mcp-grant',OPENAI_API_KEY:'not-forwarded',HOME:'/native-owner-home'};
+ const runtime=await createCentralRuntime(env,{...f.deps,startAppServer:async value=>{await stat(join(f.directory,'central.lock/owner.json'));options=value;return f.app;}});f.runtimes.push(runtime);
+ assert.deepEqual(options,{binary:'codex',home:join(f.directory,'codex'),briqEndpoint:'https://api.example/mcp',briqCapability:{BRIQ_MCP_TOKEN:'explicit-test-grant'}});
+});
 test('restart restores remote registration then verifies sticky native thread before serving',async t=>{
  const f=await fixture(t);const store=new AllocationStore(join(f.directory,'allocations'));await store.initialize();
  await store.save({edgeTokenHash:digest(f.env.T3_CLOUD_EDGE_TOKEN),state:'ready',threadId:'t3',allocationId:'allocation',nativeThreadId:'native',execEnvironmentId:'exec',execUrl:'wss://child.example/_cloud/exec',execToken:'capability'});

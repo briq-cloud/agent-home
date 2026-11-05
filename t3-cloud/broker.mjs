@@ -2,23 +2,18 @@ import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { equalSecret, canonicalJson, digest, identifier } from './allocations.mjs';
+import { prepareExecutingCodex } from './codex-config.mjs';
+import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
 const VERSION = 'codex-cli 0.166.0';
-const CONFIG = 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n[features]\nmulti_agent = false\n';
-export async function startAppServer({ binary = 'codex', home, path = '/usr/local/bin:/usr/bin:/bin' }) {
-  await mkdir(home, { recursive: true, mode: 0o700 });
-  for (const [name, content] of [['config.toml', CONFIG], ['environments.toml', 'default = "none"\ninclude_local = false\n']]) {
-    const file = join(home, name);
-    try { await writeFile(file, content, { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; if (await readFile(file, 'utf8') !== content) throw Error('Managed Codex configuration changed'); }
-  }
-  const env = { HOME: home, CODEX_HOME: home, PATH: path, LANG: 'C.UTF-8', TMPDIR: '/tmp' };
-  const version = spawnSync(binary, ['--version'], { env, encoding: 'utf8', timeout: 15000 });
+export async function startAppServer({ binary = 'codex', home, path = '/usr/local/bin:/usr/bin:/bin', briqCapability, briqEndpoint },
+  { checkVersion = spawnSync, spawnProcess = spawn } = {}) {
+  const briq = await prepareExecutingCodex({ home, capability: briqCapability, endpoint: briqEndpoint });
+  const env = { HOME: home, CODEX_HOME: home, PATH: path, LANG: 'C.UTF-8', TMPDIR: '/tmp', ...briq.env };
+  const version = checkVersion(binary, ['--version'], { env: withoutExecutingMcpEnvironment(env), encoding: 'utf8', timeout: 15000 });
   if (version.status !== 0 || version.stdout.trim() !== VERSION) throw Error('Codex 0.166.0 required');
-  const child = spawn(binary, ['app-server'], { env, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawnProcess(binary, ['app-server'], { env, cwd: home, stdio: ['pipe', 'pipe', 'pipe'] });
   const events = new EventEmitter(); const pending = new Map(); let sequence = 0;
   // Native diagnostics stay out of HTTP/WebSocket responses and never echo credential-bearing messages.
   child.stderr.resume();
@@ -48,7 +43,7 @@ export async function startAppServer({ binary = 'codex', home, path = '/usr/loca
   let initialized;
   try { initialized = await request('initialize', { clientInfo: { name: 'briq_t3_cloud', version: '0.1.0' }, capabilities: { experimentalApi: true } }); } catch (error) { fail(); await close(); throw error; }
   notify({ method: 'initialized' });
-  return { request, notify, events, initialized, pid: child.pid, close };
+  return { request, notify, events, initialized, pid: child.pid, close, briqMcp: briq.status };
 }
 const fields = {
   'thread/start': ['model', 'cwd', 'approvalPolicy', 'sandbox'],

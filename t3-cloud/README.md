@@ -49,6 +49,22 @@ browser sign-in, pairing, and an owner-protected terminal. Central Codex account
 thread allocation are unavailable without the broker. The CLI's sign-in and an MCP capability
 are separate: a configured MCP token is reported as unverified, never as CLI authentication.
 
+The executing central Codex app server uses its own managed `T3_CLOUD_STATE/codex` home.
+It installs the packaged Briq skill under that home's `.agents/skills` and configures native
+HTTP MCP only when the operator explicitly provisions `BRIQ_MCP_TOKEN`. The config records
+the `BRIQ_MCP_TOKEN` environment variable name; the token is passed only to that native process.
+`BRIQ_MCP_URL` selects the HTTPS endpoint, or `/mcp` is derived from `BRIQ_API_URL`
+(default `https://api.briq.cloud`). Credentials, query strings and fragments are rejected.
+No grant leaves central startup available with MCP unconfigured. Provisioning is unverified
+until a real native MCP connection succeeds; CLI login does not provision this grant.
+No owner environment, API key, vendor credential file or CLI credential is copied into this home.
+The native shell environment policy explicitly excludes `BRIQ_MCP_TOKEN` and enables the
+default secret-name exclusions. A native fake-marker remote-execution check remains required
+to qualify the exclusion in the composed app server; source configuration alone is not proof.
+Under the central startup lock, the exact previous managed config can migrate atomically to
+the versioned config; unknown edits, environment policy changes and skill collisions stop startup.
+The executing-home configuration is a source candidate pending focused checks and native proof.
+
 Vendor sign-in runs the installed CLI, preserves its existing credential home, and exposes only
 its sign-in URL, device code, and state. The person approves in their own browser. Status comes
 from vendor status commands; no token files are read. The vendor helper is a narrow extraction

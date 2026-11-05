@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { AllocationStore, ThreadAllocator } from './allocations.mjs';
 import { BriqCloud } from './briq-cloud.mjs';
 import { startAppServer, CapabilityBroker } from './broker.mjs';
+import { briqMcpCapability, briqMcpEndpoint } from './briq-native.mjs';
 
 // A single refresh owner. A stale lock needs explicit operator reconciliation;
 // an uncertain process lifetime never licenses a second app-server.
@@ -28,7 +29,8 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     try { await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); } finally { await handle.close(); }
     const store = new AllocationStore(join(directory, 'allocations')); await store.initialize();
     for (const binding of await store.list()) if (binding.state !== 'revoked') requireEdgeBinding(binding, edgeCredential);
-    app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex') });
+    app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex'),
+      briqCapability: briqMcpCapability(env), briqEndpoint: briqMcpEndpoint(env) });
     const broker = new CapabilityBroker({ store, app });
     // Re-register persisted execution capabilities and verify sticky selections before serving.
     for (const binding of await store.list()) {

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { createCloudManager } from './manager.mjs';
 import { nativeConnections } from './native-connections.mjs';
 import { publicOrigin, createOwnerAuth } from './cloud-auth.mjs';
+import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
 // One public listener. Both native processes bind loopback and are supervised here.
 export async function startManager(env = process.env, { centralRuntime, spawnProcess = spawn } = {}) {
@@ -32,11 +33,11 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
       const factory = centralRuntime ?? (await import('./central-runtime.mjs')).createCentralRuntime;
       runtime = await factory(env);
     }
-    connections = nativeConnections(withoutEdgeEnvironment(env));
+    connections = nativeConnections(env);
     server = createCloudManager({ role, publicOrigin: origin, ownerKey: env.T3_CLOUD_OWNER_KEY,
       ownerId: env.T3_CLOUD_OWNER_ID, allocatorToken, connections, ...runtime });
     server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});
-  const nativeEnv = { ...env, T3_CLOUD_ROLE: role };
+  const nativeEnv = { ...withoutExecutingMcpEnvironment(env), T3_CLOUD_ROLE: role };
   for (const key of Object.keys(nativeEnv)) if (key.startsWith('T3_CLOUD_')) delete nativeEnv[key];
   nativeEnv.T3_CLOUD_ROLE = role;
   if (role === 'central') {
@@ -51,7 +52,7 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
   }
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,env.T3_HOST ?? '0.0.0.0',resolve);});
     launch('/opt/t3/t3',['serve','--host','127.0.0.1','--port','3773','--base-dir',env.T3_STATE,'--no-browser',env.T3_CWD],nativeEnv);
-    const terminalEnv=withoutEdgeEnvironment(env);delete terminalEnv.T3_CLOUD_OWNER_KEY;delete terminalEnv.T3_CLOUD_ALLOCATOR_TOKEN;
+    const terminalEnv=withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env));delete terminalEnv.T3_CLOUD_OWNER_KEY;delete terminalEnv.T3_CLOUD_ALLOCATOR_TOKEN;
     launch('ttyd',['--interface','127.0.0.1','--port','7681','--base-path','/_cloud/terminal','--writable','tmux','new-session','-A','-s','t3-cloud'],terminalEnv);
     return {server,close};
   } catch(error) {await close();throw error;}

@@ -3,10 +3,11 @@ import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { digest } from './allocations.mjs';
+import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
-export function cli(args, { env = process.env, stdin, timeout = 120000 } = {}) {
+export function cli(args, { env = process.env, stdin, timeout = 120000 } = {}, spawnProcess = spawn) {
   return new Promise((resolve, reject) => {
-    const process = spawn('briq', ['--json', ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const process = spawnProcess('briq', ['--json', ...args], { env: withoutExecutingMcpEnvironment(env), stdio: ['pipe', 'pipe', 'pipe'] });
     let output = ''; let bytes = 0; let failed = false;
     const timer = setTimeout(() => { failed = true; process.kill('SIGTERM'); }, timeout);
     process.on('error', () => { failed = true; });
@@ -23,7 +24,7 @@ function endpoint(value) {
   return url.origin;
 }
 export class BriqCloud {
-  constructor({ directory, run = cli, env = process.env }) { Object.assign(this, { directory, run, env: withoutEdgeEnvironment(env) }); }
+  constructor({ directory, run = cli, env = process.env }) { Object.assign(this, { directory, run, env: withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env)) }); }
   async create(binding, { image, bridgeUrl, edgeCredential }) {
     edgeToken(edgeCredential); requireEdgeBinding(binding, edgeCredential);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });

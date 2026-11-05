@@ -24,7 +24,7 @@ test('native configs reference credentials without serializing them; skills use 
   prepare(env, (command, args, options) => {
     calls.push({ command, args });
     assert.deepEqual(Object.keys(options.env).filter(key => key.toUpperCase().startsWith('T3_CLOUD_')), []);
-    assert.equal(options.env.BRIQ_MCP_TOKEN, env.BRIQ_MCP_TOKEN);
+    assert.equal(options.env.BRIQ_MCP_TOKEN, undefined);
     assert.equal(options.stdio === 'ignore' || Array.isArray(options.stdio), true);
     return args[1] === 'get' ? missing(command) : { status: 0 };
   });
