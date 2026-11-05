@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { EventEmitter } from 'node:events';
@@ -68,7 +69,7 @@ function textInput(input) {
 }
 export class CapabilityBroker {
   constructor({ store, app }) {
-    Object.assign(this, { store, app }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false;
+    Object.assign(this, { store, app }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map();
     app.events.on('message', message => { this.deliver(message).catch(() => {}); });
     app.events.on('closed', () => { this.unavailable = true; this.registered.clear(); this.approvals.clear(); for (const session of this.sessions) session.close(); });
   }
@@ -82,19 +83,50 @@ export class CapabilityBroker {
     const bindings = await this.store.list();
     const binding = bindings.find(value => value?.state === 'ready' && equalSecret(token, value.bridgeToken));
     if (!binding) throw Error('Invalid sandbox capability');
-    const session = { allocationId: binding.allocationId, threadId: binding.threadId, send, close, initialized: false };
+    const session = { allocationId: binding.allocationId, threadId: binding.threadId, send, close, initialized: false, closed: false, mutations: new Set() };
     this.sessions.add(session);
     return { receive: message => this.receive(session, message), close: () => this.disconnect(session) };
   }
   async binding(session) {
-    if (this.unavailable) throw Error('Central app-server unavailable');
+    if (session.closed || this.unavailable) throw Error('Central app-server unavailable');
     const binding = await this.store.load(session.threadId);
     if (binding?.state !== 'ready' || binding.allocationId !== session.allocationId) throw Error('Allocation revoked');
     return binding;
   }
+  async assertMutationAllowed(session) {
+    for (const id of await this.store.mutationMarkers(session.threadId)) {
+      const active = this.mutations.get(id);
+      if (!active || active.session !== session || active.quarantined || active.session.closed || !active.locallyWritten)
+        throw Error('Unadopted mutation requires explicit reconciliation');
+    }
+  }
+  async beginMutation(session, method) {
+    // Internal attempt IDs are not durable client action identities. Markers remain until
+    // explicit authoritative adoption; neither native results nor WS writes prove adoption.
+    const mutation = { id: randomUUID(), session, method, quarantined: false, locallyWritten: false };
+    this.mutations.set(mutation.id, mutation); session.mutations.add(mutation);
+    try {
+      await this.store.markMutation(session.threadId, mutation.id, method);
+      if (session.closed) throw Error('Sandbox disconnected');
+      return mutation;
+    } catch (error) {
+      mutation.quarantined = true; this.mutations.delete(mutation.id); session.mutations.delete(mutation); throw error;
+    }
+  }
+  async deliverMutation(mutation, message) {
+    const { session } = mutation;
+    try {
+      if (session.closed || mutation.quarantined) throw Error('Sandbox disconnected');
+      if (await session.send(message) === false) throw Error('Sandbox reply undelivered');
+      if (session.closed || mutation.quarantined) throw Error('Sandbox disconnected');
+      // Only allow this live session to continue. Retain the journal and ownership so a
+      // subsequent disconnect, even after this callback, quarantines the unadopted result.
+      mutation.locallyWritten = true;
+    } catch (error) { mutation.quarantined = true; throw error; }
+  }
   async receive(session, message) {
     if (!message || typeof message !== 'object' || JSON.stringify(message).length > 2097152) return session.close();
-    const id = message.id;
+    const id = message.id; let mutation;
     try {
       const binding = await this.binding(session);
       if (!message.method && id !== undefined) {
@@ -127,8 +159,10 @@ export class CapabilityBroker {
         const turnId = params.turnId ?? params.expectedTurnId;
         if (!turnId || this.activeTurns.get(binding.nativeThreadId) !== turnId) return session.send(error(id));
         // Cancellation must remain independent of a pending turn/start or read response.
+        if (message.method === 'turn/steer') await this.assertMutationAllowed(session);
+        mutation = await this.beginMutation(session, message.method);
         const result = await this.app.request(message.method, params);
-        return session.send({ id, result });
+        return await this.deliverMutation(mutation, { id, result });
       }
       let response;
       await this.store.serialized(binding.threadId, async () => {
@@ -136,6 +170,8 @@ export class CapabilityBroker {
         const environment = { environmentId: current.execEnvironmentId, cwd: '/work', runtimeWorkspaceRoots: ['/work'] };
         if (message.method === 'thread/start') {
           if (current.nativeThreadId || current.nativeState === 'unknown') throw Error('Native thread already allocated or requires reconciliation');
+          await this.assertMutationAllowed(session);
+          mutation = await this.beginMutation(session, message.method);
           current.nativeState = 'unknown'; await this.store.save(current);
           response = await this.app.request(message.method, { ...params, cwd: '/work', environments: [environment], approvalPolicy: 'on-request', sandbox: 'workspace-write' });
           if (!response.thread?.id || !this.matchesEnvironment(response.thread, current)) throw Error('Native thread environment mismatch');
@@ -143,6 +179,8 @@ export class CapabilityBroker {
         } else {
           if (message.method === 'turn/start') {
             if (this.activeTurns.has(current.nativeThreadId) || current.turnState === 'unknown') throw Error('Turn already active or outcome unknown');
+            await this.assertMutationAllowed(session);
+            mutation = await this.beginMutation(session, message.method);
             current.turnState = 'unknown'; await this.store.save(current);
           }
           response = await this.app.request(message.method, { ...params, ...(message.method === 'turn/start' ? { environments: [environment] } : {}) });
@@ -157,8 +195,12 @@ export class CapabilityBroker {
           }
         }
       });
-      session.send({ id, result: response });
-    } catch { session.send(error(id)); }
+      if (mutation) await this.deliverMutation(mutation, { id, result: response });
+      else if (!session.closed) await session.send({ id, result: response });
+    } catch {
+      if (mutation) { mutation.quarantined = true; this.mutations.delete(mutation.id); session.mutations.delete(mutation); }
+      if (!session.closed) await session.send(error(id));
+    }
   }
   matchesEnvironment(thread, binding) {
     return Array.isArray(thread.environments) && thread.environments.length === 1 &&
@@ -188,12 +230,15 @@ export class CapabilityBroker {
       }
       const id = `approval-${++this.sequence}`;
       this.approvals.set(id, { session: target.session, nativeId: message.id, threadId, turnId: message.params.turnId, environmentId: target.binding.execEnvironmentId });
-      target.session.send({ ...message, id });
+      await target.session.send({ ...message, id });
     } else {
-      if (notifications.has(message.method)) for (const { session } of candidates) session.send(message);
+      if (notifications.has(message.method)) await Promise.allSettled(candidates.map(({ session }) => session.send(message)));
     }
   }
   disconnect(session) {
+    session.closed = true;
+    for (const mutation of session.mutations) { mutation.quarantined = true; this.mutations.delete(mutation.id); }
+    session.mutations.clear();
     this.sessions.delete(session);
     for (const [id, approval] of this.approvals) if (approval.session === session) {
       this.approvals.delete(id); this.app.notify({ id: approval.nativeId, result: { decision: 'cancel' } });

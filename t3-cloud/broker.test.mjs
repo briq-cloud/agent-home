@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { AllocationStore, ThreadAllocator } from './allocations.mjs';
 import { CapabilityBroker } from './broker.mjs';
 
-async function fixture(t) {
+async function fixture(t, { send } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 't3-bindings-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new AllocationStore(directory); await store.initialize();
@@ -23,7 +23,7 @@ async function fixture(t) {
   for (const name of ['a', 'b']) await store.save({ ownerId: 'owner', threadId: name, allocationId: `allocation-${name}`, bridgeToken: `cap-${name}`, execToken: `exec-${name}`,
     execEnvironmentId: `exec-${name}`, execUrl: `wss://exec-${name}.example`, state: 'ready', nativeThreadId: name === 'b' ? 'native-b' : null });
   const received = []; const bReceived = [];
-  const session = await broker.connect('cap-a', message => received.push(message), () => {});
+  const session = await broker.connect('cap-a', message => { received.push(message); return send?.(message); }, () => {});
   const bSession = await broker.connect('cap-b', message => bReceived.push(message), () => {});
   await session.receive({ id: 0, method: 'initialize', params: {} });
   return { store, directory, broker, app, calls, responses, wire, session, bSession, received, bReceived };
@@ -121,4 +121,42 @@ test('approval response revalidates current turn and file approvals bind without
   await f.broker.deliver({ method: 'turn/completed', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
   await f.session.receive({ id, result: { decision: 'accept' } });
   assert.ok(f.received.at(-1).error); assert.equal(f.wire.some(value => value.id === 7 && value.result?.decision === 'accept'), false);
+});
+
+async function reconnect(f) {
+ const received=[];const session=await f.broker.connect('cap-a',value=>received.push(value),()=>{});
+ await session.receive({id:0,method:'initialize'});return {session,received};
+}
+async function prepareCompletedTurn(f) {
+ const binding=await f.store.load('a');binding.nativeThreadId='native-a';await f.store.save(binding);
+ f.responses.set('turn/start',()=>({turn:{id:'completed-turn',status:'completed'}}));
+ f.responses.set('thread/read',()=>({thread:{id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+}
+const turnRequest=id=>({id,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'once'}]}});
+test('disconnect during native mutation retains quarantine after authoritative native response arrives',async t=>{
+ const f=await fixture(t);await prepareCompletedTurn(f);let finish,started;
+ const signal=new Promise(resolve=>{started=resolve;});
+ f.responses.set('turn/start',()=>{started();return new Promise(resolve=>{finish=resolve;});});
+ const pending=f.session.receive(turnRequest(1));await signal;f.session.close();
+ finish({turn:{id:'completed-turn',status:'completed'}});await pending;
+ const other=await reconnect(f);await other.session.receive(turnRequest(2));
+ assert.ok(other.received.at(-1).error);assert.equal(f.calls.filter(value=>value.method==='turn/start').length,1);
+ assert.equal((await f.store.mutationMarkers('a')).length,1);
+});
+test('native result before WS delivery cannot clear disconnect quarantine',async t=>{
+ let attempted,complete;const reached=new Promise(resolve=>{attempted=resolve;});
+ const f=await fixture(t,{send:value=>{if(value.id===1&&value.result){attempted();return new Promise(resolve=>{complete=resolve;});}}});
+ await prepareCompletedTurn(f);const pending=f.session.receive(turnRequest(1));await reached;
+ assert.equal((await f.store.load('a')).nativeTurnId,'completed-turn');
+ f.session.close();complete();await pending;
+ const other=await reconnect(f);await other.session.receive(turnRequest(2));
+ assert.ok(other.received.at(-1).error);assert.equal(f.calls.filter(value=>value.method==='turn/start').length,1);
+ assert.equal((await f.store.mutationMarkers('a')).length,1);
+});
+test('local WS callback permits live-session continuation but never proves durable client adoption',async t=>{
+ const f=await fixture(t);await prepareCompletedTurn(f);
+ await f.session.receive(turnRequest(1));await f.session.receive(turnRequest(2));
+ assert.ok(f.received.at(-1).result);assert.equal((await f.store.mutationMarkers('a')).length,2);
+ f.session.close();const other=await reconnect(f);await other.session.receive(turnRequest(3));
+ assert.ok(other.received.at(-1).error);assert.equal(f.calls.filter(value=>value.method==='turn/start').length,2);
 });

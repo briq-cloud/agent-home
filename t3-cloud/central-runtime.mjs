@@ -36,7 +36,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         if (result.thread?.id !== binding.nativeThreadId || !broker.matchesEnvironment(result.thread, binding)) throw Error('Persisted execution binding mismatch');
         const turn = result.thread.turns?.findLast(value => value.status === 'inProgress');
         if (turn) broker.activeTurns.set(binding.nativeThreadId, turn.id);
-        if (binding.turnState === 'unknown') { binding.turnState = 'bound'; await store.save(binding); }
+        // History alone does not correlate an uncertain client mutation. Keep quarantine.
       }
     }
     const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
@@ -51,12 +51,13 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         const authorization = req.headers.authorization;
         if (typeof authorization !== 'string' || !/^Bearer [a-zA-Z0-9_-]{43}$/.test(authorization)) throw Error('Missing capability');
         let peer;
-        session = await broker.connect(authorization.slice(7), value => {
-          if (peer?.readyState === WebSocket.OPEN) peer.send(JSON.stringify(value));
-        }, () => peer?.close(1008));
+        session = await broker.connect(authorization.slice(7), value => new Promise((resolve, reject) => {
+          if (peer?.readyState !== WebSocket.OPEN) return reject(Error('Sandbox reply transport unavailable'));
+          peer.send(JSON.stringify(value), error => error ? reject(Error('Sandbox reply transport unavailable')) : resolve());
+        }), () => peer?.close(1008));
         websocket.handleUpgrade(req, socket, head, connected => {
           peer = connected; peers.add(peer);
-          peer.on('message', data => { let message; try { message = JSON.parse(data.toString()); } catch { return peer.close(1008); } void session.receive(message); });
+          peer.on('message', data => { let message; try { message = JSON.parse(data.toString()); } catch { return peer.close(1008); } void session.receive(message).catch(() => peer.close(1008)); });
           peer.once('close', () => { peers.delete(peer); session.close(); });
           peer.on('error', () => peer.close());
         });

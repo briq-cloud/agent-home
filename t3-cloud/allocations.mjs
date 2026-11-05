@@ -31,6 +31,20 @@ export class AllocationStore {
     const directory = await open(this.directory, 'r');
     try { await directory.sync(); } finally { await directory.close(); }
   }
+  async mutationMarkers(threadId) {
+    try { return await readdir(join(this.directory, 'pending-mutations', identifier(threadId))); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  }
+  async markMutation(threadId, attemptId, method) {
+    const directory = join(this.directory, 'pending-mutations', identifier(threadId));
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const file = join(directory, identifier(attemptId));
+    const handle = await open(file, 'w', 0o600);
+    try { await handle.writeFile(JSON.stringify({ method })); await handle.sync(); } finally { await handle.close(); }
+    for (const path of [directory, join(this.directory, 'pending-mutations'), this.directory]) {
+      const parent = await open(path, 'r'); try { await parent.sync(); } finally { await parent.close(); }
+    }
+  }
   async serialized(threadId, operation) {
     identifier(threadId);
     const previous = this.active.get(threadId) ?? Promise.resolve();

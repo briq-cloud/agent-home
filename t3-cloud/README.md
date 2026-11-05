@@ -21,6 +21,12 @@ other management operation. The owner identity comes from server configuration. 
 failure must never fall back to executing a central thread locally. The central runtime and
 child image need independent security review and execution qualification before release.
 
+The current replay guard keeps unadopted mutation markers across disconnects and restarts.
+A WebSocket write callback permits the same live session to continue, but does not prove that
+T3 adopted the native outcome. Reconnects cannot start or steer another turn while these
+markers remain. Resume history does not clear an unknown outcome. Explicit correlated
+reconciliation is not implemented; normal reconnect and sleep/resume are not release-qualified.
+
 The explicit diagnostic mode `T3_CLOUD_ROLE=standalone` has native T3 connections, Claude's native sign-in, Briq's native
 browser sign-in, pairing, and an owner-protected terminal. Central Codex account operations and
 thread allocation are unavailable without the broker. The CLI's sign-in and an MCP capability
