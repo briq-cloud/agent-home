@@ -15,6 +15,12 @@ clients use their authenticated native environment connection, then native
 pairing to register the child environment. Allocation failure creates no local
 thread. Unpatched clients cannot create threads on the home.
 
+Home mode allows only native connection/bootstrap and allocation RPCs. HTTP
+access is restricted to native authentication, sidebar database snapshots and
+the packaged UI; workspace, signed asset, upload, guest, device and MCP routes
+are denied before handlers, including previously issued signed URLs. The home
+New thread button works without a home project and requires a write grant.
+
 Home mode denies native provider execution and thread creation. Child mode
 accepts only its allocated user thread and the central Codex bridge; other
 providers, forks and delegated creation are unavailable. The event-store gate

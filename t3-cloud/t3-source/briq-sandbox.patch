@@ -392,7 +392,7 @@ index 5f7df20c..71ad7a74 100644
 +  });
 +});
 diff --git a/apps/server/src/http.ts b/apps/server/src/http.ts
-index e792a233..ae92634d 100644
+index e792a233..8fb9c67e 100644
 --- a/apps/server/src/http.ts
 +++ b/apps/server/src/http.ts
 @@ -1,3 +1,5 @@
@@ -401,7 +401,7 @@ index e792a233..ae92634d 100644
  import * as Mime from "effect/http/Mime";
  import {
    AuthOrchestrationOperateScope,
-@@ -249,6 +251,20 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
+@@ -249,6 +251,21 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
    return yield* HttpServerResponse.file(asset.path, { status, offset, bytesToRead, headers });
  });
  
@@ -410,7 +410,8 @@ index e792a233..ae92634d 100644
 +    const { route, params } = yield* HttpRouter.RouteContext;
 +    if (!sandboxHttpAllowed(route.method, route.path, env) ||
 +        ((sandboxRole(env) === "central" || sandboxRole(env) === "invalid") &&
-+          route.path === "/api/auth/websocket-ticket/:use" && params.use !== "rpc"))
++          ((route.path === "/api/auth/websocket-ticket/:use" && params.use !== "rpc") ||
++            (route.path === "*" && Option.isSome(route.prefix)))))
 +      return HttpServerResponse.text("Workspace access requires an allocated sandbox.", {
 +        status: 403, headers: { "cache-control": "no-store" },
 +      });
@@ -793,6 +794,52 @@ index 4781fcf7..863d534c 100644
          [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
            Effect.annotateCurrentSpan({
              "orchestration_v2.command_id": input.commandId,
+diff --git a/apps/web/src/components/Sidebar.tsx b/apps/web/src/components/Sidebar.tsx
+index e6f23149..f475240b 100644
+--- a/apps/web/src/components/Sidebar.tsx
++++ b/apps/web/src/components/Sidebar.tsx
+@@ -150,7 +150,9 @@ import {
+   useQuietThreadShells,
+ } from "../state/entities";
+ import { environmentPresentations } from "../state/presentation";
+-import { primaryServerKeybindingsAtom } from "../state/server";
++import { primaryServerKeybindingsAtom, environmentServerConfigsAtom } from "../state/server";
++import { allocateSandboxThread } from "../state/briqSandbox";
++import { newThreadId } from "../lib/utils";
+ import { environmentProjects } from "../state/projects";
+ import { threadEnvironment } from "../state/threads";
+ import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
+@@ -2912,7 +2914,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
+   );
+   const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
+ 
++  const sandboxConfigs = useAtomValue(environmentServerConfigsAtom);
++  const sandboxHome = [...sandboxConfigs].find(([, config]) => config.briqSandboxRole === "central")?.[0] ?? null;
++  const canAllocateCloudThread = useAtomValue(allocateSandboxThread.permissionAtom(sandboxHome));
++
+   const handleNewThreadClick = (event?: ReactMouseEvent) => {
++    if (sandboxHome !== null) {
++      if (!canAllocateCloudThread) return;
++      if (isMobile) setOpenMobile(false);
++      void import("../hooks/openBriqSandboxThread").then(({ openBriqSandboxThread }) =>
++        openBriqSandboxThread(router, sandboxHome, newThreadId())).catch(() => {
++          toastManager.add({ type: "error", title: "Could not allocate a sandbox",
++            description: "Check cloud connections before retrying. No local thread was created." });
++        });
++      return;
++    }
+     if (
+       boringSidebarEnabled ||
+       shouldCreateNewThreadInCurrentProject(
+@@ -3139,7 +3155,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
+               }
+               onNewProject={openAddProjectCommandPalette}
+               onNewThread={handleNewThreadClick}
+-              newThreadDisabled={projects.length === 0}
++              newThreadDisabled={sandboxHome !== null ? !canAllocateCloudThread : projects.length === 0}
+               newThreadShortcutLabel={newThreadShortcutLabel}
+               newThreadInProjectShortcutLabel={newThreadInProjectShortcutLabel}
+               showNewThreadInProjectHint={
 diff --git a/apps/web/src/connection/onboarding.ts b/apps/web/src/connection/onboarding.ts
 index c4368b0b..d0191863 100644
 --- a/apps/web/src/connection/onboarding.ts
@@ -833,6 +880,56 @@ index c4368b0b..d0191863 100644
 +      );
 +    }));
 +  }),
++});
+diff --git a/apps/web/src/hooks/openBriqSandboxThread.test.ts b/apps/web/src/hooks/openBriqSandboxThread.test.ts
+new file mode 100644
+index 00000000..d3a91672
+--- /dev/null
++++ b/apps/web/src/hooks/openBriqSandboxThread.test.ts
+@@ -0,0 +1,44 @@
++import { describe, expect, it, vi } from "vite-plus/test";
++import { EnvironmentId, ThreadId } from "@t3tools/contracts";
++import type { AnyRouter } from "@tanstack/react-router";
++
++const state = vi.hoisted(() => ({ calls: [] as string[], failAllocation: false }));
++vi.mock("@t3tools/client-runtime/state/runtime", () => ({
++  runAtomCommand: async (_registry: unknown, operation: string) => {
++    state.calls.push(operation);
++    if (operation === "allocate") return state.failAllocation ? { _tag: "Failure" } : {
++      _tag: "Success", value: { allocationId: "allocation", environmentId: "child", threadId: "thread",
++        project: { id: "project", title: "Sandbox", workspaceRoot: "/work" },
++        connection: { url: "https://child.example/", credential: "synthetic-pairing" } },
++    };
++    if (operation === "wait") return { _tag: "Success", value: { briqSandboxRole: "child",
++      providers: [{ instanceId: "codex", models: [{ slug: "model" }] }] } };
++    return { _tag: "Success", value: undefined };
++  },
++}));
++vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
++vi.mock("../state/briqSandbox", () => ({ allocateSandboxThread: "allocate" }));
++vi.mock("../connection/onboarding", () => ({ connectPairing: "pair", waitForSandboxConnection: "wait" }));
++vi.mock("../state/projects", () => ({ projectEnvironment: { create: "child-project" } }));
++vi.mock("../state/threads", () => ({ threadEnvironment: { create: "child-thread" } }));
++import { openBriqSandboxThread } from "./openBriqSandboxThread";
++
++describe("fresh cloud home thread entry", () => {
++  it("allocates without a home project, pairs the child, then creates only its real native thread", async () => {
++    state.calls = []; state.failAllocation = false;
++    const navigate = vi.fn();
++    await openBriqSandboxThread({ navigate } as unknown as AnyRouter,
++      EnvironmentId.make("home"), ThreadId.make("thread"));
++    expect(state.calls).toEqual(["allocate", "pair", "wait", "child-project", "child-thread"]);
++    expect(navigate).toHaveBeenCalledWith({ to: "/$environmentId/$threadId",
++      params: { environmentId: "child", threadId: "thread" } });
++  });
++  it("never falls back to home creation after an allocator or read-only permission failure", async () => {
++    state.calls = []; state.failAllocation = true;
++    const navigate = vi.fn();
++    await expect(openBriqSandboxThread({ navigate } as unknown as AnyRouter,
++      EnvironmentId.make("home"), ThreadId.make("thread"))).rejects.toThrow("no local thread");
++    expect(state.calls).toEqual(["allocate"]);
++    expect(navigate).not.toHaveBeenCalled();
++  });
 +});
 diff --git a/apps/web/src/hooks/openBriqSandboxThread.ts b/apps/web/src/hooks/openBriqSandboxThread.ts
 new file mode 100644
