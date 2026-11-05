@@ -1,0 +1,20 @@
+#!/bin/sh
+# Native T3 owns provider connections and refresh; Agent Home never starts here.
+set -eu
+umask 077
+export T3_CWD="${T3_CWD:-/work}"
+export T3_STATE="${T3_STATE:-$T3_CWD/.t3}"
+export HOME="${T3_HOME:-$T3_STATE/home}"
+export T3_LOGINS="${T3_LOGINS:-$T3_CWD/.logins}"
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$T3_LOGINS/claude}"
+export CODEX_HOME="${CODEX_HOME:-$T3_LOGINS/codex}"
+export COPILOT_HOME="${COPILOT_HOME:-$T3_LOGINS/copilot}"
+export GROK_HOME="${GROK_HOME:-$T3_LOGINS/grok}"
+export VIBE_HOME="${VIBE_HOME:-$T3_LOGINS/vibe}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$T3_LOGINS/config}"
+export GEMINI_CLI_HOME="${GEMINI_CLI_HOME:-$T3_LOGINS/gemini}"
+export BRIQ_CONFIG_DIR="${BRIQ_CONFIG_DIR:-$XDG_CONFIG_HOME/briq}"
+node /opt/t3-cloud/prepare.mjs
+if [ "$#" -gt 0 ]; then exec "$@"; fi
+cd "$T3_CWD"
+exec /opt/t3/t3 serve --host "${T3_HOST:-0.0.0.0}" --port "${PORT:-8080}" --base-dir "$T3_STATE" --no-browser "$T3_CWD"

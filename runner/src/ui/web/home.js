@@ -17,7 +17,7 @@ const homeTabs = ['chat', 'fleet', 'auto-agent', 'connections', 'tools', 't3', '
 const tabFromHash = () =>
   location.hash === '#keys-section' ? 'connections' : homeTabs.find((name) => location.hash === '#' + name);
 function showTab(name, navigate = true) {
-  if (!homeTabs.includes(name)) return;
+  if (!homeTabs.includes(name) || byId('tab-' + name).hidden) name = 'chat';
   for (const tab of homeTabs) {
     const active = tab === name;
     byId('panel-' + tab).hidden = !active;
@@ -28,25 +28,21 @@ function showTab(name, navigate = true) {
     localStorage.setItem('agent-home-tab', name);
   } catch {}
   if (navigate) history.pushState(null, '', '#' + name);
+  return name;
 }
-for (const [index, name] of homeTabs.entries()) {
+for (const name of homeTabs) {
   const button = byId('tab-' + name);
   button.onclick = () => showTab(name);
   button.onkeydown = (event) => {
-    const next =
-      event.key === 'ArrowRight'
-        ? (index + 1) % homeTabs.length
-        : event.key === 'ArrowLeft'
-          ? (index + homeTabs.length - 1) % homeTabs.length
-          : event.key === 'Home'
-            ? 0
-            : event.key === 'End'
-              ? homeTabs.length - 1
-              : -1;
+    const available = homeTabs.filter((tab) => !byId('tab-' + tab).hidden);
+    const current = available.indexOf(name);
+    const next = event.key === 'ArrowRight' ? (current + 1) % available.length :
+      event.key === 'ArrowLeft' ? (current + available.length - 1) % available.length :
+      event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1 : -1;
     if (next < 0) return;
     event.preventDefault();
-    showTab(homeTabs[next]);
-    byId('tab-' + homeTabs[next]).focus();
+    showTab(available[next]);
+    byId('tab-' + available[next]).focus();
   };
 }
 let rememberedTab;
@@ -119,7 +115,11 @@ const call = async (method, path, body, signal) => {
   });
   return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
 };
-createHomeServices({ call, byId });
+createHomeServices({ call, byId, onCapabilitiesChanged: () => {
+  const requested = tabFromHash() || 'chat';
+  const selected = showTab(requested, false);
+  if (selected !== requested) history.replaceState(null, '', '#' + selected);
+} });
 let refreshNotice = '';
 function report(error) {
   refreshNotice = '';

@@ -1,4 +1,4 @@
-# Builds the agent home image, pushes it to ghcr.io/briq-cloud/agent-home, attests its provenance
+# Builds separate agent-home and t3-cloud images, checks both before publishing and attests provenance
 # and writes REFERENCE.md from what it has. Every Monday after the sandbox image it is built on, on
 # every push to main, and by hand. A pull request builds it without pushing.
 #
@@ -27,6 +27,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/briq-cloud/agent-home
+  T3_IMAGE: ghcr.io/briq-cloud/t3-cloud
 
 jobs:
   build:
@@ -54,6 +55,9 @@ jobs:
           npm run mock
           BENCH_SUITE=medium npm run mock
 
+      - name: Check T3 bootstrap and release resolution
+        run: node --test t3-cloud/prepare.test.mjs bin/resolve-gh-release.test.mjs
+
       - uses: actions/upload-artifact@v4
         with:
           name: foundation-benchmark
@@ -73,7 +77,7 @@ jobs:
         run: |
           set -eu
           d="$(date -u +%Y-%m-%d)" t="$d" n=1
-          while docker buildx imagetools inspect "$IMAGE:$t" > /dev/null 2>&1; do n=$((n + 1)); t="$d.$n"; done
+          while docker buildx imagetools inspect "$IMAGE:$t" > /dev/null 2>&1 || docker buildx imagetools inspect "$T3_IMAGE:$t" > /dev/null 2>&1; do n=$((n + 1)); t="$d.$n"; done
           echo "tag=$t" >> "$GITHUB_OUTPUT"
 
       # Each CLI's current stable release and the GitHub assets' digests, resolved once here (with
@@ -84,18 +88,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -eu
-          digest() { gh api "repos/$1/releases/tags/$2" --jq ".assets[] | select(.name == \"$3\") | .digest" | sed 's/^sha256://'; }
-          codex="$(gh api repos/openai/codex/releases/latest --jq .tag_name | sed 's/^rust-v//')"
-          copilot="$(gh api repos/github/copilot-cli/releases/latest --jq .tag_name | sed 's/^v//')"
+          set -euo pipefail
+          codex_release="$(node bin/resolve-gh-release.mjs openai/codex rust-v codex-package-x86_64-unknown-linux-musl.tar.gz)"
+          copilot_release="$(node bin/resolve-gh-release.mjs github/copilot-cli v copilot-linux-x64.tar.gz)"
+          read -r codex codex_sha256 <<< "$codex_release"
+          read -r copilot copilot_sha256 <<< "$copilot_release"
           base="ghcr.io/briq-cloud/sandbox@$(docker buildx imagetools inspect ghcr.io/briq-cloud/sandbox:latest --format '{{json .Manifest}}' | jq -r .digest)"
           {
             echo "base=$base"
             echo "claude=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable)"
             echo "codex=$codex"
-            echo "codex_sha256=$(digest openai/codex "rust-v$codex" codex-package-x86_64-unknown-linux-musl.tar.gz)"
+            echo "codex_sha256=$codex_sha256"
             echo "copilot=$copilot"
-            echo "copilot_sha256=$(digest github/copilot-cli "v$copilot" copilot-linux-x64.tar.gz)"
+            echo "copilot_sha256=$copilot_sha256"
             echo "cursor=$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)"
             echo "grok=$(curl -fsSL https://x.ai/cli/stable)"
             echo "vibe=$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)"
@@ -107,11 +112,12 @@ jobs:
 
       # One manifest, as Fly pulls it: the provenance is attested on GitHub below, not pushed as an
       # attestation manifest beside the image.
-      - name: Build and push
+      - name: Build Agent Home
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
+          target: agent-home
           platforms: linux/amd64
           push: false
           load: true
@@ -132,8 +138,37 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:latest
             ${{ env.IMAGE }}:${{ steps.date.outputs.tag }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=images
+          cache-to: type=gha,mode=max,scope=images
+
+      - name: Build T3 Cloud
+        id: build-t3
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: t3-cloud
+          platforms: linux/amd64
+          push: false
+          load: true
+          provenance: false
+          build-args: |
+            BASE=${{ steps.v.outputs.base }}
+            CLAUDE_VERSION=${{ steps.v.outputs.claude }}
+            CODEX_VERSION=${{ steps.v.outputs.codex }}
+            CODEX_SHA256=${{ steps.v.outputs.codex_sha256 }}
+            COPILOT_VERSION=${{ steps.v.outputs.copilot }}
+            COPILOT_SHA256=${{ steps.v.outputs.copilot_sha256 }}
+            CURSOR_VERSION=${{ steps.v.outputs.cursor }}
+            GROK_VERSION=${{ steps.v.outputs.grok }}
+            VIBE_VERSION=${{ steps.v.outputs.vibe }}
+            GEMINI_VERSION=${{ steps.v.outputs.gemini }}
+            GEMINI_INTEGRITY=${{ steps.v.outputs.gemini_integrity }}
+            TTYD_VERSION=${{ steps.v.outputs.ttyd }}
+          tags: |
+            ${{ env.T3_IMAGE }}:latest
+            ${{ env.T3_IMAGE }}:${{ steps.date.outputs.tag }}
+          cache-from: type=gha,scope=images
+          cache-to: type=gha,mode=max,scope=images
 
       - name: Standalone startup smoke test
         run: |
@@ -145,6 +180,23 @@ jobs:
             sleep 1
           done
           docker exec agent-home-smoke node -e "fetch('http://127.0.0.1:8090/terminal/',{headers:{authorization:'Bearer ci-smoke'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          docker exec agent-home-smoke sh -c 'test ! -e /opt/t3 && test -e /opt/agent-home-runner'
+
+      - name: Native T3 startup smoke test
+        run: |
+          set -eu
+          docker run -d --name t3-cloud-smoke "$T3_IMAGE:${{ steps.date.outputs.tag }}"
+          trap 'docker rm -f t3-cloud-smoke > /dev/null' EXIT
+          for n in $(seq 1 30); do
+            docker exec t3-cloud-smoke node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" && break
+            sleep 1
+          done
+          docker exec t3-cloud-smoke node -e "fetch('http://127.0.0.1:8080/.well-known/t3/environment').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+          docker exec t3-cloud-smoke sh -c 'test ! -e /opt/agent-home-runner && test ! -e /opt/dsh && test ! -e /usr/local/bin/briq-agent-acp'
+          # Uses the actual image-pinned native CLIs, without credentials or model calls.
+          # A second bootstrap must preserve the definitions accepted during native startup.
+          docker exec t3-cloud-smoke t3-cloud-start true
+          docker exec t3-cloud-smoke node -e 'const fs=require("node:fs"),assert=require("node:assert/strict");assert.match(fs.readFileSync("/work/.logins/codex/config.toml","utf8"),/bearer_token_env_var = "BRIQ_MCP_TOKEN"/);assert.equal(JSON.parse(fs.readFileSync("/work/.logins/claude/.claude.json","utf8")).mcpServers.briq.headers.Authorization,"Bearer \u0024{BRIQ_MCP_TOKEN}");assert.ok(fs.existsSync("/work/.t3/home/.agents/skills/briq/SKILL.md"));assert.ok(fs.existsSync("/work/.logins/claude/skills/briq/SKILL.md"))'
 
       - name: Publish the checked image
         id: publish
@@ -153,6 +205,10 @@ jobs:
           set -eu
           docker push "$IMAGE:${{ steps.date.outputs.tag }}"
           docker push "$IMAGE:latest"
+          docker push "$T3_IMAGE:${{ steps.date.outputs.tag }}"
+          docker push "$T3_IMAGE:latest"
+          t3_digest="$(docker buildx imagetools inspect "$T3_IMAGE:${{ steps.date.outputs.tag }}" --format '{{json .Manifest}}' | jq -r .digest)"
+          echo "t3_digest=$t3_digest" >> "$GITHUB_OUTPUT"
           digest="$(docker buildx imagetools inspect "$IMAGE:${{ steps.date.outputs.tag }}" --format '{{json .Manifest}}' | jq -r .digest)"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
@@ -162,6 +218,13 @@ jobs:
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.publish.outputs.digest }}
+
+      - name: Attest T3 Cloud provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.T3_IMAGE }}
+          subject-digest: ${{ steps.publish.outputs.t3_digest }}
 
       - name: Write the reference from the image
         run: |
