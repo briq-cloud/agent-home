@@ -62,7 +62,8 @@ const fields = {
 const notifications = new Set(['thread/started', 'thread/closed', 'thread/tokenUsage/updated', 'turn/started', 'turn/completed', 'turn/plan/updated', 'item/started', 'item/completed', 'item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/plan/delta', 'error']);
 const approvalMethods = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
 const mutationMethods = new Set(['thread/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
-function error(id, message = 'Operation denied by sandbox binding') { return { id, error: { code: -32600, message } }; }
+function error(id, message = 'Operation denied by sandbox binding', pending = false) { return { id, error: { code: pending ? -32010 : -32600, message, ...(pending ? { data: { sandboxOperationState: 'pending' } } : {}) } }; }
+class SandboxOperationPending extends Error {}
 function textInput(input) {
   return Array.isArray(input) && input.length <= 64 && input.every(item => item && item.type === 'text' &&
     typeof item.text === 'string' && item.text.length <= 1048576 && Object.keys(item).every(key => ['type', 'text', 'text_elements'].includes(key)) &&
@@ -136,6 +137,11 @@ export class CapabilityBroker {
       mutation.locallyWritten = true;
     } catch (error) { mutation.quarantined = true; throw error; }
   }
+  async sendOperationReceipt(session, message) {
+    try {
+      if (await session.send(message) === false) throw new SandboxOperationPending();
+    } catch { throw new SandboxOperationPending(); }
+  }
   async executeOperation(session, message, binding, locked = false) {
     const envelope = message.params;
     if (!session.initialized || !envelope || Object.keys(envelope).sort().join(',') !== 'key,method,params,threadId,version' ||
@@ -147,8 +153,9 @@ export class CapabilityBroker {
     const requestHash = digest(canonicalJson({ allocationId: binding.allocationId, threadId: binding.threadId, method: envelope.method, params: envelope.params }));
     const stored = await this.store.loadOperation(binding.threadId, envelope.key);
     if (stored) {
-      if (stored.requestHash !== requestHash || stored.allocationId !== binding.allocationId || !['completed', 'adopted'].includes(stored.state)) throw Error('Operation outcome unknown or payload conflict');
-      return session.send({ id: message.id, result: { result: stored.result, resultHash: stored.resultHash } });
+      if (stored.requestHash !== requestHash || stored.allocationId !== binding.allocationId) throw Error('Operation payload conflict');
+      if (!['completed', 'adopted'].includes(stored.state)) throw new SandboxOperationPending();
+      return this.sendOperationReceipt(session, { id: message.id, result: { result: stored.result, resultHash: stored.resultHash } });
     }
     const operation = { record: { version: 1, key: envelope.key, allocationId: binding.allocationId, threadId: binding.threadId,
       method: envelope.method, params: envelope.params, requestHash } };
@@ -165,10 +172,10 @@ export class CapabilityBroker {
       const nativeId = record?.result?.thread?.id ?? record?.result?.turn?.id ?? record?.params?.expectedTurnId ?? record?.params?.turnId;
       if (!record || !['completed', 'adopted'].includes(record.state) || record.allocationId !== binding.allocationId ||
         record.resultHash !== params.resultHash || !nativeId || nativeId !== params.nativeId) throw Error('Adoption does not match result');
-      if (record.state === 'adopted' && (record.adoption.nativeId !== params.nativeId || record.adoption.resultHash !== params.resultHash)) throw Error('Conflicting adoption');
+      if (record.state === 'adopted' && (record.adoption.nativeId !== params.nativeId || record.adoption.resultHash !== params.resultHash || record.adoption.eventSequence !== params.eventSequence)) throw Error('Conflicting adoption');
       if (record.state !== 'adopted') await this.store.saveOperation(binding.threadId, { ...record, state: 'adopted', adoption: { ...params } });
     });
-    return session.send({ id: message.id, result: {} });
+    return this.sendOperationReceipt(session, { id: message.id, result: {} });
   }
   async receive(session, message, operation) {
     if (!message || typeof message !== 'object' || JSON.stringify(message).length > 2097152) return session.close();
@@ -253,7 +260,8 @@ export class CapabilityBroker {
       });
       if (mutation) await this.deliverMutation(mutation, { id, result: response });
       else if (!session.closed) await session.send({ id, result: response });
-    } catch {
+    } catch (cause) {
+      const pending = cause instanceof SandboxOperationPending || Boolean(mutation?.operation);
       if (mutation) {
         mutation.quarantined = true; this.mutations.delete(mutation.id); session.mutations.delete(mutation);
         if (mutation.operation?.record.state === 'started') {
@@ -261,7 +269,7 @@ export class CapabilityBroker {
           await this.store.saveOperation(session.threadId, mutation.operation.record);
         }
       }
-      if (!session.closed) await session.send(error(id));
+      if (!session.closed) await session.send(pending ? error(id, 'Sandbox operation outcome requires reconciliation', true) : error(id));
     }
   }
   matchesEnvironment(thread, binding) {

@@ -271,3 +271,66 @@ test('local WS callback permits live-session continuation but never proves durab
  f.session.close();const other=await reconnect(f);await other.session.receive(turnRequest(3));
  assert.ok(other.received.at(-1).error);assert.equal(f.calls.filter(value=>value.method==='turn/start').length,2);
 });
+
+test('scoped pending outcomes have a fixed classification distinct from definitive binding rejection', async t => {
+  const f = await fixture(t);
+  f.responses.set('thread/start', () => { throw Error('native outcome is unknown'); });
+  const request = scoped(1, 'pending-classification', 'thread/start', {});
+  await f.session.receive(request);
+  assert.equal(f.received.at(-1).error.code, -32010);
+  assert.deepEqual(f.received.at(-1).error.data, { sandboxOperationState: 'pending' });
+  await f.session.receive({ ...request, id: 2 });
+  assert.equal(f.received.at(-1).error.code, -32010);
+  assert.equal(f.calls.length, 1);
+  await f.session.receive({ ...request, id: 3, params: { ...request.params, params: { model: 'changed' } } });
+  assert.equal(f.received.at(-1).error.code, -32600);
+  assert.equal(f.received.at(-1).error.data, undefined);
+  assert.equal(f.calls.length, 1);
+});
+
+
+test('lost adoption reply reuses the committed receipt after reconnect without another native mutation', async t => {
+  let loseReply = false;
+  let ownedSession;
+  const f = await fixture(t, { send: message => {
+    if (loseReply && message.id === 2 && message.result) { ownedSession.close(); return false; }
+  } });
+  ownedSession = f.session;
+  const request = scoped(1, 'lost-adopt-reply', 'thread/start', {});
+  await f.session.receive(request);
+  const receipt = { key: request.params.key, nativeId: 'native-a', resultHash: f.received.at(-1).result.resultHash, eventSequence: 27 };
+  loseReply = true;
+  await f.session.receive({ id: 2, method: 'briq/operation/adopt', params: receipt });
+  assert.deepEqual((await f.store.loadOperation('a', receipt.key)).adoption, receipt);
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = [];
+  const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' });
+  await session.receive({ id: 3, method: 'briq/operation/adopt', params: receipt });
+  assert.deepEqual(replies.at(-1).result, {});
+  await session.receive({ id: 4, method: 'briq/operation/adopt', params: { ...receipt, eventSequence: 28 } });
+  assert.equal(replies.at(-1).error.code, -32600);
+  assert.deepEqual((await f.store.loadOperation('a', receipt.key)).adoption, receipt);
+  assert.equal(f.calls.length, 1);
+});
+
+
+for (const phase of ['execute-replay', 'adopt']) test(`post-commit ${phase} send rejection remains uncertain and replays the same receipt`, async t => {
+  let rejectId;
+  const f = await fixture(t, { send: message => {
+    if (message.id === rejectId && Object.hasOwn(message, 'result')) { rejectId = undefined; return Promise.reject(Error('one-shot receipt delivery rejection')); }
+  } });
+  const request = scoped(1, 'send-rejection', 'thread/start', {});
+  await f.session.receive(request);
+  const result = f.received.at(-1).result;
+  const receipt = { key: request.params.key, nativeId: 'native-a', resultHash: result.resultHash, eventSequence: 31 };
+  rejectId = 2;
+  const retry = phase === 'execute-replay' ? { ...request, id: 2 } : { id: 2, method: 'briq/operation/adopt', params: receipt };
+  await f.session.receive(retry);
+  assert.equal(f.received.at(-1).error.code, -32010);
+  assert.equal((await f.store.loadOperation('a', receipt.key)).state, phase === 'adopt' ? 'adopted' : 'completed');
+  await f.session.receive({ ...retry, id: 3 });
+  assert.deepEqual(f.received.at(-1).result, phase === 'adopt' ? {} : result);
+  if (phase === 'adopt') assert.deepEqual((await f.store.loadOperation('a', receipt.key)).adoption, receipt);
+  assert.equal(f.calls.length, 1);
+});
