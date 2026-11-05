@@ -142,21 +142,25 @@ export class CapabilityBroker {
       if (await session.send(message) === false) throw new SandboxOperationPending();
     } catch { throw new SandboxOperationPending(); }
   }
-  async executeOperation(session, message, binding, locked = false) {
+  async executeOperation(session, message, binding, locked = false, receiptOnly = false) {
     const envelope = message.params;
     if (!session.initialized || !envelope || Object.keys(envelope).sort().join(',') !== 'key,method,params,threadId,version' ||
       envelope.version !== 1 || envelope.threadId !== binding.threadId || !mutationMethods.has(envelope.method) ||
       !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw Error('Invalid operation envelope');
     identifier(envelope.key);
-    if (!locked) return this.store.serialized(`operation-${digest(`${binding.allocationId}:${envelope.key}`)}`, () => this.executeOperation(session, message, binding, true));
+    if (!locked) return this.store.serialized(`operation-${digest(`${binding.allocationId}:${envelope.key}`)}`, () => this.executeOperation(session, message, binding, true, receiptOnly));
     binding = await this.binding(session);
     const requestHash = digest(canonicalJson({ allocationId: binding.allocationId, threadId: binding.threadId, method: envelope.method, params: envelope.params }));
     const stored = await this.store.loadOperation(binding.threadId, envelope.key);
     if (stored) {
-      if (stored.requestHash !== requestHash || stored.allocationId !== binding.allocationId) throw Error('Operation payload conflict');
+      if (stored.requestHash !== requestHash || stored.allocationId !== binding.allocationId ||
+        stored.threadId !== binding.threadId || stored.key !== envelope.key) throw Error('Operation payload conflict');
       if (!['completed', 'adopted'].includes(stored.state)) throw new SandboxOperationPending();
       return this.sendOperationReceipt(session, { id: message.id, result: { result: stored.result, resultHash: stored.resultHash } });
     }
+    // Recovery with local durable facts may only read an existing receipt. A lost
+    // broker ledger cannot establish that the original native mutation never ran.
+    if (receiptOnly) throw Error('Operation receipt unavailable');
     const operation = { record: { version: 1, key: envelope.key, allocationId: binding.allocationId, threadId: binding.threadId,
       method: envelope.method, params: envelope.params, requestHash } };
     await this.receive(session, { id: message.id, method: envelope.method, params: envelope.params }, operation);
@@ -184,6 +188,7 @@ export class CapabilityBroker {
       const binding = await this.binding(session);
       if (message.method?.startsWith('briq/operation/') && typeof message.id !== 'number' && typeof message.id !== 'string') throw Error('Invalid request identity');
       if (message.method === 'briq/operation/execute') return await this.executeOperation(session, message, binding);
+      if (message.method === 'briq/operation/receipt') return await this.executeOperation(session, message, binding, false, true);
       if (message.method === 'briq/operation/adopt') return await this.adoptOperation(session, message, binding);
       if (!message.method && id !== undefined) {
         const approval = this.approvals.get(id);

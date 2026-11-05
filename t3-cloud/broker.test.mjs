@@ -334,3 +334,147 @@ for (const phase of ['execute-replay', 'adopt']) test(`post-commit ${phase} send
   if (phase === 'adopt') assert.deepEqual((await f.store.loadOperation('a', receipt.key)).adoption, receipt);
   assert.equal(f.calls.length, 1);
 });
+
+const receiptRequest = (request, id) => ({ ...request, id, method: 'briq/operation/receipt' });
+test('receipt-only lookup denies absent and lost ledgers without creating a row or dispatching', async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'receipt-missing', 'thread/start', {});
+  await f.session.receive(receiptRequest(request, 2));
+  assert.equal(f.received.at(-1).error.code, -32600);
+  assert.equal(await f.store.loadOperation('a', request.params.key), null);
+  assert.equal(f.calls.length, 0);
+  await f.session.receive(request);
+  assert.equal(f.calls.length, 1);
+  await rm(join(f.directory, 'operations', 'a', `${request.params.key}.json`));
+  f.session.close();
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' });
+  await session.receive(receiptRequest(request, 3));
+  assert.deepEqual(replies.at(-1).error, { code: -32600, message: 'Operation denied by sandbox binding' });
+  assert.equal(await f.store.loadOperation('a', request.params.key), null);
+  assert.equal(f.calls.length, 1);
+});
+
+for (const adopted of [false, true]) test(`receipt-only lookup recovers the exact ${adopted ? 'adopted' : 'completed'} receipt after restart`, async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'receipt-restart', 'thread/start', { model: 'mock' });
+  await f.session.receive(request);
+  const result = f.received.at(-1).result;
+  if (adopted) await f.session.receive({ id: 2, method: 'briq/operation/adopt', params: {
+    key: request.params.key, nativeId: 'native-a', resultHash: result.resultHash, eventSequence: 43,
+  } });
+  const before = await f.store.loadOperation('a', request.params.key);
+  f.session.close();
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' });
+  await Promise.all([session.receive(receiptRequest(request, 3)), session.receive(receiptRequest(request, 4))]);
+  assert.deepEqual(replies.filter(message => message.id === 3 || message.id === 4).map(message => message.result), [result, result]);
+  assert.deepEqual(await f.store.loadOperation('a', request.params.key), before);
+  assert.equal(f.calls.length, 1);
+});
+
+for (const state of ['started', 'uncertain']) test(`receipt-only lookup preserves ${state} classification after restart without replay`, async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'receipt-pending', 'thread/start', {});
+  f.responses.set('thread/start', () => { throw Error('private native diagnostic'); });
+  await f.session.receive(request);
+  const record = { ...await f.store.loadOperation('a', request.params.key), state };
+  await f.store.saveOperation('a', record);
+  f.session.close();
+  const broker = new CapabilityBroker({ store: new AllocationStore(f.directory), app: f.app });
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 0, method: 'initialize' });
+  await session.receive(receiptRequest(request, 2));
+  assert.deepEqual(replies.at(-1).error, { code: -32010, message: 'Sandbox operation outcome requires reconciliation', data: { sandboxOperationState: 'pending' } });
+  assert.deepEqual(await f.store.loadOperation('a', request.params.key), record);
+  assert.equal(f.calls.length, 1);
+});
+
+test('receipt-only lookup rejects changed envelopes and stored identities without revealing the receipt', async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'receipt-conflict', 'thread/start', { model: 'mock' });
+  await f.session.receive(request);
+  const record = await f.store.loadOperation('a', request.params.key);
+  const changed = [
+    { ...request.params, params: { model: 'changed' } },
+    { ...request.params, method: 'turn/start' },
+    { ...request.params, threadId: 'b' },
+    { ...request.params, key: 'another-key' },
+    { ...request.params, version: 2 },
+    { ...request.params, unexpected: true },
+  ];
+  for (const params of changed) {
+    await f.session.receive({ id: 2, method: 'briq/operation/receipt', params });
+    assert.deepEqual(f.received.at(-1).error, { code: -32600, message: 'Operation denied by sandbox binding' });
+  }
+  for (const mismatch of [{ allocationId: 'allocation-b' }, { threadId: 'b' }, { key: 'another-key' }]) {
+    const path = join(f.directory, 'operations', 'a', `${record.key}.json`);
+    await f.store.atomicWrite(path, { ...record, ...mismatch }, join(f.directory, 'operations', 'a'));
+    await f.session.receive(receiptRequest(request, 3));
+    assert.equal(f.received.at(-1).error.code, -32600);
+    await f.store.atomicWrite(path, record, join(f.directory, 'operations', 'a'));
+  }
+  assert.deepEqual(await f.store.loadOperation('a', record.key), record);
+  assert.equal(f.calls.length, 1);
+});
+
+test('receipt-only lookup enforces initialization, request identity and current allocation boundary', async t => {
+  const f = await fixture(t);
+  const request = scoped(1, 'receipt-boundary', 'thread/start', {});
+  await f.session.receive(request);
+  const replies = []; const session = await f.broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive(receiptRequest(request, 2));
+  assert.equal(replies.at(-1).error.code, -32600);
+  await session.receive({ id: 0, method: 'initialize' });
+  await session.receive(receiptRequest(request, null));
+  assert.equal(replies.at(-1).error.code, -32600);
+  await f.bSession.receive({ id: 0, method: 'initialize' });
+  await f.bSession.receive(receiptRequest(request, 3));
+  assert.equal(f.bReceived.at(-1).error.code, -32600);
+  const binding = await f.store.load('a');
+  await f.store.save({ ...binding, allocationId: 'replacement' });
+  await session.receive(receiptRequest(request, 4));
+  assert.equal(replies.at(-1).error.code, -32600);
+  await f.store.save({ ...binding, state: 'revoked' });
+  await session.receive(receiptRequest(request, 5));
+  assert.equal(replies.at(-1).error.code, -32600);
+  assert.equal(f.calls.length, 1);
+});
+
+test('receipt-only lookups serialize with a live execute and never cause a second mutation', async t => {
+  const f = await fixture(t);
+  let releaseNative, signalStarted;
+  const started = new Promise(resolve => { signalStarted = resolve; });
+  f.responses.set('thread/start', params => new Promise(resolve => {
+    releaseNative = () => resolve({ thread: { id: 'native-a', environments: params.environments } }); signalStarted();
+  }));
+  const request = scoped(1, 'receipt-concurrent', 'thread/start', {});
+  const execution = f.session.receive(request); await started;
+  assert.equal((await f.store.loadOperation('a', request.params.key)).state, 'started');
+  const lookups = [f.session.receive(receiptRequest(request, 2)), f.session.receive(receiptRequest(request, 3))];
+  releaseNative(); await Promise.all([execution, ...lookups]);
+  const replies = f.received.filter(message => [1, 2, 3].includes(message.id));
+  assert.equal(replies.length, 3);
+  assert.ok(replies[0].result);
+  assert.deepEqual(replies.map(message => message.result), Array(3).fill(replies[0].result));
+  assert.equal(f.calls.length, 1);
+});
+
+test('receipt-only delivery failure stays pending and the stored receipt remains recoverable', async t => {
+  let failReply = true;
+  const f = await fixture(t, { send: message => {
+    if (message.id === 2 && Object.hasOwn(message, 'result') && failReply) { failReply = false; throw Error('private transport diagnostic'); }
+  } });
+  const request = scoped(1, 'receipt-send', 'thread/start', {});
+  await f.session.receive(request);
+  const result = f.received.at(-1).result;
+  const before = await f.store.loadOperation('a', request.params.key);
+  await f.session.receive(receiptRequest(request, 2));
+  assert.deepEqual(f.received.at(-1).error, { code: -32010, message: 'Sandbox operation outcome requires reconciliation', data: { sandboxOperationState: 'pending' } });
+  await f.session.receive(receiptRequest(request, 3));
+  assert.deepEqual(f.received.at(-1).result, result);
+  assert.deepEqual(await f.store.loadOperation('a', request.params.key), before);
+  assert.equal(f.calls.length, 1);
+});
