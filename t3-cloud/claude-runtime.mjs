@@ -6,6 +6,8 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { canonicalJson, digest, identifier } from './allocations.mjs';
 import { ClaudeRemoteExec } from './claude-exec.mjs';
+import { scopedBriqTools } from './scoped-briq.mjs';
+import { providerRequestId } from './scoped-mcp-transport.mjs';
 
 // Integrated/native recovery and subscription gates have not passed. No environment variable overrides this.
 export const CLAUDE_CLOUD_ENABLED = false;
@@ -43,9 +45,24 @@ export class ClaudeCredentialOwner {
   }
   quarantine() { this.quarantined = true; }
 }
+export function createScopedClaudeMcpServer(sdk, owner, scopedBriq) {
+  const server = sdk.createSdkMcpServer({ name: 'briq', version: '1', tools: [], alwaysLoad: true });
+  for (const tool of scopedBriqTools) server.instance.registerTool(tool.name, {
+    description: tool.description, inputSchema: sdk.z.fromJSONSchema(tool.inputSchema).strict(),
+    _meta: { 'anthropic/alwaysLoad': true },
+  }, async (input, extra) => {
+    if (!owner.turnId || owner.closed) throw Error('Claude turn unavailable');
+    try {
+      const requestId = digest(canonicalJson([owner.openRecord.key, owner.turnId, providerRequestId(extra?.requestId)]));
+      const result = await scopedBriq.call(owner, requestId, tool.name, input);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    } catch { return { isError: true, content: [{ type: 'text', text: 'Briq operation unavailable; reconcile pending operations before retrying.' }] }; }
+  });
+  return server;
+}
 export class ClaudeRuntime {
-  constructor({ store, ledger, cloud, directory, enabled = CLAUDE_CLOUD_ENABLED, loadSdk = loadNativeSdk, spawnProcess = spawn, closeTimeoutMs = 10000, credentials = new ClaudeCredentialOwner(), nativeHome, nativeConfigDirectory }) {
-    Object.assign(this, { store, ledger, directory, enabled, loadSdk, spawnProcess, closeTimeoutMs, credentials, nativeHome, nativeConfigDirectory });
+  constructor({ store, ledger, cloud, scopedBriq, directory, enabled = CLAUDE_CLOUD_ENABLED, loadSdk = loadNativeSdk, spawnProcess = spawn, closeTimeoutMs = 10000, credentials = new ClaudeCredentialOwner(), nativeHome, nativeConfigDirectory }) {
+    Object.assign(this, { store, ledger, scopedBriq, directory, enabled, loadSdk, spawnProcess, closeTimeoutMs, credentials, nativeHome, nativeConfigDirectory });
     this.executor = new ClaudeRemoteExec({ store, ledger, cloud }); this.owner = null; this.quarantined = false;
   }
   async binding(session) {
@@ -158,6 +175,9 @@ export class ClaudeRuntime {
       owner.openRecord = { version: 1, key, provider: 'claudeAgent', method: 'claude/open', allocationId: binding.allocationId,
         threadId: binding.threadId, nativeId: owner.nativeId, state: 'started' };
       await this.ledger.saveOperation(binding.threadId, owner.openRecord);
+      if (!this.scopedBriq) throw Error('Scoped Briq tools required');
+      const guidance = await readFile(new URL('./skills/briq/SKILL.md', import.meta.url), 'utf8');
+      if (!guidance.trim() || Buffer.byteLength(guidance) > 65536) throw Error('Packaged Briq guidance unavailable');
       const sdk = await this.loadSdk();
       if (owner.closed) throw Error('Claude query cancelled during startup');
       const cwd = join(this.directory, 'sessions', owner.nativeId);
@@ -170,6 +190,7 @@ export class ClaudeRuntime {
           return { isError: result.state !== 'exited' || result.exitCode !== 0 || result.truncated,
             content: [{ type: 'text', text: JSON.stringify(result) }] };
         })] });
+      const briqServer = createScopedClaudeMcpServer(sdk, owner, this.scopedBriq);
       const prompts = { [Symbol.asyncIterator]() { return this; }, next: () => owner.closed ? Promise.resolve({ done: true }) :
         owner.prompts.length ? Promise.resolve({ value: owner.prompts.shift(), done: false }) : new Promise(resolve => { owner.waiter = resolve; }) };
       await this.binding(session);
@@ -179,11 +200,11 @@ export class ClaudeRuntime {
         ...(binding.claudeHasTurns ? { resume: owner.nativeId } : { sessionId: owner.nativeId }),
         env: { HOME: home, CLAUDE_CONFIG_DIR: this.nativeConfigDirectory ?? join(home, '.claude'), PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8',
           DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
-        tools: [], disallowedTools: deniedTools, allowedTools: ['mcp__workspace__bash'],
-        toolAliases: { Bash: 'mcp__workspace__bash' }, mcpServers: { workspace: server }, strictMcpConfig: true,
+        tools: [], disallowedTools: deniedTools, allowedTools: ['mcp__workspace__bash', ...scopedBriqTools.map(tool => `mcp__briq__${tool.name}`)],
+        toolAliases: { Bash: 'mcp__workspace__bash' }, mcpServers: { workspace: server, briq: briqServer }, strictMcpConfig: true,
         settingSources: [], skills: [], plugins: [], agents: {}, permissionMode: 'dontAsk',
         settings: { disableAllHooks: true }, managedSettings: { disableAllHooks: true, disableAgentView: true, disableRemoteControl: true },
-        systemPrompt: 'Use only the workspace MCP shell for repository files, commands and tests. The workspace is remote. Native local tools, delegation and background work are unavailable.',
+        systemPrompt: `Use only the workspace MCP shell for repository files, commands and tests. The workspace is remote. Native local tools, delegation and background work are unavailable. Briq MCP tools manage only this allocation’s recorded descendants.\n\n${guidance}`,
         stderr: () => {},
         spawnClaudeCodeProcess: options => {
           if (owner.child) throw Error('Only one Claude process is permitted');

@@ -28,8 +28,36 @@ function endpoint(value) {
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) throw Error('Invalid sandbox endpoint');
   return url.origin;
 }
+// One official CLI credential owner, including refresh-rotating login/status processes.
+// A hung process retains ownership: a timeout is never proof it ended.
+export class BriqCredentialOwner {
+  constructor() { this.current = null; this.waiters = []; }
+  acquire(identity) {
+    if (this.current || this.waiters.length) throw Error('Central Briq credential owner busy');
+    return this.reserve(identity);
+  }
+  reserve(identity) {
+    this.current = identity;
+    let released = false;
+    return () => {
+      if (released || this.current !== identity) return;
+      released = true; this.current = null;
+      const next = this.waiters.shift();
+      if (next) next(this.reserve({ kind: 'operation' }));
+    };
+  }
+  async run(operation) {
+    const release = this.current || this.waiters.length
+      ? await new Promise(resolve => this.waiters.push(resolve))
+      : this.reserve({ kind: 'operation' });
+    try { return await operation(); } finally { release(); }
+  }
+}
 export class BriqCloud {
-  constructor({ directory, run = cli, env = process.env }) { Object.assign(this, { directory, run, env: withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env)) }); }
+  constructor({ directory, run = cli, env = process.env, credentialOwner = new BriqCredentialOwner() }) {
+    Object.assign(this, { directory, credentialOwner, env: withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env)) });
+    this.run = (args, options) => credentialOwner.run(() => run(args, options));
+  }
   async create(binding, { image, bridgeUrl, edgeCredential }) {
     edgeToken(edgeCredential); requireEdgeBinding(binding, edgeCredential);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -81,5 +109,13 @@ export class BriqCloud {
   async execStop(briqId, execId) {
     return this.run(['exec-stop', briqId, execId], { env: this.env });
   }
-  async stop(binding) { await this.run(['stop', binding.briqId], { env: this.env }); }
+  async stop(binding) {
+    const result = await this.run(['stop', binding.briqId], { env: this.env });
+    if (result.briq?.id !== binding.briqId || !['stopped', 'destroyed'].includes(result.briq.state)) throw Error('Workspace stop requires reconciliation');
+  }
+  async stopped(binding) {
+    const result = await this.run(['status', binding.briqId], { env: this.env });
+    if (result.briq?.id !== binding.briqId || result.briq.name !== 'sandbox') throw Error('Workspace status identity mismatch');
+    return ['stopped', 'destroyed'].includes(result.briq.state);
+  }
 }

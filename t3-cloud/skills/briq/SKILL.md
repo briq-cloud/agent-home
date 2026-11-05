@@ -1,8 +1,10 @@
 ---
 name: briq
-description: Use an authenticated Briq MCP connection or native CLI to work with authorized cloud resources.
+description: Use allocation-scoped Briq MCP tools for this thread’s created cloud resources.
 ---
 
-Check the available Briq tools and authentication before acting. Installed configuration is not an authenticated connection. Briq CLI login and MCP authorization are separate. Ask the owner to complete the supported sign-in or provide an authorized scoped MCP credential if disconnected. Never search for credentials or expose them.
+Check the available Briq tools and connection status before acting. The owner completes Briq sign-in through the managed connection page; the central official CLI then supplies authentication for these allocation-scoped MCP tools. Installed configuration alone does not prove authentication. If disconnected, ask the owner to complete managed Briq sign-in. Unrelated direct native MCP connections have their own authorization. Never search for credentials or expose them.
 
-Inspect existing resource identities before changing them and stay within the requested scope. Use Briq sandboxes when the user requests remote execution. This skill does not redirect the provider's native shell or allocate thread environments. The central broker selects each thread's registered execution environment independently of MCP configuration.
+Use briq_catalog and briq_docs to inspect the supported sandbox, postgres and redis recipes. briq_run creates resources recorded for this allocation; briq_list shows only those resources. Use their returned IDs for status, logs, remote execution, files and lifecycle operations. Central resources, other threads and the protected workspace root are unavailable through resource tools. Unknown mutation outcomes require reconciliation; never repeat a create after a lost or uncertain result.
+
+Use the workspace shell for repository files, commands and tests in this thread’s existing sandbox. The central broker selects that registered execution environment. Briq resource tools do not replace the workspace operation journal or establish private-network isolation.

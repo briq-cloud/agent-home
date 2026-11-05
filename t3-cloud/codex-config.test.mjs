@@ -16,13 +16,13 @@ async function fixture(t) {
     capability: { BRIQ_MCP_TOKEN: 'explicit-test-grant' } };
 }
 
-test('executing native home has the packaged skill and env-referenced MCP grant', async t => {
+test('executing native home has the packaged skill without global raw MCP credentials', async t => {
   const f = await fixture(t);
   const result = await prepareExecutingCodex(f);
   const content = await readFile(f.file, 'utf8');
-  assert.equal(result.status, 'configured-unverified');
-  assert.deepEqual(result.env, f.capability);
-  assert.match(content, /\[mcp_servers.briq\]\nurl = "https:\/\/api.example\/mcp"\nbearer_token_env_var = "BRIQ_MCP_TOKEN"/);
+  assert.equal(result.status, 'allocation-scoped');
+  assert.deepEqual(result.env, {});
+  assert.equal(content.includes('mcp_servers'), false);
   assert.equal(content.includes(f.capability.BRIQ_MCP_TOKEN), false);
   assert.match(content, /multi_agent = false/);
   assert.match(content, /\[shell_environment_policy\]\nignore_default_excludes = false\n\[shell_environment_policy.filters\]\nBRIQ_MCP_TOKEN = "exclude"/);
@@ -37,7 +37,7 @@ test('executing native home has the packaged skill and env-referenced MCP grant'
 test('missing MCP grant permits offline startup and never claims authentication', async t => {
   const f = await fixture(t);
   const result = await prepareExecutingCodex({ ...f, capability: { BRIQ_API_KEY: 'not-an-mcp-grant' } });
-  assert.deepEqual(result, { env: {}, status: 'unconfigured' });
+  assert.deepEqual(result, { env: {}, status: 'allocation-scoped' });
   assert.equal((await readFile(f.file, 'utf8')).includes('mcp_servers'), false);
   await stat(join(f.home, '.agents/skills/briq/SKILL.md'));
 });
@@ -62,11 +62,11 @@ test('actual app-server launch retains only the explicit MCP fake marker and fix
     },
   });
   try {
-    assert.equal(app.briqMcp, 'configured-unverified');
+    assert.equal(app.briqMcp, 'allocation-scoped');
     assert.deepEqual(launches.map(value => value.args), [['--version'], ['app-server']]);
     const baseEnv = { HOME: f.home, CODEX_HOME: f.home, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', TMPDIR: '/tmp' };
     assert.deepEqual(launches[0].options.env, baseEnv);
-    assert.deepEqual(launches[1].options.env, { ...baseEnv, ...f.capability });
+    assert.deepEqual(launches[1].options.env, baseEnv);
   } finally { await app.close(); }
 });
 
@@ -78,7 +78,7 @@ test('exact legacy and managed configs migrate grant addition, endpoint change a
   await prepareExecutingCodex(f);
   assert.equal((await stat(f.file)).mode & 0o777, 0o600);
   await prepareExecutingCodex({ ...f, endpoint: 'https://staging.example/mcp' });
-  assert.match(await readFile(f.file, 'utf8'), /staging.example/);
+  assert.equal((await readFile(f.file, 'utf8')).includes('mcp_servers'), false);
   await prepareExecutingCodex({ ...f, capability: {} });
   assert.equal((await readFile(f.file, 'utf8')).includes('mcp_servers'), false);
   assert.equal(await readFile(nativeCredential, 'utf8'), 'native-owner-marker');

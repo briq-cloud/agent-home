@@ -26,7 +26,7 @@ const denySocket = socket => { socket.end('HTTP/1.1 401 Unauthorized\r\nConnecti
 
 /** Central connection management only. Native T3 retains its own authentication and paths. */
 export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allocator, broker,
-  connections, allocatorToken, t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade }) {
+  connections, allocatorToken, t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade, briqMcpRequest, ready = () => true }) {
   if (!['central', 'standalone'].includes(role)) throw Error('Manager requires central or standalone role');
   if (role === 'central' && (!threadId(ownerId) || typeof allocator?.allocate !== 'function' || typeof broker?.ownerRequest !== 'function'))
     throw Error('Central sandbox runtime is required');
@@ -38,9 +38,14 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, auth.origin);
+      if (url.pathname === '/_cloud/briq/mcp') {
+        if (role !== 'central' || !briqMcpRequest) return json(res, 404, { error: 'Unavailable' });
+        return await briqMcpRequest(req, res);
+      }
+      if (!ready()) return json(res, 503, { error: 'Central runtime is restoring' });
+      if (!url.pathname.startsWith('/_cloud/') && url.pathname !== '/_cloud') return native.http(req, res);
       // Only a non-secret capability is public; native source uses this to refuse a local fallback.
       if (url.pathname === '/_cloud/capabilities' && req.method === 'GET') return json(res, 200, { role });
-      if (!url.pathname.startsWith('/_cloud/') && url.pathname !== '/_cloud') return native.http(req, res);
       const localAllocator = role === 'central' && url.pathname === '/_cloud/threads' && req.method === 'POST' &&
         req.socket.remoteAddress === '127.0.0.1' && typeof allocatorToken === 'string' && allocatorToken.length >= 32 &&
         equalKey(req.headers.authorization, `Bearer ${allocatorToken}`);
@@ -64,7 +69,10 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
       if (url.pathname.startsWith('/_cloud/terminal/') && req.method === 'GET') return terminal.http(req, res);
       if (url.pathname === '/_cloud/connections' && req.method === 'GET') {
         const codex = role === 'central' ? await broker.ownerRequest('account/read', { refreshToken: false }) : { unavailable: true };
-        return json(res, 200, { role, codex, ...(await connections.status()) });
+        const revocations = role === 'central' && allocator.revocationIssues ? (await allocator.revocationIssues()).map(value => ({
+          threadId: value.threadId, allocationId: value.allocationId, state: 'reconciliation-required',
+        })) : [];
+        return json(res, 200, { role, codex, ...(await connections.status()), ...(revocations.length ? { revocations } : {}) });
       }
       if (url.pathname === '/_cloud/threads' && req.method === 'POST') {
         if (role !== 'central') return json(res, 409, { error: 'Thread sandbox allocation requires a central runtime' });
@@ -122,6 +130,7 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
   server.requestTimeout = 30000; server.headersTimeout = 10000;
   server.on('upgrade', (req, socket, head) => {
     let path; try { path = new URL(req.url, auth.origin).pathname; } catch { return denySocket(socket); }
+    if (!ready()) return denySocket(socket);
     if (path === '/_cloud/bridge' && role === 'central' && bridgeUpgrade) return bridgeUpgrade(req, socket, head);
     if (path.startsWith('/_cloud/')) {
       if (path.startsWith('/_cloud/terminal/') && auth.authorized(req) && auth.mutation(req)) return terminal.upgrade(req, socket, head);

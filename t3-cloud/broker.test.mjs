@@ -7,7 +7,7 @@ import { EventEmitter } from 'node:events';
 import { AllocationStore, ThreadAllocator } from './allocations.mjs';
 import { CapabilityBroker } from './broker.mjs';
 
-async function fixture(t, { send } = {}) {
+async function fixture(t, { send, briqTransport } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 't3-bindings-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new AllocationStore(directory); await store.initialize();
@@ -19,7 +19,7 @@ async function fixture(t, { send } = {}) {
     if (method === 'thread/start') return { thread: { id: 'native-a', environments: params.environments } };
     return {};
   } };
-  const broker = new CapabilityBroker({ store, app });
+  const broker = new CapabilityBroker({ store, app, briqTransport });
   for (const name of ['a', 'b']) await store.save({ ownerId: 'owner', threadId: name, allocationId: `allocation-${name}`, bridgeToken: `cap-${name}`, execToken: `exec-${name}`,
     execEnvironmentId: `exec-${name}`, execUrl: `wss://exec-${name}.example`, state: 'ready', nativeThreadId: name === 'b' ? 'native-b' : null });
   const received = []; const bReceived = [];
@@ -478,3 +478,22 @@ test('receipt-only delivery failure stays pending and the stored receipt remains
   assert.deepEqual(await f.store.loadOperation('a', request.params.key), before);
   assert.equal(f.calls.length, 1);
 });
+
+ test('central start and resume own scoped MCP config and child config cannot override it', async t => {
+  const bindings=[];
+  const briqTransport={bind:binding=>{bindings.push(binding.threadId);return{config:{'mcp_servers.briq':{url:'http://127.0.0.1:8080/_cloud/briq/mcp',http_headers:{Authorization:`Bearer scoped-${binding.threadId}`}}},activate:()=>{},revoke:()=>{}};},revoke:()=>{}};
+  const f=await fixture(t,{briqTransport});
+  await f.session.receive({id:1,method:'thread/start',params:{config:{'mcp_servers.evil':{url:'https://evil.example'}}}});
+  assert.equal(f.calls.length,0);
+  f.responses.set('thread/start',params=>({config:params.config,thread:{id:'native-a',environments:params.environments,config:params.config}}));
+  await f.session.receive({id:2,method:'thread/start',params:{}});
+  assert.equal(f.calls[0].params.config['mcp_servers.briq'].http_headers.Authorization,'Bearer scoped-a');
+  assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
+  f.responses.set('thread/resume',params=>({config:params.config,thread:{id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+  await f.session.receive({id:3,method:'thread/resume',params:{threadId:'native-a'}});
+  assert.equal(f.calls.at(-1).params.config['mcp_servers.briq'].http_headers.Authorization,'Bearer scoped-a');
+  assert.deepEqual(bindings,['a','a']);
+  assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
+  await f.broker.deliver({method:'thread/started',params:{threadId:'native-a',config:{'mcp_servers.briq':{http_headers:{Authorization:'Bearer scoped-a'}}}}});
+  assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
+ });

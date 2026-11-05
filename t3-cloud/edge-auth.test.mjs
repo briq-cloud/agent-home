@@ -42,6 +42,9 @@ test('real upgrade requires edge cookie plus allocation capability and rejects r
   });
  }
  const valid={cookie:`briq_token=${edge}`,authorization:`Bearer ${capability}`};
+ // A bound listener alone does not establish restored execution readiness.
+ assert.equal(runtime.ready(),false);assert.equal(await attempt(valid),false);assert.deepEqual(f.calls,[]);
+ await runtime.restore();assert.equal(runtime.ready(),true);assert.deepEqual(f.calls,['environment/add']);
  assert.equal(await attempt(valid),true);
  for(const headers of [{cookie:valid.cookie},{authorization:valid.authorization},{...valid,authorization:`Bearer ${'o'.repeat(43)}`},{...valid,authorization:`Bearer ${edge}`},{...valid,cookie:`briq_token=wrong`},{...valid,cookie:`${valid.cookie}; ${valid.cookie}`},{...valid,origin:'https://central.example'}]) assert.equal(await attempt(headers),false);
  assert.equal(await attempt(valid,'/_cloud/bridge?token=secret'),false);

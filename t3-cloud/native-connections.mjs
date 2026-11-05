@@ -15,10 +15,10 @@ export function briqStatus(env, run = execFile) {
 }
 
 // Keep credential files under each native CLI's existing home. No credentials are read here.
-export function nativeConnections(env = process.env, { signIn = (options, ended) => new SignIn(options, undefined, {}, ended), claudeCredentialOwner, status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
+export function nativeConnections(env = process.env, { signIn = (options, ended) => new SignIn(options, undefined, {}, ended), claudeCredentialOwner, briqCredentialOwner, status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
   const mcpConfigured = Boolean(env.BRIQ_MCP_TOKEN);
   env = helperEnvironment(env);
-  let releaseClaude;
+  let releaseClaude, releaseBriq;
   const claude = signIn({ name: 'claude', login: ['claude', 'auth', 'login'] }, () => { releaseClaude?.(); releaseClaude = undefined; });
   const claudeStatus = async () => {
     if (releaseClaude) return null;
@@ -27,11 +27,17 @@ export function nativeConnections(env = process.env, { signIn = (options, ended)
     catch { return null; }
     try { return await status(['claude', 'auth', 'status'], env); } finally { release?.(); }
   };
-  const briq = signIn({ name: 'briq', login: ['briq', 'login'] });
+  const briq = signIn({ name: 'briq', login: ['briq', 'login'] }, () => { releaseBriq?.(); releaseBriq = undefined; });
+  const briqStatusOwned = async () => {
+    if (releaseBriq) return null;
+    let release;
+    try { release = briqCredentialOwner?.acquire({ kind: 'status' }); } catch { return null; }
+    try { return await briqIdentity(env); } finally { release?.(); }
+  };
   return {
     async status() {
       return { claude: { authenticated: await claudeStatus(), signIn: claude.status },
-        briq: { authenticated: await briqIdentity(env), signIn: briq.status, mcp: mcpConfigured ? 'configured-unverified' : 'unconfigured' } };
+        briq: { authenticated: await briqStatusOwned(), signIn: briq.status, mcp: mcpConfigured ? 'configured-unverified' : 'unconfigured' } };
     },
     claudeLogin: () => {
       if (!releaseClaude) releaseClaude = claudeCredentialOwner?.acquire({ kind: 'sign-in' });
@@ -39,7 +45,10 @@ export function nativeConnections(env = process.env, { signIn = (options, ended)
       // process exits; cancel() and a failed UI state are not exit evidence.
       return claude.start(env);
     }, claudeInput: code => claude.input(code), claudeCancel: () => claude.cancel(),
-    briqLogin: () => briq.start(env),
+    briqLogin: () => {
+      if (!releaseBriq) releaseBriq = briqCredentialOwner?.acquire({ kind: 'sign-in' });
+      return briq.start(env);
+    },
     pair(origin) {
       return new Promise((resolve, reject) => pair('/opt/t3/t3', ['auth', 'pairing', 'create', '--base-dir', env.T3_STATE,
         '--base-url', origin, '--ttl', '5m', '--json'], { env, timeout: 10000, maxBuffer: 16384 }, (error, stdout) => {

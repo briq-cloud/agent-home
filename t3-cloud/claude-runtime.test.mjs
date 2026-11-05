@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {AllocationStore} from './allocations.mjs';
@@ -13,8 +13,8 @@ async function fixture(t,{enabled=true,dispose=async()=>{},closeTimeoutMs=10000,
  await store.initialize();await ledger.initialize();
  for(const threadId of ['a','b'])await store.save({threadId,allocationId:`allocation-${threadId}`,briqId:`briq-${threadId}`,state:'ready'});
  const events=[];let resolveResult;const delivered=new Promise(r=>resolveResult=r);let options,handler,loads=0,launches=0;
- const sdk={binary:'/pinned/claude',z:{string:()=>({optional(){return this;}}),number:()=>({optional(){return this;}})},
-  tool:(name,description,schema,fn)=>{handler=fn;return{name};},createSdkMcpServer:input=>input,
+ const sdk={binary:'/pinned/claude',z:{string:()=>({optional(){return this;}}),number:()=>({optional(){return this;}}),fromJSONSchema:()=>({strict(){return this;}})},
+  tool:(name,description,schema,fn)=>{if(name==='bash')handler=fn;return{name,handler:fn};},createSdkMcpServer:input=>({...input,instance:{registerTool(){}}}),
   query:input=>{options=input.options;const iterator=(async function*(){
    yield {type:'system',subtype:'init',permissionMode:'dontAsk',session_id:input.options.sessionId,uuid:promptKey};
    for await(const prompt of input.prompt){
@@ -25,7 +25,7 @@ async function fixture(t,{enabled=true,dispose=async()=>{},closeTimeoutMs=10000,
    }
   })();return{[Symbol.asyncIterator]:()=>iterator,setModel:async()=>{},close:()=>{},[Symbol.asyncDispose]:dispose};}};
  const cloud={execAsync:async(briqId,command)=>{launches++;return{exec:{id:'exec-a',briqId,state:'exited',exitCode:0,output:{stdout:'remote',stderr:'',stdoutBytes:6,stderrBytes:0}}};},execStop:async()=>{throw Error('unexpected stop');}};
- const runtime=new ClaudeRuntime({store,ledger,cloud,directory:join(directory,'claude'),enabled,closeTimeoutMs,loadSdk:async()=>{loads++;return sdk;}});
+ const runtime=new ClaudeRuntime({store,ledger,cloud,scopedBriq:{call:async()=>({owned:true})},directory:join(directory,'claude'),enabled,closeTimeoutMs,loadSdk:async()=>{loads++;return sdk;}});
  const session=threadId=>({threadId,allocationId:`allocation-${threadId}`,closed:false,send:async message=>{events.push(message);if(message.params?.event.type==='result'){resolveResult();if(!sendResult)throw Error('lost transport');}},close(){this.closed=true;}});
  const a=session('a'),b=session('b');const receive=(session,method,params={})=>runtime.receive(session,{id:1,method,params});
  return{store,ledger,runtime,a,b,receive,events,delivered,getOptions:()=>options,getLoads:()=>loads,getLaunches:()=>launches};
@@ -42,6 +42,10 @@ test('native session is server-owned, one query owns credentials, and remote Bas
  await assert.rejects(f.receive(f.b,'claude/open',{nativeId:other,key:'open-b',model:'claude-sonnet-4-6'}),/busy/);
  const options=f.getOptions();assert.deepEqual(options.tools,[]);assert.deepEqual(options.settingSources,[]);assert.deepEqual(options.skills,[]);
  assert.deepEqual(options.toolAliases,{Bash:'mcp__workspace__bash'});assert.equal(options.strictMcpConfig,true);assert.equal(options.permissionMode,'dontAsk');
+ assert.equal(options.mcpServers.briq.name,'briq');assert(options.allowedTools.includes('mcp__briq__briq_run'));
+ assert.equal(options.allowedTools.some(name=>name.includes('*')),false);
+ const guidance=await readFile(new URL('./skills/briq/SKILL.md',import.meta.url),'utf8');assert(options.systemPrompt.endsWith(guidance));
+ assert.equal(options.env.BRIQ_API_KEY,undefined);assert.equal(options.env.BRIQ_MCP_TOKEN,undefined);
  assert.equal(options.env.ANTHROPIC_API_KEY,undefined);assert.equal(options.env.T3_CLOUD_BRIDGE_TOKEN,undefined);
  assert(options.disallowedTools.includes('Read')&&options.disallowedTools.includes('Agent'));
  await f.receive(f.a,'claude/offer',{nativeId,key:promptKey,text:'Do the remote task'});await f.delivered;
@@ -157,3 +161,28 @@ test('revocation after prompt journal persistence prevents dispatch',async t=>{
  await assert.rejects(f.receive(f.a,'claude/offer',{nativeId,key:promptKey,text:'do not dispatch'}),/revoked/);
  assert.equal(f.getLaunches(),0);await f.runtime.close();
 });
+
+ test('official MCP rejects unknown Claude tool options before scoped mutation admission',async()=>{
+  const [{McpServer},{Client},{InMemoryTransport},{z},{createScopedClaudeMcpServer}]=await Promise.all([
+   import('@modelcontextprotocol/sdk/server/mcp.js'),import('@modelcontextprotocol/sdk/client/index.js'),
+   import('@modelcontextprotocol/sdk/inMemory.js'),import('zod'),import('./claude-runtime.mjs')]);
+  let calls=0;
+  const {ScopedBriq}=await import('./scoped-briq.mjs');
+  const identity={nativeId:'native-a',allocationId:'allocation-a',threadId:'a',turnId:'turn-a',openRecord:{key:'open-a'}};
+  const scopedBriq=new ScopedBriq({store:{load:async()=>({...identity,nativeThreadId:identity.nativeId,state:'ready',briqId:'protected-root'}),
+   serialized:async(key,operation)=>operation(),listOperations:async()=>[],saveOperation:async()=>{}},
+   cloud:{env:{},run:async()=>{calls++;throw Error('Fake CLI unavailable');}}});
+  const server=createScopedClaudeMcpServer({z,createSdkMcpServer:({name,version})=>({instance:new McpServer({name,version})})},
+   identity,scopedBriq);
+  const client=new Client({name:'schema-regression',version:'1'});
+  const [clientTransport,serverTransport]=InMemoryTransport.createLinkedPair();
+  await server.instance.connect(serverTransport);await client.connect(clientTransport);
+  try {
+   const inventory=await client.listTools();
+   assert.equal(inventory.tools.find(tool=>tool.name==='briq_run').inputSchema.additionalProperties,false);
+   const rejected=await client.callTool({name:'briq_run',arguments:{recipe:'sandbox',file:'/central/auth'}});
+   assert.equal(rejected.isError,true);assert.equal(calls,0);
+   const accepted=await client.callTool({name:'briq_run',arguments:{recipe:'sandbox'}});
+   assert.equal(accepted.isError,true);assert.equal(calls,1);
+  } finally {await client.close();await server.instance.close();}
+ });

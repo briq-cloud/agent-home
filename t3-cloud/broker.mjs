@@ -65,10 +65,10 @@ function textInput(input) {
     (item.text_elements === undefined || Array.isArray(item.text_elements) && item.text_elements.length === 0));
 }
 export class CapabilityBroker {
-  constructor({ store, app, claude }) {
-    Object.assign(this, { store, app, claude }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map();
+  constructor({ store, app, claude, briqTransport }) {
+    Object.assign(this, { store, app, claude, briqTransport }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map();
     app.events.on('message', message => { this.deliver(message).catch(() => {}); });
-    app.events.on('closed', () => { this.unavailable = true; this.registered.clear(); this.approvals.clear(); for (const session of this.sessions) session.close(); });
+    app.events.on('closed', () => { this.briqTransport?.close(); this.unavailable = true; this.registered.clear(); this.approvals.clear(); for (const session of this.sessions) session.close(); });
   }
   async registerEnvironment(binding) {
     if (binding.state !== 'ready') throw Error('Allocation not ready');
@@ -240,7 +240,12 @@ export class CapabilityBroker {
           await this.assertMutationAllowed(session);
           mutation = await this.beginMutation(session, message.method, operation);
           current.nativeState = 'unknown'; await this.store.save(current);
-          response = await this.app.request(message.method, { ...params, cwd: '/work', environments: [environment], approvalPolicy: 'on-request', sandbox: 'workspace-write' });
+          const mcp = this.briqTransport?.bind(current);
+          try {
+            response = await this.app.request(message.method, { ...params, cwd: '/work', environments: [environment], approvalPolicy: 'on-request', sandbox: 'workspace-write', ...(mcp ? { config: mcp.config } : {}) });
+            if (!response.thread?.id || !this.matchesEnvironment(response.thread, current)) throw Error('Native thread environment mismatch');
+            mcp?.activate(response.thread.id);
+          } catch (error) { mcp?.revoke(); throw error; }
           if (!response.thread?.id || !this.matchesEnvironment(response.thread, current)) throw Error('Native thread environment mismatch');
           current.nativeThreadId = response.thread.id; current.nativeState = 'bound'; await this.store.save(current);
         } else {
@@ -250,9 +255,11 @@ export class CapabilityBroker {
             mutation = await this.beginMutation(session, message.method, operation);
             current.turnState = 'unknown'; await this.store.save(current);
           }
-          response = await this.app.request(message.method, { ...params, ...(message.method === 'turn/start' ? { environments: [environment] } : {}) });
+          const mcp = message.method === 'thread/resume' ? this.briqTransport?.bind(current) : null;
+          try { response = await this.app.request(message.method, { ...params, ...(message.method === 'turn/start' ? { environments: [environment] } : {}), ...(mcp ? { config: mcp.config } : {}) }); }
+          catch (error) { mcp?.revoke(); throw error; }
           if (['thread/resume', 'thread/read'].includes(message.method) &&
-            (response.thread?.id !== current.nativeThreadId || !this.matchesEnvironment(response.thread, current))) throw Error('Resumed thread environment mismatch');
+            (response.thread?.id !== current.nativeThreadId || !this.matchesEnvironment(response.thread, current))) { mcp?.revoke(); throw Error('Resumed thread environment mismatch'); }
           if (message.method === 'turn/start') {
             if (!response.turn?.id) throw Error('Missing turn binding');
             if (this.finishedTurns.get(current.nativeThreadId) !== response.turn.id && response.turn.status !== 'completed' && response.turn.status !== 'interrupted' && response.turn.status !== 'failed') this.activeTurns.set(current.nativeThreadId, response.turn.id);
@@ -262,6 +269,7 @@ export class CapabilityBroker {
           }
         }
       });
+      response = this.publicResult(response);
       if (mutation) await this.deliverMutation(mutation, { id, result: response });
       else if (!session.closed) await session.send({ id, result: response });
     } catch (cause) {
@@ -275,6 +283,11 @@ export class CapabilityBroker {
       }
       if (!session.closed) await session.send(pending ? error(id, 'Sandbox operation outcome requires reconciliation', true) : error(id));
     }
+  }
+  publicResult(value) {
+    if (Array.isArray(value)) return value.map(item => this.publicResult(item));
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => !['config', 'mcpServers', 'mcp_servers', 'http_headers'].includes(key) && !key.startsWith('mcp_servers.')).map(([key, item]) => [key, this.publicResult(item)]));
   }
   matchesEnvironment(thread, binding) {
     return Array.isArray(thread.environments) && thread.environments.length === 1 &&
@@ -306,11 +319,12 @@ export class CapabilityBroker {
       this.approvals.set(id, { session: target.session, nativeId: message.id, threadId, turnId: message.params.turnId, environmentId: target.binding.execEnvironmentId });
       await target.session.send({ ...message, id });
     } else {
-      if (notifications.has(message.method)) await Promise.allSettled(candidates.map(({ session }) => session.send(message)));
+      if (notifications.has(message.method)) await Promise.allSettled(candidates.map(({ session }) => session.send(this.publicResult(message))));
     }
   }
   disconnect(session) {
     session.closed = true;
+    this.briqTransport?.revoke(session.allocationId);
     void this.claude?.disconnect(session).catch(() => {});
     for (const mutation of session.mutations) { mutation.quarantined = true; this.mutations.delete(mutation.id); }
     session.mutations.clear();

@@ -39,39 +39,52 @@ than issuing another native mutation. Pending or denied receipts remain parked f
 Canonical history can replace partial progress and fill gaps only after the receipt is adopted.
 The transport shim still has no reconnect loop, and legacy mutation markers remain quarantined.
 
-The packaged source patch has not yet been refreshed with that source candidate. These are
-implemented candidate paths, not native subprocess, cloud allocation, or restart qualification.
-Release requires the refreshed source patch, focused review and CI, then composed native
-client and restart/recovery evidence. No deployment or image conformance is established here.
+The packaged source patch replays to the exact reviewed source tree. These remain candidate
+paths: source checks and patch replay do not qualify native cloud allocation, subscription
+execution, restart recovery or deployment.
 
 The explicit diagnostic mode `T3_CLOUD_ROLE=standalone` has native T3 connections, Claude's native sign-in, Briq's native
-browser sign-in, pairing, and an owner-protected terminal. Central Codex account operations and
-thread allocation are unavailable without the broker. The CLI's sign-in and an MCP capability
-are separate: a configured MCP token is reported as unverified, never as CLI authentication.
+browser sign-in, pairing, and an owner-protected terminal. Central Codex account operations,
+thread allocation and the allocation-scoped Briq broker are unavailable in this mode.
+Unrelated direct native MCP connections retain their own authorization.
 
-The executing central Codex app server uses its own managed `T3_CLOUD_STATE/codex` home.
-It installs the packaged Briq skill under that home's `.agents/skills` and configures native
-HTTP MCP only when the operator explicitly provisions `BRIQ_MCP_TOKEN`. The config records
-the `BRIQ_MCP_TOKEN` environment variable name; the token is passed only to that native process.
-`BRIQ_MCP_URL` selects the HTTPS endpoint, or `/mcp` is derived from `BRIQ_API_URL`
-(default `https://api.briq.cloud`). Credentials, query strings and fragments are rejected.
-No grant leaves central startup available with MCP unconfigured. Provisioning is unverified
-until a real native MCP connection succeeds; CLI login does not provision this grant.
-No owner environment, API key, vendor credential file or CLI credential is copied into this home.
-The native shell environment policy explicitly excludes `BRIQ_MCP_TOKEN` and enables the
-default secret-name exclusions. A native fake-marker remote-execution check remains required
-to qualify the exclusion in the composed app server; source configuration alone is not proof.
-Under the central startup lock, the exact previous managed config can migrate atomically to
-the versioned config; unknown edits, environment policy changes and skill collisions stop startup.
-The executing-home configuration is a source candidate pending focused checks and native proof.
+In central mode, complete managed Briq sign-in through `/_cloud/`. Scoped resource operations
+use the official CLI's central credential home, with sign-in, status and operations sharing one
+credential owner. No separately copied `BRIQ_MCP_TOKEN` enables this executing-provider path.
+Missing or expired CLI authentication leaves the tools unavailable; installed files alone do
+not establish an authenticated connection.
+
+The central Codex app server uses its managed `T3_CLOUD_STATE/codex` home and installs the
+packaged Briq skill under `.agents/skills`. The broker supplies a separate loopback MCP
+capability for each allocation on native thread start and resume. It removes the previous
+managed global raw Briq MCP configuration. Unknown config edits, environment policy changes
+and skill collisions stop startup. Broad Briq credentials are not forwarded to either provider.
+Claude receives an in-process scoped server and the exact packaged guidance in its system
+prompt; native Skill discovery, local tools, hooks and subagents remain disabled. Its enablement
+gate stays closed pending the required qualification.
+
+Use `briq_catalog` and `briq_docs` for the supported sandbox, postgres and redis recipes.
+`briq_run` records newly created descendants; `briq_list` exposes only those resources.
+Status, logs, execution, files and lifecycle tools accept their recorded IDs, excluding the
+workspace root, central resources and other threads. Repository files and commands continue
+through the allocation-bound workspace executor. Unknown mutations require reconciliation,
+never automatic replay. Revocation invalidates capabilities and durably records cleanup;
+failed descendant cleanup still attempts the exact workspace stop. Recovery checks unresolved
+outcomes without replaying a stop.
+
+The credential-free offline image fixture is configured to check bounded Claude
+fake-provider/fake-CLI scenarios and native Codex per-thread MCP start/resume inventory
+without model turns. Image CI remains pending.
+It does not qualify cloud resources, subscription authentication, remote workspace composition
+or deployment. Those acceptance and recovery gates remain required before enablement.
 
 Vendor sign-in runs the installed CLI, preserves its existing credential home, and exposes only
 its sign-in URL, device code, and state. The person approves in their own browser. Status comes
 from vendor status commands; no token files are read. The vendor helper is a narrow extraction
 of the existing Agent Home sign-in/status code, without its application or routing runtime.
 
-The image installs the runtime's exact locked `ws` 8.22.0 dependency with production-only
-`npm ci` and lifecycle scripts disabled. Local `node_modules` are excluded from its build
+The image installs exact locked dependencies, including `ws` 8.22.0, MCP SDK 1.29.0 and
+Zod 4.6.5, with production-only `npm ci` and lifecycle scripts disabled. Local `node_modules` are excluded from its build
 context. Manager, child and transport processes use the source-pinned Node 26.12.1 runtime;
 the image also checks that `/bin/bash` is available for child execution.
 

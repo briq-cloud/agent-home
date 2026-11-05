@@ -33,7 +33,7 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
       const factory = centralRuntime ?? (await import('./central-runtime.mjs')).createCentralRuntime;
       runtime = await factory(env);
     }
-    connections = nativeConnections(env, { claudeCredentialOwner: runtime?.claudeCredentialOwner });
+    connections = nativeConnections(env, { claudeCredentialOwner: runtime?.claudeCredentialOwner, briqCredentialOwner: runtime?.briqCredentialOwner });
     server = createCloudManager({ role, publicOrigin: origin, ownerKey: env.T3_CLOUD_OWNER_KEY,
       ownerId: env.T3_CLOUD_OWNER_ID, allocatorToken, connections, ...runtime });
     server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});
@@ -51,6 +51,7 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
     child.once('exit',()=>{if(!stopping){process.exitCode=1;void close();}});
   }
     await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,env.T3_HOST ?? '0.0.0.0',resolve);});
+    await runtime?.restore?.();
     launch('/opt/t3/t3',['serve','--host','127.0.0.1','--port','3773','--base-dir',env.T3_STATE,'--no-browser',env.T3_CWD],nativeEnv);
     const terminalEnv=withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env));delete terminalEnv.T3_CLOUD_OWNER_KEY;delete terminalEnv.T3_CLOUD_ALLOCATOR_TOKEN;
     launch('ttyd',['--interface','127.0.0.1','--port','7681','--base-path','/_cloud/terminal','--writable','tmux','new-session','-A','-s','t3-cloud'],terminalEnv);

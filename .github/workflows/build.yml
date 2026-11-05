@@ -227,15 +227,15 @@ jobs:
           docker exec "$t3_smoke_id" t3-cloud-start true
           docker exec "$t3_smoke_id" node -e 'const fs=require("node:fs"),assert=require("node:assert/strict");assert.match(fs.readFileSync("/work/.logins/codex/config.toml","utf8"),/bearer_token_env_var = "BRIQ_MCP_TOKEN"/);assert.equal(JSON.parse(fs.readFileSync("/work/.logins/claude/.claude.json","utf8")).mcpServers.briq.headers.Authorization,"Bearer \u0024{BRIQ_MCP_TOKEN}");assert.ok(fs.existsSync("/work/.t3/home/.agents/skills/briq/SKILL.md"));assert.ok(fs.existsSync("/work/.logins/claude/skills/briq/SKILL.md"))'
 
-      # Reuses the fixed fake-provider fixture against the packaged native binary.
+      # Reuses the fake-provider fixture and per-thread MCP builder with both pinned binaries.
       # No credentials or model network; this is not cloud/subscription qualification.
-      - name: Offline pinned Claude image conformance
+      - name: Offline pinned provider MCP image conformance
         run: |
           set -eu
           claude_probe_id=
           trap 'if [ -n "$claude_probe_id" ]; then docker rm -fv "$claude_probe_id" > /dev/null 2>&1 || true; fi' EXIT
           claude_probe_id="$(docker create --network none --cap-drop ALL --security-opt no-new-privileges --read-only --pids-limit 128 --memory 2g --tmpfs /tmp:rw,nosuid,nodev --workdir /tmp --env HOME=/tmp/home --env CLAUDE_CONFIG_DIR=/tmp/home/config --entrypoint /usr/local/bin/node "$T3_IMAGE:${{ steps.date.outputs.tag }}" /opt/t3-cloud/fixtures/claude-alias.mjs /usr/local/bin/claude /tmp/claude-image-result.json)"
-          timeout --signal=TERM --kill-after=5s 95s docker start --attach "$claude_probe_id"
+          timeout --signal=TERM --kill-after=5s 155s docker start --attach "$claude_probe_id"
           test "$(docker inspect --format '{{.State.Status}}:{{.State.ExitCode}}' "$claude_probe_id")" = 'exited:0'
 
       - name: Publish the checked image

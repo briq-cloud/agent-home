@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, lstat, open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { briqMcpEndpoint, briqMcpCapability, installBriqSkill } from './briq-native.mjs';
+import { briqMcpEndpoint, installBriqSkill } from './briq-native.mjs';
 
 export const LEGACY_CODEX_CONFIG = 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n[features]\nmulti_agent = false\n';
 const PREFIX = '# t3-cloud managed Codex config v1\n' + LEGACY_CODEX_CONFIG +
@@ -36,9 +36,8 @@ async function replace(file, content) {
 // Caller holds central.lock throughout configuration and the native process lifetime.
 // Only the exact legacy baseline and this version's exact generated configs migrate.
 export async function prepareExecutingCodex({ home, capability = {}, endpoint }) {
-  const grant = briqMcpCapability(capability);
-  const url = briqMcpEndpoint({ BRIQ_MCP_URL: endpoint });
-  const desired = config(grant.BRIQ_MCP_TOKEN ? url : undefined);
+  // Retire exact older managed direct-MCP configs without forwarding their grant.
+  const desired = config();
   await mkdir(home, { recursive: true, mode: 0o700 });
   if (!(await lstat(home)).isDirectory()) throw Error('Managed Codex configuration changed');
   const file = join(home, 'config.toml');
@@ -49,5 +48,5 @@ export async function prepareExecutingCodex({ home, capability = {}, endpoint })
   installBriqSkill(join(home, '.agents/skills'), { managed: true });
   if (current !== desired) await replace(file, desired);
   if (currentEnvironments === undefined) await replace(environments, ENVIRONMENTS);
-  return { env: grant, status: grant.BRIQ_MCP_TOKEN ? 'configured-unverified' : 'unconfigured' };
+  return { env: {}, status: 'allocation-scoped' };
 }

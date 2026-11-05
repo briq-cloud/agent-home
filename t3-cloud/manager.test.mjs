@@ -9,14 +9,14 @@ const key = 'owner-key-for-test-only-1234567890123456';
 const allocationKey = 'allocation-key-test-only-1234567890123456';
 const origin = 'https://cloud.example';
 const connections = { status: async () => ({claude: { authenticated: false }, briq: { authenticated: null }}), pair: async () => ({pairUrl: 'https://cloud.example/pair#token=short-lived'}) };
-async function fixture(t) {
+async function fixture(t, revocationIssues) {
   const seen = [];
   const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged','briq_token=forged']); res.end(req.url); });
   upstream.on('upgrade', (req,socket,head) => { seen.push(req.headers); socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'); if(head.length)socket.write(head); socket.pipe(socket); });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
   const allocations = [], rpc=[];
   const manager = createCloudManager({role:'central',publicOrigin:origin,ownerKey:key,ownerId:'owner-1',allocatorToken:allocationKey,connections,
-    allocator:{async allocate(owner,thread){allocations.push([owner,thread]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
+    allocator:{revocationIssues, async allocate(owner,thread){allocations.push([owner,thread]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
     broker:{async ownerRequest(method,params){rpc.push([method,params]); return method==='account/login/start'?{type:'chatgptDeviceCode',loginId:'native-login',userCode:'TEST-CODE',verificationUrl:'https://auth.example/device',accessToken:'never-export'}:{account:null};}},
     t3Target:`http://127.0.0.1:${upstream.address().port}`,terminalTarget:`http://127.0.0.1:${upstream.address().port}`});
   manager.listen(0,'127.0.0.1');await once(manager,'listening');
@@ -64,4 +64,15 @@ test('Codex owner login uses one native device-code flow and projects only devic
 
 test('gateway cookie alone cannot authorize owner management',async t=>{
  const f=await fixture(t);assert.equal((await f.send('/_cloud/connections',{headers:{cookie:'briq_token=edge'}})).status,401);
+});
+
+
+test('owner connection status exposes only safe revoked allocation recovery fields',async t=>{
+ let reads=0;
+ const f=await fixture(t,async()=>{reads++;return [{threadId:'thread-revoked',allocationId:'allocation-revoked',state:'unknown',secret:'never-export',rawError:'never-export'}];});
+ assert.equal((await f.send('/_cloud/connections')).status,401);assert.equal(reads,0);
+ const result=await f.send('/_cloud/connections',{headers:{authorization:`Bearer ${key}`}});
+ assert.equal(result.status,200);assert.equal(reads,1);
+ assert.deepEqual(JSON.parse(result.text).revocations,[{threadId:'thread-revoked',allocationId:'allocation-revoked',state:'reconciliation-required'}]);
+ assert.equal(result.text.includes('never-export'),false);
 });

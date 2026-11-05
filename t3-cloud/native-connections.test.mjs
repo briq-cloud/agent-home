@@ -42,3 +42,18 @@ test('Claude sign-in retains the query credential owner through cancel until nat
  ended();const release=owner.acquire({kind:'query'});release();
  assert.equal((await connections.status()).claude.authenticated,true);assert.equal(statusCalls,1);
 });
+
+test('Briq native login/status share CLI refresh ownership until actual process end', async () => {
+ const { BriqCredentialOwner } = await import('./briq-cloud.mjs');
+ const owner = new BriqCredentialOwner(); let ended, reads = 0;
+ const connections = nativeConnections({}, { briqCredentialOwner: owner,
+  signIn: ({name}, onEnd) => { if(name === 'briq') ended = onEnd; return {status:{state:'waiting'},start:async()=>({state:'waiting'}),cancel(){}}; },
+  status: async()=>false, briqIdentity: async()=>{reads++;return true;},
+ });
+ const release = owner.acquire({kind:'operation'});
+ assert.throws(()=>connections.briqLogin(),/busy/);
+ assert.equal((await connections.status()).briq.authenticated,null); assert.equal(reads,0);
+ release(); await connections.briqLogin(); connections.close();
+ assert.throws(()=>owner.acquire({kind:'operation'}),/busy/);
+ ended(); assert.equal((await connections.status()).briq.authenticated,true); assert.equal(reads,1);
+});

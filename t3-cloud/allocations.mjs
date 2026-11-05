@@ -81,10 +81,10 @@ export class AllocationStore {
   }
 }
 export class ThreadAllocator {
-  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment }) {
+  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup }) {
     if (!/^.+@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Child image must be pinned by digest');
     bridgeAddress(bridgeUrl); edgeToken(edgeCredential);
-    Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment });
+    Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup });
   }
   async allocate(ownerId, threadId) {
     identifier(ownerId); identifier(threadId);
@@ -129,8 +129,50 @@ export class ThreadAllocator {
     return this.store.serialized(threadId, async () => {
       const binding = await this.store.load(threadId);
       if (!binding || binding.ownerId !== ownerId) throw Error('Unknown allocation');
-      binding.state = 'revoked'; await this.store.save(binding);
-      await this.cloud.stop(binding);
+      if (binding.state === 'revoked') return this.reconcileRevocation(binding);
+      binding.state = 'revoked';
+      binding.rootStop = { briqId: binding.briqId, state: 'pending' };
+      await this.store.save(binding);
+      const failures = [];
+      try { await this.cleanup?.(binding); } catch { failures.push(Error('Descendant cleanup requires reconciliation')); }
+      // Revocation is already durable. Cleanup uncertainty must not leave the known root running.
+      try {
+        binding.rootStop.state = 'started'; await this.store.save(binding);
+        await this.cloud.stop(binding);
+        binding.rootStop.state = 'completed'; await this.store.save(binding);
+      } catch {
+        binding.rootStop.state = 'unknown';
+        try { await this.store.save(binding); } catch { /* Previous durable intent remains unresolved. */ }
+        failures.push(Error('Workspace stop requires reconciliation'));
+      }
+      if (failures.length) throw new AggregateError(failures, 'Allocation revoked; cleanup requires reconciliation');
     });
   }
+  async revocationIssues() {
+    const issues = [];
+    for (const binding of await this.store.list()) {
+      if (binding.state !== 'revoked') continue;
+      const operations = await this.store.listOperations(binding.threadId);
+      if (binding.rootStop?.state !== 'completed' || binding.rootStop.briqId !== binding.briqId || this.unresolvedCleanup(binding, operations))
+        issues.push({ threadId: binding.threadId, allocationId: binding.allocationId, state: 'reconciliation-required' });
+    }
+    return issues;
+  }
+  unresolvedCleanup(binding, operations) {
+    return operations.some(row => row.method === 'briq/scoped' && row.allocationId === binding.allocationId &&
+      (row.state !== 'completed' || row.cleanup && row.cleanup.state !== 'completed' || row.resource?.state === 'live' || row.exec && !row.exec.terminal));
+  }
+  async reconcileRevocation(binding) {
+    // Restart and repeated revoke may inspect the exact root, never replay a control request.
+    if (binding.state !== 'revoked' || !binding.rootStop || binding.rootStop.briqId !== binding.briqId)
+      throw Error('Revoked allocation requires explicit root reconciliation');
+    if (binding.rootStop.state !== 'completed') {
+      if (!await this.cloud.stopped(binding)) throw Error('Workspace stop outcome remains unknown');
+      binding.rootStop.state = 'completed'; await this.store.save(binding);
+    }
+    const operations = await this.store.listOperations(binding.threadId);
+    if (this.unresolvedCleanup(binding, operations))
+      throw Error('Revoked descendant cleanup requires reconciliation');
+  }
+
 }
