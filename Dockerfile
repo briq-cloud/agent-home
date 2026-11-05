@@ -155,9 +155,9 @@ RUN git init . && git remote add origin https://github.com/pingdotgg/t3code.git 
   && echo 'e799bbbc9cd012f14be1a75a6fcdec81956c4386306fdc3a9285191c67290c13  pnpm-lock.yaml' | sha256sum -c - \
   && git apply --check /input/briq-sandbox.patch && git apply /input/briq-sandbox.patch
 RUN npm install --global pnpm@12.14.0 --ignore-scripts --no-fund --no-audit \
-  && pnpm install --frozen-lockfile --filter t3... --filter @t3tools/web... --filter @t3tools/monorepo \
+  && pnpm install --frozen-lockfile --filter t3... --filter @t3tools/web... --filter @t3tools/scripts... --filter @t3tools/monorepo \
   && pnpm exec vp run --filter t3 build \
-  && pnpm --filter t3 deploy --prod --legacy /out/t3 \
+  && pnpm --filter t3 deploy --prod --legacy --config.allow-unused-patches=true /out/t3 \
   && cp /usr/local/bin/node /out/t3/node \
   && cp /input/LICENSE /input/source.json /out/t3/ \
   && printf '#!/bin/sh\nexec /opt/t3/node /opt/t3/dist/bin.mjs "$@"\n' > /out/t3/t3 \
