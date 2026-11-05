@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-03. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-05. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -11,10 +11,10 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | Claude Code (`claude`) | 2.1.311 | `CLAUDE_CONFIG_DIR` |
 | Codex (`codex`) | 0.166.0 | `CODEX_HOME` |
 | Copilot CLI (`copilot`) | 1.0.105 | `COPILOT_HOME` |
-| Cursor (`agent`) | 2026.10.22-27dcf5f | `XDG_CONFIG_HOME`/cursor |
+| Cursor (`agent`) | 2026.11.05-86047df | `XDG_CONFIG_HOME`/cursor |
 | Grok Build (`grok`) | 1.0.70 | `GROK_HOME` |
-| Mistral Vibe (`vibe`) | 3.0.4 | `VIBE_HOME` |
-| Gemini CLI (`gemini`), API key only | 0.66.0 | `GEMINI_CLI_HOME`/.gemini |
+| Mistral Vibe (`vibe`) | 3.1.0 | `VIBE_HOME` |
+| Gemini CLI (`gemini`), API key only | 0.67.0 | `GEMINI_CLI_HOME`/.gemini |
 
 DSH preview 0.2.1-rc.5 is installed at `/opt/dsh/node_modules/.bin/dsh`, disabled until explicitly configured ([dsh/README.md](dsh/README.md)).
 
@@ -24,7 +24,7 @@ DSH preview 0.2.1-rc.5 is installed at `/opt/dsh/node_modules/.bin/dsh`, disable
 
 ## Coding workspace
 
-T3 Code 0.1.6 is installed at `/opt/t3/t3`. The authenticated home starts it on demand with a local Briq Agent ACP connection.
+T3 Code is available separately in the t3-cloud image.
 Briq CLI 0.1.3 is installed with a complete integrity-checked npm lockfile. Its native sign-in uses `BRIQ_CONFIG_DIR` (default `RUNNER_LOGINS/config/briq`).
 
 ## Runner
@@ -40,13 +40,12 @@ Each one checked against its publisher's checksum at build, or recorded where no
 | Claude Code | `86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada` | its release manifest |
 | Codex | `1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254` | the GitHub release digest |
 | Copilot CLI | `aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2` | the GitHub release digest |
-| Cursor | `85296944e4600a83c4b764f578d1502bf9c416db200d33a593e8f3ecabfdc294` | none published: recorded |
+| Cursor | `170b77786cbf4c93064d64fff12b71a178b968730561c64afc2e8e752535442e` | none published: recorded |
 | Grok Build | `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9` | none published: recorded |
-| Mistral Vibe | `fa201f53a8f7574435c1b911218a4a537e3678831f9cbd7791e5fb32658de956` | the PyPI digest of its wheel |
-| Gemini CLI | `269734d35287fbd8ed2982534258ecf4a95f184b6e06e6732e0d6850c28701d9` | the npm registry integrity |
-| T3 Code | `7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6` | the publisher SHA256SUMS |
+| Mistral Vibe | `214f2e6a392e0d057087fe0c706c9617bc0bcacea593a19b166b79a7ac05233c` | the PyPI digest of its wheel |
+| Gemini CLI | `3f42374e88171031459ad16e5fac32b161adba330292a1822fb7aae7fb476fc2` | the npm registry integrity |
 | ttyd | `8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55` | its SHA256SUMS |
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-11-03.3`, 1720 MB compressed, digest `sha256:e567c775b6a7b28dacc47b9bc2a6564c1d07608ffa504b0a13e07fb874e39553`, on `ghcr.io/briq-cloud/sandbox@sha256:4a635c082b235773b4174a1942183c70c94e035c773272140e605d76157afa5f`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-03.3 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-11-05`, 1594 MB compressed, digest `sha256:26d2ddb406eab623d8b1ec6d60b328b7d38235a9d100521bfec171196b472ba7`, on `ghcr.io/briq-cloud/sandbox@sha256:1791ed759c6ecdc18546b76541194b60a4c25b2bf8e205de28476c0bf54c3e6d`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-05 --repo briq-cloud/agent-home`.
