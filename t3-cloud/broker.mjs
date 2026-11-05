@@ -65,8 +65,8 @@ function textInput(input) {
     (item.text_elements === undefined || Array.isArray(item.text_elements) && item.text_elements.length === 0));
 }
 export class CapabilityBroker {
-  constructor({ store, app }) {
-    Object.assign(this, { store, app }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map();
+  constructor({ store, app, claude }) {
+    Object.assign(this, { store, app, claude }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map();
     app.events.on('message', message => { this.deliver(message).catch(() => {}); });
     app.events.on('closed', () => { this.unavailable = true; this.registered.clear(); this.approvals.clear(); for (const session of this.sessions) session.close(); });
   }
@@ -181,6 +181,10 @@ export class CapabilityBroker {
     const id = message.id; let mutation;
     try {
       const binding = await this.binding(session);
+      if (message.method?.startsWith('claude/')) {
+        if (!this.claude) throw Error('Claude cloud execution unavailable');
+        return await session.send({ id, result: await this.claude.receive(session, message) });
+      }
       if (message.method?.startsWith('briq/operation/') && typeof message.id !== 'number' && typeof message.id !== 'string') throw Error('Invalid request identity');
       if (message.method === 'briq/operation/execute') return await this.executeOperation(session, message, binding);
       if (message.method === 'briq/operation/receipt') return await this.executeOperation(session, message, binding, false, true);
@@ -307,6 +311,7 @@ export class CapabilityBroker {
   }
   disconnect(session) {
     session.closed = true;
+    void this.claude?.disconnect(session).catch(() => {});
     for (const mutation of session.mutations) { mutation.quarantined = true; this.mutations.delete(mutation.id); }
     session.mutations.clear();
     this.sessions.delete(session);

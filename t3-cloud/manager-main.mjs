@@ -33,7 +33,7 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
       const factory = centralRuntime ?? (await import('./central-runtime.mjs')).createCentralRuntime;
       runtime = await factory(env);
     }
-    connections = nativeConnections(env);
+    connections = nativeConnections(env, { claudeCredentialOwner: runtime?.claudeCredentialOwner });
     server = createCloudManager({ role, publicOrigin: origin, ownerKey: env.T3_CLOUD_OWNER_KEY,
       ownerId: env.T3_CLOUD_OWNER_ID, allocatorToken, connections, ...runtime });
     server.on('connection',socket=>{sockets.add(socket);socket.once('close',()=>sockets.delete(socket));});

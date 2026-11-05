@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { digest } from './allocations.mjs';
 import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
-export function cli(args, { env = process.env, stdin, timeout = 120000 } = {}, spawnProcess = spawn) {
+export function cli(args, { env = process.env, stdin, timeout = 120000, execResult = false } = {}, spawnProcess = spawn) {
   return new Promise((resolve, reject) => {
     const process = spawnProcess('briq', ['--json', ...args], { env: withoutExecutingMcpEnvironment(env), stdio: ['pipe', 'pipe', 'pipe'] });
     let output = ''; let bytes = 0; let failed = false;
@@ -14,8 +14,13 @@ export function cli(args, { env = process.env, stdin, timeout = 120000 } = {}, s
     process.stdout.on('data', chunk => { bytes += chunk.length; if (bytes > 1048576) { failed = true; process.kill('SIGTERM'); } else output += chunk; });
     process.stderr.resume();
     process.stdin.on('error', () => {}); process.stdin.end(stdin);
-    process.on('close', code => { clearTimeout(timer); if (failed || code !== 0) return reject(Error('Briq CLI operation failed'));
-      try { resolve(JSON.parse(output)); } catch { reject(Error('Briq CLI returned invalid JSON')); } });
+    process.on('close', code => { clearTimeout(timer); if (failed) return reject(Error('Briq CLI operation failed'));
+      try {
+        const parsed = JSON.parse(output);
+        if (code !== 0 && !(execResult && parsed.exec && ['exited', 'timed_out', 'stopped', 'lost'].includes(parsed.exec.state) &&
+          (parsed.exec.state === 'exited' ? parsed.exec.exitCode === code : code === 1))) throw Error('Briq CLI operation failed');
+        resolve(parsed);
+      } catch { reject(Error('Briq CLI operation failed')); } });
   });
 }
 function endpoint(value) {
@@ -65,6 +70,16 @@ export class BriqCloud {
     const pairing = JSON.parse(response.stdout);
     if (typeof pairing.credential !== 'string') throw Error('Sandbox pairing returned invalid credential');
     return pairing.credential;
+  }
+  async execAsync(briqId, command, timeoutMs) {
+    return this.run(['exec', '--async', '--clear-env', '--timeout', String(timeoutMs), briqId,
+      '--', '/bin/sh', '-c', 'cd /work && exec /bin/sh -c "$1"', 'claude-remote', command], { env: this.env });
+  }
+  async execStatus(briqId, execId) {
+    return this.run(['exec-result', briqId, execId, '--wait', '30000'], { env: this.env, timeout: 45000, execResult: true });
+  }
+  async execStop(briqId, execId) {
+    return this.run(['exec-stop', briqId, execId], { env: this.env });
   }
   async stop(binding) { await this.run(['stop', binding.briqId], { env: this.env }); }
 }

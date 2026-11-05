@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ClaudeCredentialOwner } from './claude-runtime.mjs';
 import { briqStatus, nativeConnections } from './native-connections.mjs';
 test('CLI identity checks do not mistake MCP configuration or network errors for sign-in',async()=>{
  const env={BRIQ_MCP_TOKEN:'fake-mcp-capability',T3_CLOUD_EDGE_TOKEN:'must-not-inherit'};
@@ -25,4 +26,19 @@ test('native sign-in, status and pairing helpers receive no executing MCP grant 
  assert.deepEqual(calls,['claude-status','briq-status','claude-login','briq-login','pair']);
  const absent=nativeConnections({}, {signIn:()=>({status:{state:'idle'}}),status:async()=>false,briqIdentity:async()=>false});
  assert.equal((await absent.status()).briq.mcp,'unconfigured');
+});
+
+test('Claude sign-in retains the query credential owner through cancel until native process end',async()=>{
+ const owner=new ClaudeCredentialOwner();let ended,statusCalls=0,cancels=0;
+ const connections=nativeConnections({}, {claudeCredentialOwner:owner,
+  signIn:({name},onEnd)=>{if(name==='claude')ended=onEnd;return{status:{state:'waiting'},start:async()=>({state:'waiting'}),cancel:()=>{cancels++;},input:()=>true};},
+  status:async()=>{statusCalls++;return true;},briqIdentity:async()=>false});
+ const releaseQuery=owner.acquire({kind:'query'});
+ assert.throws(()=>connections.claudeLogin(),/busy/);
+ assert.equal((await connections.status()).claude.authenticated,null);assert.equal(statusCalls,0);
+ releaseQuery();await connections.claudeLogin();
+ assert.throws(()=>owner.acquire({kind:'query'}),/busy/);
+ connections.claudeCancel();assert.equal(cancels,1);assert.throws(()=>owner.acquire({kind:'query'}),/busy/);
+ ended();const release=owner.acquire({kind:'query'});release();
+ assert.equal((await connections.status()).claude.authenticated,true);assert.equal(statusCalls,1);
 });

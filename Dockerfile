@@ -170,6 +170,18 @@ RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0
 
 FROM native-clis AS t3-cloud
 COPY --from=t3-source /out/t3 /opt/t3
+# T3's SDK/tool protocol has its own compatibility pin. Agent Home keeps the
+# independently resolved native-clis version and its existing managed settings.
+RUN V="$(node -p 'require("/opt/t3/source.json").claude')" \
+  && H="$(node -e 'const m=require("/opt/t3/source.json"),p=require("/opt/t3/node_modules/@anthropic-ai/claude-agent-sdk/package.json"),c=require("/opt/t3/node_modules/@anthropic-ai/claude-agent-sdk/manifest.json"),a=require("node:assert/strict");a.match(m.claude,/^\d+\.\d+\.\d+$/);a.equal(p.version,m.claudeSdk);a.equal(c.version,m.claude);const h=c.platforms["linux-x64"].checksum;a.match(h,/^[a-f0-9]{64}$/);process.stdout.write(h)')" \
+  && if ! echo "$H  /usr/local/bin/claude" | sha256sum -c - > /dev/null 2>&1; then \
+    curl -fsSL "https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude" -o /tmp/t3-claude \
+    && echo "$H  /tmp/t3-claude" | sha256sum -c - \
+    && install -m 755 /tmp/t3-claude /usr/local/bin/claude && rm /tmp/t3-claude; \
+  fi \
+  && test "$(claude --version)" = "$V (Claude Code)" \
+  && printf 'Claude Code T3 compatibility\t%s\tSDK release manifest\n' "$H" >> /etc/agent-home/downloads \
+  && printf '%s\n' '{"disableAllHooks":true,"disableAgentView":true,"disableRemoteControl":true,"env":{"DISABLE_AUTOUPDATER":"1","DISABLE_UPDATES":"1"}}' > /etc/claude-code/managed-settings.json
 RUN test "$(cat /etc/agent-home/codex-version)" = "$(node -p 'require("/opt/t3/source.json").codex')" \
   && test -x /opt/t3/t3 \
   && printf 'T3 Code source\t2359643cffa6ba9ee84d6f2694b935de54a8013e\tpinned source, lock and local patch\n' >> /etc/agent-home/downloads

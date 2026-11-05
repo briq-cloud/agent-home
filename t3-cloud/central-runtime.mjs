@@ -1,3 +1,4 @@
+import { ClaudeRuntime } from './claude-runtime.mjs';
 import { edgeToken, edgeAuthorized, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
@@ -16,11 +17,12 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const lock = join(directory, 'central.lock');
   await mkdir(lock, { mode: 0o700 });
-  let app, websocket; const peers = new Set(); let stopped = false;
+  let app, websocket, claude; const peers = new Set(); let stopped = false;
   async function close() {
     if (stopped) return; stopped = true;
     for (const peer of peers) peer.terminate();
     websocket?.close();
+    await claude?.close();
     await app?.close();
     await rm(lock, { recursive: true });
   }
@@ -31,7 +33,10 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     for (const binding of await store.list()) if (binding.state !== 'revoked') requireEdgeBinding(binding, edgeCredential);
     app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex'),
       briqCapability: briqMcpCapability(env), briqEndpoint: briqMcpEndpoint(env) });
-    const broker = new CapabilityBroker({ store, app });
+    const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
+    const claudeLedger = new AllocationStore(join(directory, 'claude-ledger')); await claudeLedger.initialize();
+    claude = new ClaudeRuntime({ store, ledger: claudeLedger, cloud, directory: join(directory, 'claude'), nativeHome: env.HOME, nativeConfigDirectory: env.CLAUDE_CONFIG_DIR });
+    const broker = new CapabilityBroker({ store, app, claude });
     // Re-register persisted execution capabilities and verify sticky selections before serving.
     for (const binding of await store.list()) {
       if (binding.state !== 'ready') continue;
@@ -44,7 +49,6 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         // History alone does not correlate an uncertain client mutation. Keep quarantine.
       }
     }
-    const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
     const allocator = new ThreadAllocator({ store, cloud, image: env.T3_CLOUD_CHILD_IMAGE,
       edgeCredential, bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
       registerEnvironment: binding => broker.registerEnvironment(binding) });
@@ -68,6 +72,6 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         });
       } catch { session?.close(); socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); }
     }
-    return { allocator, broker, bridgeUpgrade, close };
+    return { allocator, broker, bridgeUpgrade, close, claudeCredentialOwner: claude.credentials };
   } catch (error) { await close(); throw error; }
 }

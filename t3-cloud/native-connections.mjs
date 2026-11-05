@@ -15,17 +15,30 @@ export function briqStatus(env, run = execFile) {
 }
 
 // Keep credential files under each native CLI's existing home. No credentials are read here.
-export function nativeConnections(env = process.env, { signIn = options => new SignIn(options), status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
+export function nativeConnections(env = process.env, { signIn = (options, ended) => new SignIn(options, undefined, {}, ended), claudeCredentialOwner, status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
   const mcpConfigured = Boolean(env.BRIQ_MCP_TOKEN);
   env = helperEnvironment(env);
-  const claude = signIn({ name: 'claude', login: ['claude', 'auth', 'login'] });
+  let releaseClaude;
+  const claude = signIn({ name: 'claude', login: ['claude', 'auth', 'login'] }, () => { releaseClaude?.(); releaseClaude = undefined; });
+  const claudeStatus = async () => {
+    if (releaseClaude) return null;
+    let release;
+    try { release = claudeCredentialOwner?.acquire({ kind: 'status' }); }
+    catch { return null; }
+    try { return await status(['claude', 'auth', 'status'], env); } finally { release?.(); }
+  };
   const briq = signIn({ name: 'briq', login: ['briq', 'login'] });
   return {
     async status() {
-      return { claude: { authenticated: await status(['claude', 'auth', 'status'], env), signIn: claude.status },
+      return { claude: { authenticated: await claudeStatus(), signIn: claude.status },
         briq: { authenticated: await briqIdentity(env), signIn: briq.status, mcp: mcpConfigured ? 'configured-unverified' : 'unconfigured' } };
     },
-    claudeLogin: () => claude.start(env), claudeInput: code => claude.input(code), claudeCancel: () => claude.cancel(),
+    claudeLogin: () => {
+      if (!releaseClaude) releaseClaude = claudeCredentialOwner?.acquire({ kind: 'sign-in' });
+      // start() returns at the authorization page. Release only when its native
+      // process exits; cancel() and a failed UI state are not exit evidence.
+      return claude.start(env);
+    }, claudeInput: code => claude.input(code), claudeCancel: () => claude.cancel(),
     briqLogin: () => briq.start(env),
     pair(origin) {
       return new Promise((resolve, reject) => pair('/opt/t3/t3', ['auth', 'pairing', 'create', '--base-dir', env.T3_STATE,

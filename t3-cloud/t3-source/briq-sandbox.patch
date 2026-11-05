@@ -82,6 +82,439 @@ index 6049121b..2849920c 100644
      const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
      if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
      return onAuthorized === undefined
+diff --git a/apps/server/src/briqClaudeQuery.test.ts b/apps/server/src/briqClaudeQuery.test.ts
+new file mode 100644
+index 00000000..60e71f14
+--- /dev/null
++++ b/apps/server/src/briqClaudeQuery.test.ts
+@@ -0,0 +1,57 @@
++// @effect-diagnostics nodeBuiltinImport:off - hashes the fake provider receipt.
++import { createHash } from "node:crypto";
++import { assert, it } from "@effect/vitest";
++import { claudeBridgeConfiguration, validateClaudeEventEnvelope } from "./briqClaudeQuery.ts";
++const nativeId = "22222222-2222-4222-8222-222222222222";
++const key = "11111111-1111-4111-8111-111111111111";
++it("rejects cross-thread, control, delegated and stale turn events", () => {
++  const event = { type: "assistant", uuid: key, session_id: nativeId, parent_tool_use_id: null };
++  const envelope = { nativeId, threadId: "thread-a", key, event };
++  assert.equal(
++    validateClaudeEventEnvelope(envelope, nativeId, "thread-a", key).event.type,
++    "assistant",
++  );
++  for (const bad of [
++    { ...envelope, threadId: "thread-b" },
++    { ...envelope, key: nativeId },
++    { ...envelope, event: { ...event, type: "auth_status" } },
++    { ...envelope, event: { ...event, parent_tool_use_id: "subagent" } },
++    { ...envelope, event: { ...event, type: "system", subtype: "hook_started" } },
++  ]) {
++    assert.throws(() => validateClaudeEventEnvelope(bad, nativeId, "thread-a", key));
++  }
++});
++it("requires a canonical exact result hash bound to the submitted SDK prompt uuid", () => {
++  const event = { session_id: nativeId, type: "result", user_message_uuid: key, uuid: key };
++  const resultHash = createHash("sha256").update(JSON.stringify(event)).digest("hex");
++  const envelope = { nativeId, threadId: "thread-a", key, event, resultHash };
++  assert.deepEqual(validateClaudeEventEnvelope(envelope, nativeId, "thread-a", key).receipt, {
++    nativeId,
++    key,
++    resultHash,
++  });
++  assert.throws(() =>
++    validateClaudeEventEnvelope(
++      { ...envelope, event: { ...event, user_message_uuid: nativeId } },
++      nativeId,
++      "thread-a",
++      key,
++    ),
++  );
++  assert.throws(() =>
++    validateClaudeEventEnvelope(
++      { ...envelope, resultHash: "0".repeat(64) },
++      nativeId,
++      "thread-a",
++      key,
++    ),
++  );
++});
++it("rejects bridge routing and credential confusion before opening a socket", () => {
++  assert.throws(() =>
++    claudeBridgeConfiguration({
++      T3_CLOUD_ROLE: "child",
++      T3_CLOUD_BRIDGE_URL: "wss://cloud.example/other",
++    }),
++  );
++});
+diff --git a/apps/server/src/briqClaudeQuery.ts b/apps/server/src/briqClaudeQuery.ts
+new file mode 100644
+index 00000000..be790d10
+--- /dev/null
++++ b/apps/server/src/briqClaudeQuery.ts
+@@ -0,0 +1,364 @@
++// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - the WebSocket transport owns and clears request deadlines.
++import { setTimeout, clearTimeout } from "node:timers";
++import { createHash, randomUUID } from "node:crypto";
++import { NodeWS } from "@effect/platform-node/NodeSocket";
++import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
++import * as Effect from "effect/Effect";
++import * as Stream from "effect/Stream";
++import type {
++  ClaudeRemoteResultReceipt,
++  ClaudeAgentSdkQueryOpenInput,
++  ClaudeAgentSdkQueryRunnerError,
++  ClaudeAgentSdkQueryRunnerShape,
++} from "./orchestration-v2/Adapters/ClaudeAdapterV2.ts";
++
++type Environment = Readonly<Record<string, string | undefined>>;
++type Failure = (cause: unknown, method: string) => ClaudeAgentSdkQueryRunnerError;
++export function claudeBridgeConfiguration(env: Environment) {
++  const url = new URL(env.T3_CLOUD_BRIDGE_URL ?? "");
++  const token = env.T3_CLOUD_BRIDGE_TOKEN;
++  const edge = env.T3_CLOUD_EDGE_TOKEN;
++  if (
++    env.T3_CLOUD_ROLE !== "child" ||
++    !/^[a-zA-Z0-9_-]{1,128}$/.test(env.T3_CLOUD_THREAD_ID ?? "") ||
++    url.protocol !== "wss:" ||
++    url.pathname !== "/_cloud/bridge" ||
++    url.username ||
++    url.password ||
++    url.search ||
++    url.hash ||
++    !/^[a-zA-Z0-9_-]{43}$/.test(token ?? "") ||
++    !edge ||
++    !/^[\x21\x23-\x2b\x2d-\x3a\x3c-\x5b\x5d-\x7e]{32,512}$/.test(edge) ||
++    edge === token
++  )
++    throw Error("Invalid Claude bridge binding");
++  return { url: url.href, token: token!, edge, threadId: env.T3_CLOUD_THREAD_ID! };
++}
++
++const uuid = (value: unknown): value is string =>
++  typeof value === "string" &&
++  /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value);
++function canonical(value: unknown): string {
++  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
++  if (value && typeof value === "object")
++    return `{${Object.keys(value)
++      .sort()
++      .map((key) => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`)
++      .join(",")}}`;
++  return JSON.stringify(value) ?? "null";
++}
++export function validateClaudeEventEnvelope(
++  value: unknown,
++  nativeId: string | undefined,
++  threadId: string,
++  key: string | undefined,
++) {
++  if (!value || typeof value !== "object") throw Error("Invalid Claude event");
++  const envelope = value as Record<string, unknown>;
++  const event = envelope.event as Record<string, unknown> | undefined;
++  if (
++    Object.keys(envelope).some(
++      (name) => !["nativeId", "threadId", "key", "event", "resultHash"].includes(name),
++    ) ||
++    envelope.nativeId !== nativeId ||
++    envelope.threadId !== threadId ||
++    !event ||
++    !uuid(event.uuid) ||
++    event.session_id !== nativeId ||
++    ![
++      "assistant",
++      "user",
++      "result",
++      "stream_event",
++      "tool_progress",
++      "tool_use_summary",
++      "system",
++    ].includes(String(event.type)) ||
++    (event.parent_tool_use_id !== undefined && event.parent_tool_use_id !== null) ||
++    (event.type === "system" &&
++      !["init", "status", "prompt_lifecycle"].includes(String(event.subtype))) ||
++    !(
++      envelope.key === key ||
++      (envelope.key === null &&
++        event.type === "system" &&
++        ["init", "status"].includes(String(event.subtype)))
++    )
++  )
++    throw Error("Claude event binding mismatch");
++  if (
++    event.type === "result" &&
++    (!key ||
++      !/^[a-f0-9]{64}$/.test(String(envelope.resultHash)) ||
++      envelope.resultHash !== createHash("sha256").update(canonical(event)).digest("hex") ||
++      (event.user_message_uuid !== key &&
++        !(Array.isArray(event.user_message_uuids) && event.user_message_uuids.includes(key))))
++  )
++    throw Error("Claude result receipt mismatch");
++  return {
++    event: event as SDKMessage,
++    ...(event.type === "result"
++      ? {
++          receipt: {
++            key: key!,
++            nativeId: nativeId!,
++            resultHash: String(envelope.resultHash),
++          },
++        }
++      : {}),
++  };
++}
++
++export class Channel {
++  private sequence = 0;
++  private failed = false;
++  private nativeId: string | undefined;
++  private turnKey: string | undefined;
++  private readonly receipts = new WeakMap<SDKMessage, ClaudeRemoteResultReceipt>();
++  private readonly threadId: string;
++  private queue: Array<SDKMessage> = [];
++  private waiting: ((value: IteratorResult<SDKMessage>) => void) | undefined;
++  private rejection: ((error: Error) => void) | undefined;
++  private pending = new Map<
++    number,
++    {
++      resolve: (value: Record<string, unknown>) => void;
++      reject: (error: Error) => void;
++      timer: ReturnType<typeof setTimeout>;
++    }
++  >();
++  readonly socket: NodeWS.WebSocket;
++  readonly ready: Promise<void>;
++  constructor(env: Environment) {
++    const config = claudeBridgeConfiguration(env);
++    this.threadId = config.threadId;
++    this.socket = new NodeWS.WebSocket(config.url, {
++      headers: { authorization: `Bearer ${config.token}`, cookie: `briq_token=${config.edge}` },
++      maxPayload: 2097152,
++      perMessageDeflate: false,
++      handshakeTimeout: 15000,
++    });
++    this.ready = new Promise((resolve, reject) => {
++      this.socket.once("open", resolve);
++      this.socket.once("error", () => reject(Error("Claude bridge unavailable")));
++    });
++    this.socket.on("error", () => this.fail());
++    this.socket.on("close", () => this.fail());
++    this.socket.on("message", (data) => {
++      try {
++        const value = JSON.parse(data.toString());
++        if (typeof value.id === "number") {
++          const pending = this.pending.get(value.id);
++          if (!pending) throw Error();
++          this.pending.delete(value.id);
++          clearTimeout(pending.timer);
++          if (value.error) pending.reject(Error("Central Claude request rejected"));
++          else if (value.result && typeof value.result === "object") pending.resolve(value.result);
++          else throw Error();
++        } else if (value.method === "claude/event" && this.queue.length < 256) {
++          const { event, receipt } = validateClaudeEventEnvelope(
++            value.params,
++            this.nativeId,
++            this.threadId,
++            this.turnKey,
++          );
++          if (receipt) this.receipts.set(event, receipt);
++          if (this.waiting) {
++            const waiting = this.waiting;
++            this.waiting = undefined;
++            this.rejection = undefined;
++            waiting({ value: event, done: false });
++          } else this.queue.push(event);
++        } else throw Error();
++      } catch {
++        this.fail();
++      }
++    });
++  }
++  private fail() {
++    if (this.failed) return;
++    this.failed = true;
++    for (const pending of this.pending.values()) {
++      clearTimeout(pending.timer);
++      pending.reject(Error("Claude bridge outcome unknown"));
++    }
++    this.pending.clear();
++    this.queue = [];
++    this.rejection?.(Error("Claude bridge disconnected; no automatic replay"));
++    this.waiting = undefined;
++    this.rejection = undefined;
++    this.socket.terminate();
++  }
++  bind(nativeId: string) {
++    this.nativeId = nativeId;
++  }
++  offer(key: string, text: string) {
++    if (this.turnKey && this.turnKey !== key)
++      return Promise.reject(Error("Claude previous result requires adoption"));
++    this.turnKey = key;
++    return this.request("claude/offer", { nativeId: this.nativeId, key, text });
++  }
++  resultReceipt(message: SDKMessage) {
++    return this.receipts.get(message);
++  }
++  async adopt(receipt: ClaudeRemoteResultReceipt, eventSequence: number) {
++    await this.request("claude/adopt", { ...receipt, eventSequence });
++    if (this.turnKey === receipt.key) this.turnKey = undefined;
++  }
++  close() {
++    this.fail();
++  }
++  async request(method: string, params: Record<string, unknown> = {}) {
++    await this.ready;
++    if (this.failed) throw Error("Claude bridge unavailable");
++    return new Promise<Record<string, unknown>>((resolve, reject) => {
++      const id = ++this.sequence;
++      const timer = setTimeout(() => this.fail(), 30000);
++      this.pending.set(id, { resolve, reject, timer });
++      this.socket.send(JSON.stringify({ id, method, params }), (error) => {
++        if (error) this.fail();
++      });
++    });
++  }
++  messages: AsyncIterable<SDKMessage> = {
++    [Symbol.asyncIterator]: () => ({
++      next: () => {
++        if (this.failed) return Promise.reject(Error("Claude bridge unavailable"));
++        if (this.queue.length)
++          return Promise.resolve({ value: this.queue.shift()!, done: false as const });
++        return new Promise<IteratorResult<SDKMessage>>((resolve, reject) => {
++          this.waiting = resolve;
++          this.rejection = reject;
++        });
++      },
++    }),
++  };
++}
++
++export function remoteClaudeRunner(
++  env: Environment,
++  failure: Failure,
++): ClaudeAgentSdkQueryRunnerShape {
++  const denied = (method: string) =>
++    Effect.fail(failure("Unavailable in sandbox Claude policy", method));
++  const attempt = <A>(method: string, operation: () => Promise<A>) =>
++    Effect.tryPromise({ try: operation, catch: (cause) => failure(cause, method) });
++  return {
++    allocateSessionId: attempt("allocateSessionId", async () => {
++      const channel = new Channel(env);
++      try {
++        const result = await channel.request("claude/allocate");
++        if (typeof result.nativeId !== "string" || !/^[a-f0-9-]{36}$/.test(result.nativeId))
++          throw Error("Invalid native identity");
++        return result.nativeId;
++      } finally {
++        channel.close();
++      }
++    }),
++    open: Effect.fn("remoteClaude.open")(function* (input: ClaudeAgentSdkQueryOpenInput) {
++      const config = yield* Effect.try({
++        try: () => claudeBridgeConfiguration(env),
++        catch: (cause) => failure(cause, "binding"),
++      });
++      if (input.threadId !== config.threadId) return yield* denied("open");
++      const nativeId = input.options.sessionId ?? input.options.resume;
++      const channel = new Channel(env);
++      channel.bind(nativeId);
++      yield* attempt("open", async () => {
++        try {
++          const result = await channel.request("claude/open", {
++            nativeId,
++            key: randomUUID(),
++            model: input.options.model,
++          });
++          if (result.nativeId !== nativeId) throw Error("Claude native identity mismatch");
++        } catch (error) {
++          channel.close();
++          throw error;
++        }
++      });
++      const request = (method: string, params: Record<string, unknown> = {}) =>
++        attempt(method, () => channel.request(method, { nativeId, ...params })).pipe(Effect.asVoid);
++      return {
++        messages: Stream.fromAsyncIterable(channel.messages, (cause) => failure(cause, "messages")),
++        offer: (message, onQueued) => {
++          const content = message.message.content;
++          // Remote attachments and structured tool results require their own audited transfer path.
++          if (
++            message.type !== "user" ||
++            typeof content !== "string" ||
++            message.parent_tool_use_id !== null ||
++            !uuid(message.uuid) ||
++            (message.session_id !== undefined && message.session_id !== nativeId) ||
++            message.isSynthetic ||
++            message.origin !== undefined ||
++            message.priority !== undefined
++          )
++            return denied("offer");
++          return attempt("offer", () => channel.offer(message.uuid!, content)).pipe(
++            Effect.asVoid,
++            Effect.tap(() => Effect.sync(() => onQueued?.())),
++          );
++        },
++        remoteResultReceipt: (message) => channel.resultReceipt(message),
++        adoptRemoteResult: (receipt, eventSequence) =>
++          attempt("adoptResult", () => channel.adopt(receipt, eventSequence)),
++        setModel: (model) => request("claude/model", { model }),
++        applyFlagSettings: () => denied("applyFlagSettings"),
++        setPermissionMode: (mode) =>
++          mode === "dontAsk" ? Effect.void : denied("setPermissionMode"),
++        stopTask: () => denied("stopTask"),
++        backgroundTasks: () => Effect.succeed(false),
++        interrupt: request("claude/interrupt"),
++        close: request("claude/close").pipe(Effect.ensuring(Effect.sync(() => channel.close()))),
++      };
++    }),
++    reconcileRemoteResults: Effect.fn("remoteClaude.reconcileResults")(
++      function* (threadId, readCommitted) {
++        const config = yield* Effect.try({
++          try: () => claudeBridgeConfiguration(env),
++          catch: (cause) => failure(cause, "binding"),
++        });
++        if (threadId !== config.threadId) return yield* denied("reconcileResults");
++        const channel = new Channel(env);
++        yield* Effect.gen(function* () {
++          const allocation = yield* attempt("allocateSessionId", () =>
++            channel.request("claude/allocate"),
++          );
++          if (!uuid(allocation.nativeId)) return yield* denied("reconcileResults");
++          const nativeId = allocation.nativeId;
++          channel.bind(nativeId);
++          const pending = yield* attempt("pendingResults", () =>
++            channel.request("claude/pending", { nativeId }),
++          );
++          if (!Array.isArray(pending.results) || pending.results.length > 1)
++            return yield* denied("reconcileResults");
++          for (const value of pending.results) {
++            if (
++              !value ||
++              typeof value !== "object" ||
++              Object.keys(value).sort().join(",") !== "key,nativeId,resultHash" ||
++              value.nativeId !== nativeId ||
++              !uuid(value.key) ||
++              !/^[a-f0-9]{64}$/.test(value.resultHash)
++            )
++              return yield* denied("reconcileResults");
++            const receipt: ClaudeRemoteResultReceipt = {
++              nativeId,
++              key: value.key,
++              resultHash: value.resultHash,
++            };
++            const sequence = yield* readCommitted(receipt).pipe(
++              Effect.mapError((cause) => failure(cause, "committedResult")),
++            );
++            if (sequence === undefined) return yield* denied("uncommittedResult");
++            yield* attempt("adoptResult", () => channel.adopt(receipt, sequence));
++          }
++        }).pipe(Effect.ensuring(Effect.sync(() => channel.close())));
++      },
++    ),
++    forkSession: () => denied("forkSession"),
++    subagentLaunchToolUseId: () => denied("subagentLaunchToolUseId"),
++    assertComplete: Effect.void,
++  };
++}
 diff --git a/apps/server/src/briqSandbox.test.ts b/apps/server/src/briqSandbox.test.ts
 new file mode 100644
 index 00000000..3a649821
@@ -610,6 +1043,127 @@ index 1e3388e4..9c55ed3c 100644
    [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
    [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
    [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
+diff --git a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+index a280bd84..b92fe58e 100644
+--- a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
++++ b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
+@@ -1,3 +1,4 @@
++import { remoteClaudeRunner } from "../../briqClaudeQuery.ts";
+ import * as DocumentText from "../../provider/DocumentText.ts";
+ import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+ import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+@@ -516,7 +517,16 @@ export interface ClaudeAgentSdkQueryOpenInput {
+   readonly providerSessionId: OrchestrationV2ProviderSession["id"];
+ }
+ 
++export type ClaudeRemoteResultReceipt = Omit<
++  NonNullable<OrchestrationV2ProviderTurn["sandboxResult"]>,
++  "provider"
++>;
+ export interface ClaudeAgentSdkQuerySession {
++  readonly remoteResultReceipt?: (message: SDKMessage) => ClaudeRemoteResultReceipt | undefined;
++  readonly adoptRemoteResult?: (
++    receipt: ClaudeRemoteResultReceipt,
++    eventSequence: number,
++  ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+   readonly messages: Stream.Stream<SDKMessage, ClaudeAgentSdkQueryRunnerError>;
+   readonly offer: (
+     message: SDKUserMessage,
+@@ -603,6 +613,12 @@ export class ClaudeSettingsLaunchArgError extends Schema.TaggedError<ClaudeSetti
+ }
+ 
+ export interface ClaudeAgentSdkQueryRunnerShape {
++  readonly reconcileRemoteResults?: (
++    threadId: ThreadId,
++    readCommitted: (
++      receipt: ClaudeRemoteResultReceipt,
++    ) => Effect.Effect<number | undefined, ClaudeAgentSdkQueryRunnerError>,
++  ) => Effect.Effect<void, ClaudeAgentSdkQueryRunnerError>;
+   readonly allocateSessionId: Effect.Effect<string, ClaudeAgentSdkQueryRunnerError>;
+   readonly open: (
+     input: ClaudeAgentSdkQueryOpenInput,
+@@ -949,6 +965,12 @@ export const layerQueryRunner: Layer.Layer<
+     const hostEnvironment = yield* HostProcess.Environment;
+     const portDiscovery = yield* PortScanner.PortDiscovery;
+ 
++    // A child never starts a native credential-owning Claude process, including omitted/default settings.
++    if (hostEnvironment.T3_CLOUD_ROLE === "child")
++      return remoteClaudeRunner(hostEnvironment, queryRunnerError);
++    if (hostEnvironment.T3_CLOUD_ROLE && hostEnvironment.T3_CLOUD_ROLE !== "standalone")
++      return remoteClaudeRunner({}, queryRunnerError);
++
+     return ClaudeAgentSdkQueryRunner.of({
+       allocateSessionId: crypto
+         .randomUUIDv4()
+@@ -7487,6 +7509,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+             });
+           }
+ 
++          const remoteReceipt =
++            input.result === undefined
++              ? undefined
++              : liveQuery?.query.remoteResultReceipt?.(input.result);
+           const threadDisposition = input.threadDisposition ?? "reusable";
+           const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
+             input.status === "failed"
+@@ -7531,6 +7557,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+                     status: input.status,
+                     completedAt: input.completedAt,
+                   }),
++                  ...(remoteReceipt === undefined
++                    ? {}
++                    : { sandboxResult: { provider: "claudeAgent" as const, ...remoteReceipt } }),
+                   turnTokenUsage: normalizeClaudeTurnTokenUsage(
+                     input.result,
+                     input.context.subagentsByTaskId.size > 0 ||
+@@ -11020,6 +11049,47 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+           getModelContextWindow: (selection) =>
+             resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
+           events: Stream.fromEffectRepeat(Queue.take(events)),
++          adoptSandboxProviderResult: Effect.fn("ClaudeAdapterV2.adoptSandboxProviderResult")(
++            function* (receipt, sequence) {
++              const live = yield* Ref.get(queryContext);
++              if (!live?.query.adoptRemoteResult || live.nativeThreadId !== receipt.nativeId) {
++                return yield* new ProviderAdapter.ProviderAdapterEnsureThreadError({
++                  driver: CLAUDE_PROVIDER,
++                  threadId: input.threadId,
++                  cause: "Claude result owner is unavailable for adoption.",
++                });
++              }
++              yield* live.query.adoptRemoteResult(receipt, sequence).pipe(
++                Effect.mapError(
++                  (cause) =>
++                    new ProviderAdapter.ProviderAdapterEnsureThreadError({
++                      driver: CLAUDE_PROVIDER,
++                      threadId: input.threadId,
++                      cause,
++                    }),
++                ),
++              );
++            },
++          ),
++          reconcileSandboxProviderResults: (readCommitted) =>
++            queryRunner.reconcileRemoteResults === undefined
++              ? Effect.void
++              : queryRunner
++                  .reconcileRemoteResults(input.threadId, (receipt) =>
++                    readCommitted({ provider: "claudeAgent", ...receipt }).pipe(
++                      Effect.mapError((cause) => queryRunnerError(cause, "committedResult")),
++                    ),
++                  )
++                  .pipe(
++                    Effect.mapError(
++                      (cause) =>
++                        new ProviderAdapter.ProviderAdapterEnsureThreadError({
++                          driver: CLAUDE_PROVIDER,
++                          threadId: input.threadId,
++                          cause,
++                        }),
++                    ),
++                  ),
+           backgroundTasksEndWithProcess: true,
+           hasPendingBackgroundWork: Effect.gen(function* () {
+             for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
 diff --git a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts b/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
 index 90ee44f3..8aca94a7 100644
 --- a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
@@ -4610,18 +5164,186 @@ index c3443579..3c27e4e2 100644
      const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
      if (!enabled) return;
      const threadIds = yield* projections.getRecoveryThreadIds("runtime");
+diff --git a/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts b/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
+index 5bbb3926..9d9dea24 100644
+--- a/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
++++ b/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
+@@ -3819,3 +3819,54 @@ it.effect("ProviderSessionManagerV2 gives a delegated child its project's device
+     assert.isTrue(child?.capabilities?.has("device"));
+   }),
+ );
++
++it("Claude recovery accepts one committed terminal receipt and rejects conflicting or cross-owner proof", () => {
++  const threadId = ThreadId.make("thread-claude-recovery");
++  const receipt = {
++    provider: "claudeAgent" as const,
++    nativeId: "22222222-2222-4222-8222-222222222222",
++    key: "11111111-1111-4111-8111-111111111111",
++    resultHash: "a".repeat(64),
++  };
++  const turn = {
++    id: "provider-turn",
++    providerThreadId: "provider-thread",
++    runAttemptId: "attempt",
++    status: "completed",
++    nativeTurnRef: { driver: "claudeAgent", nativeId: "turn:attempt", strength: "strong" },
++    sandboxResult: receipt,
++  };
++  const records = {
++    providerThreads: [
++      {
++        id: "provider-thread",
++        appThreadId: threadId,
++        nativeThreadRef: { driver: "claudeAgent", nativeId: receipt.nativeId },
++      },
++    ],
++    attempts: [{ id: "attempt", providerThreadId: "provider-thread" }],
++    providerTurns: [turn],
++  } as unknown as Parameters<typeof ProviderSessionManager.committedClaudeResultSequence>[3];
++  const stored = [
++    { sequence: 17, event: { type: "provider-turn.updated", threadId, payload: turn } },
++  ] as unknown as Parameters<typeof ProviderSessionManager.committedClaudeResultSequence>[2];
++  const read = (rows = stored, snapshot = records) =>
++    ProviderSessionManager.committedClaudeResultSequence(threadId, receipt, rows, snapshot);
++  assert.equal(read(), 17);
++  assert.equal(read([]), undefined);
++  assert.throws(() => read([...stored, ...stored]));
++  assert.throws(() =>
++    read([{ ...stored[0]!, event: { ...stored[0]!.event, threadId: ThreadId.make("other") } }]),
++  );
++  assert.throws(() => read(stored, { ...records, providerThreads: [] }));
++  assert.throws(() => read(stored, { ...records, attempts: [] }));
++  assert.throws(() => read(stored, { ...records, providerTurns: [] }));
++  assert.throws(() =>
++    ProviderSessionManager.committedClaudeResultSequence(
++      threadId,
++      { ...receipt, resultHash: "b".repeat(64) },
++      stored,
++      records,
++    ),
++  );
++});
 diff --git a/apps/server/src/orchestration-v2/ProviderSessionManager.ts b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
-index 03a72787..81a3b990 100644
+index 03a72787..49a78b35 100644
 --- a/apps/server/src/orchestration-v2/ProviderSessionManager.ts
 +++ b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
-@@ -1,4 +1,6 @@
+@@ -1,12 +1,18 @@
  import { AgentScope } from "@t3tools/shared/AgentScope";
 +import { sandboxRole } from "../briqSandbox.ts";
 +import { sandboxRootRecovery, sandboxRootRecoveryOwned } from "./SandboxRootRecovery.ts";
  import * as KeyedLock from "@t3tools/shared/KeyedLock";
  import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
  import {
-@@ -844,28 +846,62 @@ export const layerWithOptions = (
+   isOrchestrationV2WorkActive,
+   ModelSelection,
++  CommandId,
+   OrchestrationV2DomainEvent,
+   OrchestrationV2ProviderSession,
+   type OrchestrationV2ProviderThread,
++  type OrchestrationV2ProviderTurn,
++  type OrchestrationV2RunAttempt,
++  type OrchestrationV2StoredEvent,
+   OrchestrationV2RuntimeRequest,
+   ProviderInstanceId,
+   ProviderSessionId,
+@@ -60,6 +66,55 @@ const RELEASE_SCOPE_CLOSE_TIMEOUT_MS = 30 * 1000;
+ /** Past adapters' own 10 s stop fallbacks, so they settle first when the provider answers at all. */
+ export const PROVIDER_INTERRUPT_TIMEOUT_MS = 15 * 1000;
+ 
++export function committedClaudeResultSequence(
++  threadId: ThreadId,
++  receipt: NonNullable<OrchestrationV2ProviderTurn["sandboxResult"]>,
++  stored: ReadonlyArray<OrchestrationV2StoredEvent>,
++  records: {
++    readonly providerThreads: ReadonlyArray<OrchestrationV2ProviderThread>;
++    readonly attempts: ReadonlyArray<OrchestrationV2RunAttempt>;
++    readonly providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>;
++  },
++): number | undefined {
++  if (stored.length === 0) return undefined;
++  if (stored.length !== 1) throw Error("Conflicting Claude terminal receipts");
++  const row = stored[0]!;
++  if (
++    row.event.type !== "provider-turn.updated" ||
++    row.event.threadId !== threadId ||
++    !Number.isSafeInteger(row.sequence) ||
++    row.sequence < 1
++  )
++    throw Error("Invalid Claude terminal receipt");
++  const turn = row.event.payload;
++  const providerThread = records.providerThreads.find(
++    (value) => value.id === turn.providerThreadId,
++  );
++  const attempt = records.attempts.find((value) => value.id === turn.runAttemptId);
++  const current = records.providerTurns.find((value) => value.id === turn.id);
++  if (
++    !["completed", "interrupted", "failed", "cancelled"].includes(turn.status) ||
++    turn.runAttemptId === null ||
++    providerThread?.appThreadId !== threadId ||
++    providerThread.nativeThreadRef?.driver !== "claudeAgent" ||
++    providerThread.nativeThreadRef.nativeId !== receipt.nativeId ||
++    attempt?.providerThreadId !== turn.providerThreadId ||
++    turn.nativeTurnRef?.driver !== "claudeAgent" ||
++    turn.nativeTurnRef.nativeId !== `turn:${turn.runAttemptId}` ||
++    current?.providerThreadId !== turn.providerThreadId ||
++    current.runAttemptId !== turn.runAttemptId ||
++    current.status !== turn.status ||
++    turn.sandboxResult?.provider !== receipt.provider ||
++    turn.sandboxResult.key !== receipt.key ||
++    turn.sandboxResult.nativeId !== receipt.nativeId ||
++    turn.sandboxResult.resultHash !== receipt.resultHash ||
++    current.sandboxResult?.key !== receipt.key ||
++    current.sandboxResult.resultHash !== receipt.resultHash
++  )
++    throw Error("Claude terminal receipt identity mismatch");
++  return row.sequence;
++}
++
+ const busyTurnPrefix = (providerThreadId: ProviderThreadId) => `${providerThreadId}#`;
+ const busyTurnKey = (providerThreadId: ProviderThreadId, runOrdinal: number) =>
+   `${busyTurnPrefix(providerThreadId)}${runOrdinal}`;
+@@ -346,6 +401,40 @@ export const layerWithOptions = (
+       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+       const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+       const agentScope = yield* AgentScope;
++      const reconcileSandboxResults = Effect.fn("ProviderSessionManager.reconcileSandboxResults")(
++        function* (runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime, threadId: ThreadId) {
++          if (sandboxRole() !== "child" || !runtime.reconcileSandboxProviderResults) return;
++          yield* runtime.reconcileSandboxProviderResults((receipt) =>
++            Effect.gen(function* () {
++              const stored = yield* eventSink
++                .readByCommandId({
++                  commandId: CommandId.make(
++                    `command:sandbox:claude-result:${threadId}:${receipt.nativeId}:${receipt.key}`,
++                  ),
++                })
++                .pipe(Stream.take(2), Stream.runCollect);
++              const records = yield* projectionStore.getThreadRecords(threadId, [
++                "providerThreads",
++                "attempts",
++                "providerTurns",
++              ]);
++              return yield* Effect.try(() =>
++                committedClaudeResultSequence(threadId, receipt, stored, records),
++              );
++            }).pipe(
++              Effect.mapError(
++                (cause) =>
++                  new ProviderAdapter.ProviderAdapterEventStreamError({
++                    driver: runtime.driver,
++                    providerSessionId: runtime.providerSessionId,
++                    cause,
++                  }),
++              ),
++            ),
++          );
++        },
++      );
++
+       const agentAccessSettings = Effect.fn("ProviderSessionManagerV2.agentAccessSettings")(
+         function* (threadId: ThreadId) {
+           if (Option.isNone(serverSettings)) return { browser: true, device: false };
+@@ -844,28 +933,62 @@ export const layerWithOptions = (
            { discard: true },
          );
  
@@ -4705,6 +5427,31 @@ index 03a72787..81a3b990 100644
  
        // Retry after removal from the live map; later releases cannot clear stale ready sessions and approvals.
        const retryReleaseRecords = (
+@@ -2151,6 +2274,16 @@ export const layerWithOptions = (
+                   threadId: input.threadId,
+                   providerInstanceId: existing.runtime.instanceId,
+                 });
++                yield* reconcileSandboxResults(existing.runtime, input.threadId).pipe(
++                  Effect.mapError(
++                    (cause) =>
++                      new ProviderSessionOpenError({
++                        instanceId: input.modelSelection.instanceId,
++                        providerSessionId: input.providerSessionId,
++                        cause,
++                      }),
++                  ),
++                );
+                 yield* touchActivity(input.providerSessionId);
+                 return existing.exposedRuntime;
+               }
+@@ -2200,6 +2333,7 @@ export const layerWithOptions = (
+                 })
+                 .pipe(
+                   Effect.provideService(Scope.Scope, sessionScope),
++                  Effect.tap((runtime) => reconcileSandboxResults(runtime, input.threadId)),
+                   // Bound scope close after cleanup; a wedged finalizer must not hold the open lock or interrupter.
+                   Effect.onError(() =>
+                     dropReservation.pipe(
 diff --git a/apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts b/apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts
 index 05fc1b85..3cc47de5 100644
 --- a/apps/server/src/orchestration-v2/ProviderTurnStartService.test.ts
@@ -6507,7 +7254,7 @@ index 402b2eaf..7a39d4c1 100644
          function* (input) {
            // Storage cleanup removes worktrees under the same lease. Only startup
 diff --git a/apps/server/src/orchestration-v2/RunExecutionService.test.ts b/apps/server/src/orchestration-v2/RunExecutionService.test.ts
-index dee24685..1b5e6e51 100644
+index dee24685..825349ee 100644
 --- a/apps/server/src/orchestration-v2/RunExecutionService.test.ts
 +++ b/apps/server/src/orchestration-v2/RunExecutionService.test.ts
 @@ -1,4 +1,6 @@
@@ -6517,7 +7264,15 @@ index dee24685..1b5e6e51 100644
  import {
    CheckpointScopeId,
    ChatAttachmentId,
-@@ -36,6 +38,8 @@ import * as Layer from "effect/Layer";
+@@ -15,6 +17,7 @@ import {
+   type OrchestrationV2Run,
+   type OrchestrationV2RunAttempt,
+   type OrchestrationV2Subagent,
++  type OrchestrationV2StoredEvent,
+   type OrchestrationV2TurnItem,
+   ProviderDriverKind,
+   ProviderInstanceId,
+@@ -36,6 +39,8 @@ import * as Layer from "effect/Layer";
  import * as Option from "effect/Option";
  import * as Ref from "effect/Ref";
  import * as Stream from "effect/Stream";
@@ -6526,7 +7281,7 @@ index dee24685..1b5e6e51 100644
  import { SqlError, classifySqliteError } from "effect/sql/SqlError";
  
  import { toPersistenceSqlError } from "../persistence/Errors.ts";
-@@ -1222,175 +1226,296 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
+@@ -1222,175 +1227,296 @@ it.effect("starts the provider when checkpoint baseline capture fails", () =>
    }),
  );
  
@@ -6986,10 +7741,75 @@ index dee24685..1b5e6e51 100644
  );
  
  it.effect("ingests new member threads of an owned child after the root turn terminalizes", () =>
-@@ -3000,6 +3125,171 @@ it.effect("fails the run when its event stream ends without a root terminal", ()
+@@ -3000,6 +3126,236 @@ it.effect("fails the run when its event stream ends without a root terminal", ()
    }),
  );
  
++for (const commit of [true, false]) {
++  it.effect(`Claude terminal adoption requires committed matching result (${commit})`, () =>
++    Effect.gen(function* () {
++      vi.stubEnv("T3_CLOUD_ROLE", "child");
++      const now = yield* DateTime.now;
++      const receipt = {
++        provider: "claudeAgent" as const,
++        key: "11111111-1111-4111-8111-111111111111",
++        nativeId: "22222222-2222-4222-8222-222222222222",
++        resultHash: "a".repeat(64),
++      };
++      const adoptions: number[] = [];
++      const writeRejected = yield* Deferred.make<void>();
++      yield* captureRootRunTermination({
++        key: `claude-result-commit-${commit}`,
++        shouldFinalizeRun: () => Effect.succeed(true),
++        events: (ids) =>
++          Stream.make(
++            {
++              type: "provider_turn.updated",
++              driver,
++              providerTurn: {
++                id: ids.rootProviderTurnId,
++                providerThreadId: ids.providerThreadId,
++                nodeId: ids.rootNodeId,
++                runAttemptId: ids.attemptId,
++                nativeTurnRef: { driver, nativeId: "native-turn", strength: "strong" },
++                ordinal: 1,
++                status: "completed",
++                startedAt: now,
++                completedAt: now,
++                sandboxResult: receipt,
++              },
++            },
++            rootTerminalEvent(ids, "completed"),
++          ),
++        ingestNormalized: (input) =>
++          input.event.type !== "provider_turn.updated"
++            ? Effect.succeed([])
++            : commit
++              ? Effect.succeed([
++                  {
++                    sequence: 17,
++                    event: { type: "provider-turn.updated", payload: input.event.providerTurn },
++                  } as OrchestrationV2StoredEvent,
++                ])
++              : Effect.fail(
++                  new ProviderEventIngestor.ProviderEventPublishError({
++                    providerSessionId: input.providerSessionId,
++                    eventCount: 1,
++                    cause: "durable write rejected",
++                  }),
++                ).pipe(Effect.tapError(() => Deferred.succeed(writeRejected, undefined))),
++        ...(commit ? {} : { disposeServiceAfterStart: Deferred.await(writeRejected) }),
++        adoptSandboxProviderResult: (result, sequence) =>
++          Effect.sync(() => {
++            assert.deepEqual(result, receipt);
++            adoptions.push(sequence);
++          }),
++      });
++      assert.deepEqual(adoptions, commit ? [17] : []);
++    }).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs()))),
++  );
++}
++
 +it.effect(
 +  "sandbox keeps one in-flight acknowledgement owned after the consumer closes on terminal",
 +  () =>
@@ -7158,7 +7978,7 @@ index dee24685..1b5e6e51 100644
  it.effect("leaves the run to restart recovery when shutdown interrupts its event stream", () =>
    Effect.gen(function* () {
      const { written, observed } = yield* captureRootRunTermination({
-@@ -3053,6 +3343,9 @@ function captureRootRunTermination(input: {
+@@ -3053,6 +3409,9 @@ function captureRootRunTermination(input: {
    readonly key: string;
    readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
    readonly rejectTerminalWrite?: boolean;
@@ -7168,17 +7988,18 @@ index dee24685..1b5e6e51 100644
    readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
    readonly hasPendingBackgroundWorkForThread?: ProviderAdapter.ProviderAdapterV2SessionRuntime["hasPendingBackgroundWorkForThread"];
    readonly seedOpenSubagent?: boolean;
-@@ -3065,6 +3358,9 @@ function captureRootRunTermination(input: {
+@@ -3065,6 +3424,10 @@ function captureRootRunTermination(input: {
    readonly startTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"];
    readonly interruptTurn?: ProviderAdapter.ProviderAdapterV2SessionRuntime["interruptTurn"];
    readonly initialProviderTurnId?: ProviderTurnId | null;
 +  readonly interruptPendingStart?: Effect.Effect<void>;
 +  readonly disposeServiceAfterStart?: Effect.Effect<void>;
 +  readonly adoptSandboxTurnResult?: ProviderAdapter.ProviderAdapterV2SandboxTurnIntentInput["adoptSandboxTurnResult"];
++  readonly adoptSandboxProviderResult?: ProviderAdapter.ProviderAdapterV2SessionRuntime["adoptSandboxProviderResult"];
    readonly onStartFailure?: (
      error: RunExecutionService.RunExecutionServiceV2Error,
    ) => Effect.Effect<void>;
-@@ -3168,6 +3464,8 @@ function captureRootRunTermination(input: {
+@@ -3168,6 +3531,8 @@ function captureRootRunTermination(input: {
        Layer.provideMerge(PreviewAgentActivity.layer),
      );
  
@@ -7187,15 +8008,18 @@ index dee24685..1b5e6e51 100644
      const previewActivityEnded = yield* Effect.gen(function* () {
        const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
        const start = runExecution.startRootRun({
-@@ -3208,6 +3506,7 @@ function captureRootRunTermination(input: {
+@@ -3208,8 +3573,10 @@ function captureRootRunTermination(input: {
              ),
            }),
            startTurn: input.startTurn ?? (() => Effect.void),
 +          recoverSandboxRoot: () => Effect.void,
            interruptTurn: input.interruptTurn ?? (() => Effect.void),
            hasPendingBackgroundWorkForThread: input.hasPendingBackgroundWorkForThread,
++          adoptSandboxProviderResult: input.adoptSandboxProviderResult,
          } as unknown as ProviderAdapter.ProviderAdapterV2SessionRuntime,
-@@ -3237,6 +3536,12 @@ function captureRootRunTermination(input: {
+         run: {
+           id: ids.runId,
+@@ -3237,6 +3604,12 @@ function captureRootRunTermination(input: {
          } as OrchestrationV2RunAttempt,
          attemptId: ids.attemptId,
          providerTurnOrdinal: 1,
@@ -7208,7 +8032,7 @@ index dee24685..1b5e6e51 100644
          shouldFinalizeRun: input.shouldFinalizeRun,
          ...(input.shouldStartProviderTurn === undefined
            ? {}
-@@ -3266,14 +3571,33 @@ function captureRootRunTermination(input: {
+@@ -3266,14 +3639,33 @@ function captureRootRunTermination(input: {
            },
          },
        });
@@ -7247,7 +8071,7 @@ index dee24685..1b5e6e51 100644
      return {
        previewActivityEnded,
 diff --git a/apps/server/src/orchestration-v2/RunExecutionService.ts b/apps/server/src/orchestration-v2/RunExecutionService.ts
-index b9b2b09b..d372bcb1 100644
+index b9b2b09b..834dc1d2 100644
 --- a/apps/server/src/orchestration-v2/RunExecutionService.ts
 +++ b/apps/server/src/orchestration-v2/RunExecutionService.ts
 @@ -1,3 +1,4 @@
@@ -7350,7 +8174,7 @@ index b9b2b09b..d372bcb1 100644
            if (!(yield* agentTurnsSettled)) {
              return false;
            }
-@@ -1395,6 +1422,18 @@ export const layer: Layer.Layer<
+@@ -1395,6 +1422,30 @@ export const layer: Layer.Layer<
                    event.type === "provider_thread.updated" &&
                    event.providerThread.id === input.providerThread.id;
                  const storedEvents = yield* providerEventIngestor.ingestNormalized({
@@ -7366,13 +8190,51 @@ index b9b2b09b..d372bcb1 100644
 +                        ),
 +                      }
 +                    : {}),
++                  ...(sandboxRole() === "child" &&
++                  deliveredEvent.type === "provider_turn.updated" &&
++                  ["completed", "interrupted", "failed", "cancelled"].includes(
++                    deliveredEvent.providerTurn.status,
++                  ) &&
++                  deliveredEvent.providerTurn.sandboxResult
++                    ? {
++                        commandId: CommandId.make(
++                          `command:sandbox:claude-result:${input.run.threadId}:${deliveredEvent.providerTurn.sandboxResult.nativeId}:${deliveredEvent.providerTurn.sandboxResult.key}`,
++                        ),
++                      }
++                    : {}),
                    analyticsContext: {
                      modelSelection: input.modelSelection,
                      runtimeMode: input.runtimePolicy.runtimeMode,
-@@ -1431,6 +1470,29 @@ export const layer: Layer.Layer<
+@@ -1431,6 +1482,55 @@ export const layer: Layer.Layer<
                      : {}),
                  });
                  storedEventCount = storedEvents.length;
++                if (
++                  sandboxRole() === "child" &&
++                  deliveredEvent.type === "provider_turn.updated" &&
++                  deliveredEvent.providerTurn.providerThreadId === input.providerThread.id &&
++                  deliveredEvent.providerTurn.runAttemptId === input.attempt.id &&
++                  ["completed", "interrupted", "failed", "cancelled"].includes(
++                    deliveredEvent.providerTurn.status,
++                  ) &&
++                  deliveredEvent.providerTurn.sandboxResult
++                ) {
++                  const receipt = deliveredEvent.providerTurn.sandboxResult;
++                  const committed = storedEvents.find(
++                    ({ event }) =>
++                      event.type === "provider-turn.updated" &&
++                      event.payload.id === deliveredEvent.providerTurn.id &&
++                      event.payload.status === deliveredEvent.providerTurn.status &&
++                      event.payload.sandboxResult?.key === receipt.key &&
++                      event.payload.sandboxResult.nativeId === receipt.nativeId &&
++                      event.payload.sandboxResult.resultHash === receipt.resultHash,
++                  );
++                  if (committed && input.session.adoptSandboxProviderResult) {
++                    // Ingestion returns stored events only after EventSink commits. A
++                    // failed write or dropped event cannot acknowledge the remote result.
++                    yield* input.session.adoptSandboxProviderResult(receipt, committed.sequence);
++                  }
++                }
 +                if (
 +                  sandboxRole() === "child" &&
 +                  deliveredEvent.type === "provider_turn.updated" &&
@@ -7399,7 +8261,7 @@ index b9b2b09b..d372bcb1 100644
                  if (
                    isRootProviderThreadUpdate &&
                    rootTerminalAlreadySeen &&
-@@ -1466,6 +1528,7 @@ export const layer: Layer.Layer<
+@@ -1466,6 +1566,7 @@ export const layer: Layer.Layer<
                  );
                }
                if (event.type === "turn.terminal") {
@@ -7407,7 +8269,7 @@ index b9b2b09b..d372bcb1 100644
                  yield* Ref.set(terminalEvent, event);
                  yield* Ref.set(rootTerminalSeen, true);
                  yield* finalizeRootRun(event);
-@@ -1513,6 +1576,16 @@ export const layer: Layer.Layer<
+@@ -1513,6 +1614,16 @@ export const layer: Layer.Layer<
              (cause) => !Cause.hasInterruptsOnly(cause),
              (cause) =>
                Effect.gen(function* () {
@@ -7424,7 +8286,7 @@ index b9b2b09b..d372bcb1 100644
                  const completedAt = yield* DateTime.now;
                  yield* Effect.logWarning("orchestration V2 provider event ingestion failed", {
                    runId: input.run.id,
-@@ -1625,140 +1698,174 @@ export const layer: Layer.Layer<
+@@ -1625,140 +1736,174 @@ export const layer: Layer.Layer<
            ),
            Effect.ensuring(endPreviewActivity),
            Effect.ensuring(eventSubscription.close),
@@ -9140,7 +10002,7 @@ index f00976d2..e0d38228 100644
 +
 +export * from "./briqSandbox.ts";
 diff --git a/packages/contracts/src/orchestrationV2.ts b/packages/contracts/src/orchestrationV2.ts
-index 1c80128f..1cd42882 100644
+index 1c80128f..d903c1fc 100644
 --- a/packages/contracts/src/orchestrationV2.ts
 +++ b/packages/contracts/src/orchestrationV2.ts
 @@ -1,3 +1,4 @@
@@ -9207,7 +10069,22 @@ index 1c80128f..1cd42882 100644
    driver: ProviderDriverKind,
    providerInstanceId: ProviderInstanceId,
    providerSessionId: Schema.NullOr(ProviderSessionId),
-@@ -3562,6 +3606,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
+@@ -1179,6 +1223,14 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
+   completedAt: Schema.NullOr(Schema.DateTimeUtc),
+   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
+   turnTokenUsage: Schema.optional(TurnTokenUsage),
++  sandboxResult: Schema.optional(
++    Schema.Struct({
++      provider: Schema.Literal("claudeAgent"),
++      key: Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/)),
++      nativeId: Schema.String.check(Schema.isPattern(/^[a-f0-9-]{36}$/)),
++      resultHash: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
++    }),
++  ),
+ });
+ export type OrchestrationV2ProviderTurn = typeof OrchestrationV2ProviderTurn.Type;
+ 
+@@ -3562,6 +3614,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
    stopWorkflow: "orchestration.stopWorkflow",
    forceStopThread: "orchestration.forceStopThread",
    getTurnItem: "orchestration.getTurnItem",
@@ -9215,7 +10092,7 @@ index 1c80128f..1cd42882 100644
    launchThread: "orchestration.launchThread",
    subscribeShell: "orchestration.subscribeShell",
    subscribeThread: "orchestration.subscribeThread",
-@@ -4181,6 +4226,7 @@ export const OrchestrationV2RpcSchemas = {
+@@ -4181,6 +4234,7 @@ export const OrchestrationV2RpcSchemas = {
      input: OrchestrationV2GetTurnItemInput,
      output: OrchestrationV2GetTurnItemResult,
    },
@@ -9266,7 +10143,7 @@ index c36f724b..e0616bd3 100644
    auth: ServerAuthDescriptor,
    cwd: TrimmedNonEmptyString,
 diff --git a/packages/provider-core/src/server/ProviderAdapter.ts b/packages/provider-core/src/server/ProviderAdapter.ts
-index cadf4173..6d571b53 100644
+index cadf4173..d37b0705 100644
 --- a/packages/provider-core/src/server/ProviderAdapter.ts
 +++ b/packages/provider-core/src/server/ProviderAdapter.ts
 @@ -16,6 +16,7 @@ import {
@@ -9329,10 +10206,20 @@ index cadf4173..6d571b53 100644
  export interface ProviderAdapterV2SteerInput {
    readonly threadId: ThreadId;
    readonly runId: RunId;
-@@ -588,6 +621,12 @@ export interface ProviderAdapterV2SessionRuntime {
+@@ -588,6 +621,22 @@ export interface ProviderAdapterV2SessionRuntime {
    readonly ensureThread: (
      input: ProviderAdapterV2EnsureThreadInput,
    ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
++  readonly reconcileSandboxProviderResults?: (
++    readCommitted: (
++      result: NonNullable<OrchestrationV2ProviderTurn["sandboxResult"]>,
++    ) => Effect.Effect<number | undefined, ProviderAdapterV2Error>,
++  ) => Effect.Effect<void, ProviderAdapterV2Error>;
++  /** Called only with a matching terminal provider-turn event returned by committed ingestion. */
++  readonly adoptSandboxProviderResult?: (
++    result: NonNullable<OrchestrationV2ProviderTurn["sandboxResult"]>,
++    eventSequence: number,
++  ) => Effect.Effect<void, ProviderAdapterV2Error>;
 +  readonly adoptSandboxOperation?: (input: {
 +    readonly key: string;
 +    readonly nativeId: string;
@@ -9342,7 +10229,7 @@ index cadf4173..6d571b53 100644
    readonly resumeThread: (input: {
      readonly providerThread: OrchestrationV2ProviderThread;
      readonly threadId?: ThreadId;
-@@ -603,6 +642,9 @@ export interface ProviderAdapterV2SessionRuntime {
+@@ -603,6 +652,9 @@ export interface ProviderAdapterV2SessionRuntime {
    readonly startTurn: (
      input: ProviderAdapterV2TurnInput,
    ) => Effect.Effect<void, ProviderAdapterV2Error>;

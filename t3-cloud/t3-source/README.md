@@ -35,9 +35,18 @@ also covers imports and internal event writers (`orchestration-v2/EventStore.ts`
 `EventSink.ts`, `project/AgentSessionImporter.ts`). Native files, git, terminals
 and checkpoints remain in the child environment.
 
-The packaged source patch is refreshed to checkpoint `3c16fb5937386a51405280742dfa87004cc04f65` and includes durable root-intent reservation, result persistence and adoption tied to the first committed native start event. Startup recovery keeps the original run, attempt and provider turn, uses a read-only receipt when an outcome or committed start is known, and reconciles canonical history after adoption. Pending and denied receipts remain parked. This describes the packaged source checkpoint; it does not establish native subprocess, cloud, or restart/recovery qualification.
+The packaged source patch includes durable Codex root-intent reservation, result persistence and adoption tied to the first committed native start event. It also includes the disabled central Claude query transport and terminal-result adoption after durable child persistence, with bounded owner disposal and receipt reconciliation. The exact source tree and patch hashes are recorded in `source.json`. Pending or uncertain outcomes remain parked; these source paths do not establish native subprocess, cloud, subscription or restart/recovery qualification.
 
 This is an integration candidate with no native subprocess, cloud, or restart/recovery
 qualification. Release requires focused code/security review,
 image CI, and an actual native client check against the composed allocator,
 bridge and child runtime. Unit checks alone do not establish that conformance.
+
+
+T3 Cloud pins Claude Code 2.1.276 with Agent SDK 0.3.276 independently of
+Agent Home's stable-version selection. Its image verifies the CLI against the
+SDK release manifest and installs the managed hook policy required by the central
+runner. The image check uses a fixed fake provider in an isolated network namespace;
+it covers tool aliasing, forced tool denial and hook canaries, not cloud allocation,
+internal direct dispatch or native subscription turns. Claude execution remains disabled
+until the remaining integration and native qualification gates pass.
