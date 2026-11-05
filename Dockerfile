@@ -72,7 +72,7 @@ ARG COPILOT_SHA256=
 RUN V="${COPILOT_VERSION:-$(curl -fsSL https://api.github.com/repos/github/copilot-cli/releases/latest | jq -r .tag_name | sed 's/^v//')}" \
   && A=copilot-linux-x64.tar.gz \
   && H="${COPILOT_SHA256:-$(gh-digest github/copilot-cli "v${V}" "$A")}" \
-  && curl -fsSL "https://github.com/github/copilot-cli/releases/download/v${V}/$A" -o "/tmp/$A" \
+  && curl --retry 2 --retry-max-time 60 --connect-timeout 15 --max-time 180 -fsSL "https://github.com/github/copilot-cli/releases/download/v${V}/$A" -o "/tmp/$A" \
   && echo "$H  /tmp/$A" | sha256sum -c - \
   && printf 'Copilot CLI\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
   && tar -xzf "/tmp/$A" -C /usr/local/bin && rm "/tmp/$A" \

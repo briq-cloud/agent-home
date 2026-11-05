@@ -28,6 +28,7 @@ function showTab(name, navigate = true) {
     localStorage.setItem('agent-home-tab', name);
   } catch {}
   if (navigate) history.pushState(null, '', '#' + name);
+  return name;
 }
 for (const name of homeTabs) {
   const button = byId('tab-' + name);
@@ -114,7 +115,11 @@ const call = async (method, path, body, signal) => {
   });
   return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
 };
-createHomeServices({ call, byId });
+createHomeServices({ call, byId, onCapabilitiesChanged: () => {
+  const requested = tabFromHash() || 'chat';
+  const selected = showTab(requested, false);
+  if (selected !== requested) history.replaceState(null, '', '#' + selected);
+} });
 let refreshNotice = '';
 function report(error) {
   refreshNotice = '';

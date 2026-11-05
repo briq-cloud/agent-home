@@ -55,8 +55,8 @@ jobs:
           npm run mock
           BENCH_SUITE=medium npm run mock
 
-      - name: Check T3 bootstrap
-        run: node --test t3-cloud/prepare.test.mjs
+      - name: Check T3 bootstrap and release resolution
+        run: node --test t3-cloud/prepare.test.mjs bin/resolve-gh-release.test.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -88,18 +88,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          set -eu
-          digest() { gh api "repos/$1/releases/tags/$2" --jq ".assets[] | select(.name == \"$3\") | .digest" | sed 's/^sha256://'; }
-          codex="$(gh api repos/openai/codex/releases/latest --jq .tag_name | sed 's/^rust-v//')"
-          copilot="$(gh api repos/github/copilot-cli/releases/latest --jq .tag_name | sed 's/^v//')"
+          set -euo pipefail
+          codex_release="$(node bin/resolve-gh-release.mjs openai/codex rust-v codex-package-x86_64-unknown-linux-musl.tar.gz)"
+          copilot_release="$(node bin/resolve-gh-release.mjs github/copilot-cli v copilot-linux-x64.tar.gz)"
+          read -r codex codex_sha256 <<< "$codex_release"
+          read -r copilot copilot_sha256 <<< "$copilot_release"
           base="ghcr.io/briq-cloud/sandbox@$(docker buildx imagetools inspect ghcr.io/briq-cloud/sandbox:latest --format '{{json .Manifest}}' | jq -r .digest)"
           {
             echo "base=$base"
             echo "claude=$(curl -fsSL https://downloads.claude.ai/claude-code-releases/stable)"
             echo "codex=$codex"
-            echo "codex_sha256=$(digest openai/codex "rust-v$codex" codex-package-x86_64-unknown-linux-musl.tar.gz)"
+            echo "codex_sha256=$codex_sha256"
             echo "copilot=$copilot"
-            echo "copilot_sha256=$(digest github/copilot-cli "v$copilot" copilot-linux-x64.tar.gz)"
+            echo "copilot_sha256=$copilot_sha256"
             echo "cursor=$(curl -fsSL https://cursor.com/install | grep -oE 'lab/[0-9.]+-[0-9a-f]+' | head -n 1 | cut -d/ -f2)"
             echo "grok=$(curl -fsSL https://x.ai/cli/stable)"
             echo "vibe=$(curl -fsSL https://pypi.org/pypi/mistral-vibe/json | jq -r .info.version)"
