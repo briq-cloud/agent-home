@@ -83,3 +83,29 @@ for (const outcome of ['unavailable','running','stopped']) test(`restart keeps r
  assert.deepEqual(await runtime.allocator.revocationIssues(),outcome==='stopped'?[]:[{threadId:binding.threadId,allocationId:binding.allocationId,state:'reconciliation-required'}]);
  assert.deepEqual(f.calls,[]);
 });
+
+for (const recovery of ['repeated-revoke','restart']) test(`revoked asynchronous destroy settles through ${recovery} using only exact status`,async t=>{
+ const f=await fixture(t);const store=new AllocationStore(join(f.directory,'allocations'));await store.initialize();
+ const binding={state:'ready',ownerId:'owner',threadId:'destroy-thread',allocationId:'destroy-allocation',briqId:'exact-root',edgeTokenHash:digest(f.env.T3_CLOUD_EDGE_TOKEN)};
+ const resource={id:'owned-child',name:'recorded-name',stackId:'recorded-stack',state:'live'};
+ await store.save(binding);await store.saveOperation(binding.threadId,{key:'create-child',method:'briq/scoped',allocationId:binding.allocationId,state:'completed',resource});
+ let phase='running',rootStops=0;const requests=[];
+ const cloud={stop:async value=>{assert.equal(value.briqId,binding.briqId);rootStops++;},run:async args=>{
+  requests.push(args);assert.equal(args[1],resource.id);
+  if(args[0]==='destroy'){phase='destroying';return {briq:{...resource,state:phase}};}
+  assert.equal(args[0],'status');return {briq:{...resource,state:phase}};
+ }};
+ let runtime=await createCentralRuntime(f.env,{...f.deps,cloud});f.runtimes.push(runtime);
+ await assert.rejects(runtime.allocator.revoke('owner',binding.threadId));assert.equal(rootStops,1);
+ await assert.rejects(runtime.allocator.revoke('owner',binding.threadId));
+ assert.equal((await store.listOperations(binding.threadId))[0].resource.state,'live');
+ const before=requests.length;phase='destroyed';
+ if(recovery==='restart'){
+  await runtime.close();runtime=await createCentralRuntime(f.env,{...f.deps,cloud});f.runtimes.push(runtime);
+  await runtime.restore();assert.equal(runtime.ready(),true);
+ }else await runtime.allocator.revoke('owner',binding.threadId);
+ assert.deepEqual(requests.slice(before),[['status',resource.id]]);
+ assert.equal(rootStops,1);assert.equal(requests.filter(args=>args[0]==='destroy').length,1);
+ const row=(await store.listOperations(binding.threadId))[0];assert.equal(row.resource.state,'destroyed');assert.equal(row.cleanup.state,'completed');
+ assert.deepEqual(await runtime.allocator.revocationIssues(),[]);
+});

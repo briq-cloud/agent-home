@@ -81,10 +81,10 @@ export class AllocationStore {
   }
 }
 export class ThreadAllocator {
-  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup }) {
+  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup, reconcileCleanup }) {
     if (!/^.+@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Child image must be pinned by digest');
     bridgeAddress(bridgeUrl); edgeToken(edgeCredential);
-    Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup });
+    Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup, reconcileCleanup });
   }
   async allocate(ownerId, threadId) {
     identifier(ownerId); identifier(threadId);
@@ -101,14 +101,15 @@ export class ThreadAllocator {
         binding.execEnvironmentId = `briq-${binding.allocationId}`;
         await this.store.save(binding);
         try {
-          binding.briqId = await this.cloud.create(binding, { image: this.image, bridgeUrl: this.bridgeUrl, edgeCredential: this.edgeCredential });
+          const created = await this.cloud.create(binding, { image: this.image, bridgeUrl: this.bridgeUrl, edgeCredential: this.edgeCredential });
+          binding.briqId = identifier(created.id); binding.rootStackId = identifier(created.stackId);
           binding.state = 'created'; await this.store.save(binding);
         } catch { binding.state = 'unknown'; await this.store.save(binding); throw Error('Allocation outcome unknown; reconcile before retry'); }
       }
       if (binding.state === 'creating' || binding.state === 'unknown') {
         const recovered = await this.cloud.find(binding);
         if (!recovered) throw Error('Allocation outcome unknown; no create replay permitted');
-        binding.briqId = recovered; binding.state = 'created'; await this.store.save(binding);
+        binding.briqId = identifier(recovered.id); binding.rootStackId = identifier(recovered.stackId); binding.state = 'created'; await this.store.save(binding);
       }
       if (binding.state === 'created') {
         const endpoints = await this.cloud.endpoints(binding);
@@ -170,6 +171,7 @@ export class ThreadAllocator {
       if (!await this.cloud.stopped(binding)) throw Error('Workspace stop outcome remains unknown');
       binding.rootStop.state = 'completed'; await this.store.save(binding);
     }
+    await this.reconcileCleanup?.(binding);
     const operations = await this.store.listOperations(binding.threadId);
     if (this.unresolvedCleanup(binding, operations))
       throw Error('Revoked descendant cleanup requires reconciliation');

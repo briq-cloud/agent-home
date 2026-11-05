@@ -202,10 +202,12 @@ test('allocator serializes duplicate creates, reconciles unknown outcomes withou
   const allocator = new ThreadAllocator({ store, cloud, image: `example/image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', edgeCredential: 'e'.repeat(32), registerEnvironment: async () => {} });
   await assert.rejects(allocator.allocate('owner', 'thread'));
   await assert.rejects(allocator.allocate('owner', 'thread')); assert.equal(creates, 1);
-  recovered = 'bq_one';
+  recovered = { id: 'bq_one' };
+  await assert.rejects(allocator.allocate('owner', 'thread')); assert.equal(creates, 1);
+  recovered = { id: 'bq_one', stackId: 'stack-one' };
   const result = await allocator.allocate('owner', 'thread'); assert.equal(result.environmentId, 'environment-a'); assert.equal(creates, 1);
   await assert.rejects(allocator.allocate('other', 'thread'));
-  const raw = JSON.parse(await readFile(join(directory, 'thread.json'))); assert.equal(raw.state, 'ready');
+  const raw = JSON.parse(await readFile(join(directory, 'thread.json'))); assert.equal(raw.state, 'ready'); assert.equal(raw.rootStackId, 'stack-one');
 });
 
 test('interrupt bypasses a pending turn start; late completion never resurrects active turn', async t => {

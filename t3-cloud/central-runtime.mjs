@@ -73,6 +73,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     const allocator = new ThreadAllocator({ store, cloud, image: env.T3_CLOUD_CHILD_IMAGE,
       edgeCredential, bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
       registerEnvironment: binding => broker.registerEnvironment(binding),
+      reconcileCleanup: binding => scopedBriq.reconcileCleanup(binding),
       cleanup: async binding => { briqTransport.revoke(binding.allocationId); await scopedBriq.cleanup(binding); } });
     websocket = new WebSocketServer({ noServer: true, maxPayload: 2097152, perMessageDeflate: false });
     async function bridgeUpgrade(req, socket, head) {

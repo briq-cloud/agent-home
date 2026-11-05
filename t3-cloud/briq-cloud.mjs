@@ -2,7 +2,7 @@ import { edgeToken, requireEdgeBinding, withoutEdgeEnvironment } from './edge-au
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { digest } from './allocations.mjs';
+import { digest, identifier } from './allocations.mjs';
 import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
 export function cli(args, { env = process.env, stdin, timeout = 120000, execResult = false } = {}, spawnProcess = spawn) {
@@ -73,14 +73,20 @@ export class BriqCloud {
       } } } }), { mode: 0o600, flag: 'wx' });
     const response = await this.run(['up', '-f', file, '--secret', 'CHILD_BRIDGE_TOKEN', '--secret', 'CHILD_EDGE_TOKEN', '--no-wait'],
       { env: { ...withoutEdgeEnvironment(this.env), CHILD_BRIDGE_TOKEN: binding.bridgeToken, CHILD_EDGE_TOKEN: edgeCredential } });
-    if (response.briqs?.length !== 1 || response.stack !== binding.stack) throw Error('Unexpected allocation result');
-    return response.briqs[0].id;
+    if (response.briqs?.length !== 1 || response.stack !== binding.stack || response.briqs[0].name !== 'sandbox') throw Error('Unexpected allocation result');
+    const root = { id: identifier(response.briqs[0].id), stackId: identifier(response.briqs[0].stackId) };
+    const listed = await this.run(['list', '--stack', binding.stack], { env: this.env });
+    const exact = listed.briqs?.filter(row => row.id === root.id || row.name === 'sandbox');
+    if (exact?.length !== 1 || exact[0].id !== root.id || exact[0].stackId !== root.stackId || exact[0].name !== 'sandbox' ||
+      exact[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || exact[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId) throw Error('Root namespace requires reconciliation');
+    return root;
   }
   async find(binding) {
     const response = await this.run(['list', '--stack', binding.stack], { env: this.env });
     if (response.briqs?.length !== 1 || response.briqs[0].name !== 'sandbox' ||
+      binding.briqId && response.briqs[0].id !== binding.briqId || binding.rootStackId && response.briqs[0].stackId !== binding.rootStackId ||
       response.briqs[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || response.briqs[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId) return null;
-    return response.briqs[0].id;
+    return { id: identifier(response.briqs[0].id), stackId: identifier(response.briqs[0].stackId) };
   }
   async endpoints(binding) {
     const t3 = await this.run(['expose', binding.briqId, '8080', '--mode', 'public'], { env: this.env });

@@ -83,15 +83,18 @@ export class ScopedBriq {
       let resource;
       if (input.id) {
         if (input.id === binding.briqId) throw Error('Workspace resource is protected; use workspace tools');
-        resource = rows.find(row => row.state === 'completed' && row.resource?.id === input.id && row.resource.state !== 'destroyed')?.resource;
+        resource = rows.find(row => row.state === 'completed' && row.resource?.id === input.id && (row.resource.state !== 'destroyed' || name === 'briq_status'))?.resource;
         if (!resource) throw Error('Resource is outside this allocation');
       }
       const record = { version: 1, method: 'briq/scoped', key, allocationId: binding.allocationId,
         threadId: binding.threadId, nativeId: identity.nativeId, requestHash, state: 'started', tool: name };
       if (name === 'briq_run') {
         const nonce = randomUUID().replaceAll('-', '');
-        record.intent = { stack: `td-${nonce.slice(0, 24)}`, name: `r-${nonce.slice(0, 16)}`, recipe: input.recipe };
+        if (!/^t3-[a-f0-9]{24}$/.test(binding.stack) || !binding.rootStackId) throw Error('Allocation namespace requires reconciliation');
+        identifier(binding.rootStackId);
+        record.intent = { stack: binding.stack, stackId: binding.rootStackId, name: `r-${nonce.slice(0, 16)}`, recipe: input.recipe };
       }
+      if (name === 'briq_destroy') record.destroy = { resourceId: resource.id, sourceKey: rows.find(row => row.resource === resource).key, state: 'started' };
       if (mutation) await this.store.saveOperation(binding.threadId, record);
       try {
         const result = await this.perform(binding, rows, resource, record, name, input);
@@ -118,14 +121,16 @@ export class ScopedBriq {
       if (input.env && Object.keys(input.env).length) args.push('--env', ...Object.entries(input.env).map(([key, value]) => `${key}=${value}`));
       const response = await run(args);
       const row = response.briqs?.[0];
-      if (response.briqs?.length !== 1 || row?.name !== record.intent.name || row.id === binding.briqId) throw Error('Invalid create result');
+      if (response.briqs?.length !== 1 || row?.name !== record.intent.name || row.id === binding.briqId || row.stackId !== record.intent.stackId) throw Error('Invalid create result');
       identifier(row.id); identifier(row.stackId);
       // The create receipt AND an authoritative lookup under the generated stack must agree.
       record.resource = { id: row.id, name: row.name, stackId: row.stackId, state: 'unverified' };
       await this.store.saveOperation(binding.threadId, record);
       const listed = await run(['list', '--stack', record.intent.stack]);
-      if (listed.briqs?.length !== 1) throw Error('Ambiguous create result');
-      resourceMatch(listed.briqs[0], record.resource);
+      if (!Array.isArray(listed.briqs)) throw Error('Invalid stack result');
+      const exact = listed.briqs.filter(value => value.id === row.id || value.name === record.intent.name);
+      if (exact.length !== 1) throw Error('Ambiguous create result');
+      resourceMatch(exact[0], record.resource);
       record.resource.state = 'live';
       await this.store.saveOperation(binding.threadId, record);
       // Recipe outputs can contain generated credentials. Keep them available only in this tool receipt.
@@ -143,7 +148,10 @@ export class ScopedBriq {
     }
     const response = await run(['status', resource.id]);
     resourceMatch(response.briq, resource);
-    if (name === 'briq_status') return { briq: project(response.briq) };
+    if (name === 'briq_status') {
+      if (response.briq.state === 'destroyed') await this.reconcileDestroyed(binding, rows, resource, response.briq);
+      return { briq: project(response.briq) };
+    }
     if (name === 'briq_logs') {
       const result = await run(['logs', resource.id, '--limit', '100']);
       if (!Array.isArray(result.lines)) throw Error('Invalid logs');
@@ -183,16 +191,66 @@ export class ScopedBriq {
     const result = await run([action, resource.id]);
     resourceMatch(result.briq, resource);
     if (action === 'destroy') {
-      const source = rows.find(row => row.resource?.id === resource.id);
-      source.resource.state = 'destroyed'; await this.store.saveOperation(binding.threadId, source);
+      if (result.briq.state !== 'destroyed') {
+        record.destroy.state = 'pending';
+        throw Error('Destroy outcome requires read-only reconciliation');
+      }
+      await this.reconcileDestroyed(binding, [...rows, record], resource, result.briq);
     }
     return { briq: project(result.briq) };
   }
+  async reconcileDestroyed(binding, rows, resource, receipt) {
+    resourceMatch(receipt, resource);
+    if (receipt.state !== 'destroyed') throw Error('Destroy is not terminal');
+    const source = rows.find(row => row.resource?.id === resource.id);
+    if (!source) throw Error('Unknown destroy ownership');
+    const pending = rows.filter(row => row.destroy?.resourceId === resource.id && row.state !== 'completed');
+    const before = structuredClone(source), previous = pending.map(row => structuredClone(row));
+    try {
+      const candidate = structuredClone(source);
+      candidate.resource.state = 'destroyed';
+      if (candidate.cleanup?.action === 'destroy') candidate.cleanup.state = 'completed';
+      await this.store.saveOperation(binding.threadId, candidate);
+      Object.assign(source, candidate);
+      for (const operation of pending) {
+        const completed = { ...structuredClone(operation), state: 'completed', destroy: { ...operation.destroy, state: 'completed' }, result: { briq: project(receipt) } };
+        await this.store.saveOperation(binding.threadId, completed);
+        Object.assign(operation, completed);
+      }
+    } catch {
+      const unknown = { ...before, cleanup: { action: 'destroy', state: 'unknown' } };
+      Object.assign(source, unknown);
+      try { await this.store.saveOperation(binding.threadId, unknown); } catch { /* Keep earlier durable exact intent. */ }
+      for (let index = 0; index < pending.length; index++) {
+        const uncertain = { ...previous[index], state: 'unknown', destroy: { ...previous[index].destroy, state: 'unknown' } };
+        Object.assign(pending[index], uncertain);
+        try { await this.store.saveOperation(binding.threadId, uncertain); } catch { /* Keep earlier durable exact intent. */ }
+      }
+      throw Error('Destroy receipt requires reconciliation');
+    }
+  }
+  async reconcileCleanup(binding) {
+    // Called under the allocation lock. Only exact pending destroy receipts may settle;
+    // this path never initiates a cleanup mutation or adopts an unrecorded resource.
+    const rows = await this.records(binding), failures = [];
+    const pendingDestroy = new Set(rows.filter(row => row.destroy && row.state !== 'completed').map(row => row.destroy.resourceId));
+    for (const row of rows.filter(row => row.resource && (pendingDestroy.has(row.resource.id) || row.cleanup?.action === 'destroy' && row.cleanup.state !== 'completed'))) {
+      try {
+        if (row.resource.id === binding.briqId) throw Error('Protected workspace reconciliation rejected');
+        const status = await this.cloud.run(['status', row.resource.id], { env: this.cloud.env });
+        resourceMatch(status.briq, row.resource);
+        await this.reconcileDestroyed(binding, rows, row.resource, status.briq);
+      } catch { failures.push(Error('Previous scoped destroy requires reconciliation')); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Scoped Briq destroy requires reconciliation');
+  }
   async cleanup(binding) {
     // Called under the allocation lock after state=revoked is durable. Never touch the root.
-    const rows = await this.records(binding);
     const failures = [];
-    const unresolved = new Set(rows.filter(row => row.cleanup && row.cleanup.state !== 'completed'));
+    try { await this.reconcileCleanup(binding); } catch { failures.push(Error('Previous scoped cleanup requires reconciliation')); }
+    const rows = await this.records(binding);
+    const pendingDestroy = new Set(rows.filter(row => row.destroy && row.state !== 'completed').map(row => row.destroy.resourceId));
+    const unresolved = new Set(rows.filter(row => row.cleanup && row.cleanup.state !== 'completed' || row.resource && pendingDestroy.has(row.resource.id)));
     for (const row of unresolved) failures.push(Error('Previous scoped cleanup requires reconciliation'));
     const attempt = async (row, action, operation) => {
       const before = structuredClone(row);
@@ -221,8 +279,10 @@ export class ScopedBriq {
         if (row.resource.id === binding.briqId) throw Error('Protected workspace cleanup rejected');
         const status = await this.cloud.run(['status', row.resource.id], { env: this.cloud.env });
         resourceMatch(status.briq, row.resource);
+        if (status.briq.state === 'destroyed') { candidate.resource.state = 'destroyed'; return; }
         const result = await this.cloud.run(['destroy', row.resource.id], { env: this.cloud.env });
         resourceMatch(result.briq, row.resource);
+        if (result.briq.state !== 'destroyed') throw Error('Destroy is not terminal');
         candidate.resource.state = 'destroyed';
       });
     }

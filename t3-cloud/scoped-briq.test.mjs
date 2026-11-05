@@ -11,19 +11,19 @@ async function fixture(t, override) {
   const directory = await mkdtemp(join(tmpdir(), 'scoped-briq-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new AllocationStore(directory); await store.initialize();
   const identity = { threadId: 'thread-a', allocationId: 'allocation-a', nativeId: 'native-a' };
-  const binding = { ...identity, nativeThreadId: identity.nativeId, briqId: 'root-a', state: 'ready' };
+  const binding = { ...identity, nativeThreadId: identity.nativeId, briqId: 'root-a', stack: 't3-'+'a'.repeat(24), rootStackId: 'stack-a', state: 'ready' };
   await store.save(binding);
-  const calls = [], resources = new Map(), files = new Map(); let sequence = 0;
+  const calls = [], resources = new Map([['root-a',{id:'root-a',name:'sandbox',stackId:binding.rootStackId,state:'running'}]]), files = new Map(); let sequence = 0;
   const execute = async (args, options) => {
     calls.push({ args, options });
     const [command, target] = args;
     if (override) { const result = await override(args, options); if (result !== undefined) return result; }
     if (command === 'run') {
       const name = args[args.indexOf('--name') + 1], stack = args[args.indexOf('--stack') + 1];
-      const row = { id: `child-${++sequence}`, stackId: stack, name, state: 'running', internalHost: `${name}.internal`, env: { SECRET: 'excluded' } };
+      const row = { id: `child-${++sequence}`, stackId: binding.rootStackId, name, state: 'running', internalHost: `${name}.internal`, env: { SECRET: 'excluded' } };
       resources.set(row.id, row); return { briqs: [row], outputs: { HOST: row.internalHost } };
     }
-    if (command === 'list') return { briqs: [...resources.values()].filter(row => row.stackId === args[2]) };
+    if (command === 'list') return { briqs: [...resources.values()].filter(row => args[2] === binding.stack && row.stackId === binding.rootStackId) };
     if (['status', 'start', 'stop', 'destroy'].includes(command)) return { briq: { ...resources.get(target), state: command === 'destroy' ? 'destroyed' : 'running' } };
     if (command === 'exec') return { exec: { id: 'exec-1', briqId: args[5], state: 'running' } };
     if (command === 'exec-result' || command === 'exec-stop') return { exec: { id: args[2], briqId: target, state: command === 'exec-stop' ? 'stopped' : 'exited', exitCode: 0, output: { stdout: 'ok', stderr: '' } } };
@@ -76,7 +76,7 @@ test('create intent is durable before CLI, lost acknowledgment blocks new IDs an
   });
   store = f.store; threadId = f.identity.threadId;
   await assert.rejects(f.call('briq_run', { recipe: 'redis' }, 'original'));
-  assert.equal(observed.state, 'started'); assert.match(observed.intent.stack, /^td-/);
+  assert.equal(observed.state, 'started'); assert.equal(observed.intent.stack,f.binding.stack);assert.equal(observed.intent.stackId,f.binding.rootStackId);
   const restarted = new ScopedBriq({ store: new AllocationStore(f.directory), cloud: f.cloud });
   await assert.rejects(restarted.call(f.identity, 'original', 'briq_run', { recipe: 'redis' }));
   await assert.rejects(restarted.call(f.identity, 'new-id', 'briq_run', { recipe: 'redis' }));
@@ -212,7 +212,7 @@ for (const action of ['exec-stop', 'destroy']) test(`failed final ${action} rece
  else assert.equal(record.resource.state,'live');
  const count=f.calls.length;
  await assert.rejects(new ScopedBriq({store:new AllocationStore(f.directory),cloud:f.cloud}).cleanup(f.binding));
- assert.equal(f.calls.length,count);
+ assert.equal(f.calls.length,count+(action==='destroy'?1:0));
 });
 
 test('legacy cleanup unknown flags cannot falsely report completion even with terminal/tombstoned receipts',async t=>{
@@ -220,7 +220,7 @@ test('legacy cleanup unknown flags cannot falsely report completion even with te
  const record=(await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===id);
  record.resource.state='destroyed';record.cleanup={action:'destroy',state:'unknown'};await f.store.saveOperation(f.identity.threadId,record);
  f.binding.state='revoked';await f.store.save(f.binding);const count=f.calls.length;
- await assert.rejects(f.scoped.cleanup(f.binding));assert.equal(f.calls.length,count);
+ await assert.rejects(f.scoped.cleanup(f.binding));assert.equal(f.calls.length,count+1);assert.deepEqual(f.calls.at(-1).args,['status',id]);
 });
 
 test('root stop intent survives unknown acknowledgment and restart reconciles only by exact read-only status',async t=>{
@@ -256,4 +256,103 @@ test('root reconciliation accepts only an authoritative exact stopped workspace 
  response={briq:{id:'root',name:'owner-service',state:'stopped'}};await assert.rejects(cloud.stopped({briqId:'root'}));
  response={briq:{id:'root',name:'sandbox',state:'sleeping'}};assert.equal(await cloud.stopped({briqId:'root'}),false);
  assert.equal(calls.every(args=>args[0]==='status' && args[1]==='root'),true);
+});
+
+test('descendants share the recorded workspace stack while root and sibling rows confer no ownership',async t=>{
+ const f=await fixture(t);const first=await f.create(),second=await f.create();
+ const runs=f.calls.filter(row=>row.args[0]==='run');
+ assert.equal(runs.length,2);assert.equal(runs.every(row=>row.args[row.args.indexOf('--stack')+1]===f.binding.stack),true);
+ assert.notEqual(runs[0].args[runs[0].args.indexOf('--name')+1],runs[1].args[runs[1].args.indexOf('--name')+1]);
+ assert.equal(f.resources.get(first).stackId,f.binding.rootStackId);assert.equal(f.resources.get(second).stackId,f.binding.rootStackId);
+ assert.deepEqual((await f.call('briq_list')).briqs.map(row=>row.id),[first,second]);
+ const count=f.calls.length;await assert.rejects(f.call('briq_destroy',{id:'root-a'}));await assert.rejects(f.call('briq_status',{id:'unrecorded-sibling'}));assert.equal(f.calls.length,count);
+});
+
+test('missing recorded root stack identity and mismatched create namespace fail closed',async t=>{
+ const legacy=await fixture(t);delete legacy.binding.rootStackId;await legacy.store.save(legacy.binding);
+ await assert.rejects(legacy.call('briq_run',{recipe:'postgres'}),/namespace/);assert.equal(legacy.calls.length,0);
+ const forged=await fixture(t,async args=>args[0]==='run'?{briqs:[{id:'foreign',name:args[args.indexOf('--name')+1],stackId:'another-stack'}]}:undefined);
+ await assert.rejects(forged.call('briq_run',{recipe:'postgres'}));
+ assert.equal(forged.calls.some(row=>row.args[0]==='list'),false);
+ await assert.rejects(forged.call('briq_status',{id:'foreign'}));
+});
+
+test('destroying receipt remains unresolved across restart; status settles only exact destroyed without destroy replay',async t=>{
+ let phase='running';
+ const f=await fixture(t,async args=>{
+  if(args[0]==='destroy'){phase='destroying';return {briq:{...f.resources.get(args[1]),state:phase}};}
+  if(args[0]==='status' && phase!=='running')return {briq:{...f.resources.get(args[1]),state:phase}};
+ });
+ const id=await f.create();await assert.rejects(f.call('briq_destroy',{id},'destroy-request'));
+ const source=()=>f.store.listOperations(f.identity.threadId).then(rows=>rows.find(row=>row.resource?.id===id));
+ assert.equal((await source()).resource.state,'live');
+ const restarted=new ScopedBriq({store:new AllocationStore(f.directory),cloud:f.cloud});
+ await assert.rejects(restarted.call(f.identity,'destroy-request','briq_destroy',{id}));
+ await assert.rejects(restarted.call(f.identity,'new-destroy','briq_destroy',{id}));
+ const pending=await restarted.call(f.identity,'status-pending','briq_status',{id});assert.equal(pending.briq.state,'destroying');
+ assert.equal((await source()).resource.state,'live');
+ phase='destroyed';assert.equal((await restarted.call(f.identity,'status-terminal','briq_status',{id})).briq.state,'destroyed');
+ assert.equal((await source()).resource.state,'destroyed');
+ const receipt=await restarted.call(f.identity,'destroy-request','briq_destroy',{id});assert.equal(receipt.briq.state,'destroyed');
+ assert.equal(f.calls.filter(row=>row.args[0]==='destroy').length,1);
+});
+
+test('cleanup destroying receipt and restart reconciliation never issue a second destroy',async t=>{
+ let phase='running';
+ const f=await fixture(t,async args=>{
+  if(args[0]==='destroy'){phase='destroying';return {briq:{...f.resources.get(args[1]),state:phase}};}
+  if(args[0]==='status' && phase!=='running')return {briq:{...f.resources.get(args[1]),state:phase}};
+ });
+ const id=await f.create();f.binding.state='revoked';await f.store.save(f.binding);
+ await assert.rejects(f.scoped.cleanup(f.binding));
+ let row=(await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===id);
+ assert.equal(row.resource.state,'live');assert.equal(row.cleanup.state,'unknown');
+ const restarted=new ScopedBriq({store:new AllocationStore(f.directory),cloud:f.cloud});
+ await assert.rejects(restarted.cleanup(f.binding));assert.equal(f.calls.filter(row=>row.args[0]==='destroy').length,1);
+ phase='destroyed';await restarted.cleanup(f.binding);
+ row=(await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===id);
+ assert.equal(row.resource.state,'destroyed');assert.equal(row.cleanup.state,'completed');assert.equal(f.calls.filter(row=>row.args[0]==='destroy').length,1);
+});
+
+test('lifecycle final-save failure stays reconcilable after tombstone and never repeats destroy',async t=>{
+ let destroyed=false;const f=await fixture(t,async args=>{
+  if(args[0]==='destroy'){destroyed=true;return {briq:{...f.resources.get(args[1]),state:'destroyed'}};}
+  if(args[0]==='status' && destroyed)return {briq:{...f.resources.get(args[1]),state:'destroyed'}};
+ });
+ const id=await f.create();const save=f.store.saveOperation.bind(f.store);let failed=false;
+ f.store.saveOperation=async(thread,row)=>{await save(thread,row);if(!failed && row.destroy && row.state==='completed'){failed=true;throw Error('sync failed after rename');}};
+ await assert.rejects(f.call('briq_destroy',{id},'destroy-request'));assert.equal(failed,true);
+ const restarted=new ScopedBriq({store:new AllocationStore(f.directory),cloud:f.cloud});
+ await assert.rejects(restarted.call(f.identity,'destroy-request','briq_destroy',{id}));
+ await restarted.call(f.identity,'status','briq_status',{id});
+ assert.equal((await restarted.call(f.identity,'destroy-request','briq_destroy',{id})).briq.state,'destroyed');
+ assert.equal(f.calls.filter(row=>row.args[0]==='destroy').length,1);
+});
+
+test('old recorded descendant namespace is retained for exact cleanup without adopting its siblings',async t=>{
+ const f=await fixture(t);const id=await f.create();
+ const record=(await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===id);
+ record.resource.stackId='old-td-stack';await f.store.saveOperation(f.identity.threadId,record);f.resources.get(id).stackId='old-td-stack';
+ f.binding.state='revoked';await f.store.save(f.binding);await f.scoped.cleanup(f.binding);
+ assert.deepEqual(f.calls.filter(row=>row.args[0]==='destroy').map(row=>row.args),[['destroy',id]]);
+ assert.equal((await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===id).resource.stackId,'old-td-stack');
+});
+
+test('read-only cleanup reconciliation settles only pending destroys and leaves fresh cleanup work untouched',async t=>{
+ let phase='destroying';
+ const f=await fixture(t,async args=>{
+  if(args[0]==='status')return {briq:{...f.resources.get(args[1]),state:phase}};
+ });
+ const pending=await f.create(), untouched=await f.create();
+ await f.call('briq_exec',{id:untouched,command:'still running'});
+ const source=(await f.store.listOperations(f.identity.threadId)).find(row=>row.resource?.id===pending);
+ source.cleanup={action:'destroy',state:'unknown'};await f.store.saveOperation(f.identity.threadId,source);
+ f.binding.state='revoked';await f.store.save(f.binding);const before=f.calls.length;
+ await assert.rejects(f.scoped.reconcileCleanup(f.binding));
+ phase='destroyed';await f.scoped.reconcileCleanup(f.binding);
+ assert.deepEqual(f.calls.slice(before).map(row=>row.args),[['status',pending],['status',pending]]);
+ const rows=await f.store.listOperations(f.identity.threadId);
+ assert.equal(rows.find(row=>row.resource?.id===pending).cleanup.state,'completed');
+ assert.equal(rows.find(row=>row.resource?.id===untouched).resource.state,'live');
+ assert.equal(Boolean(rows.find(row=>row.exec).exec.terminal),false);
 });

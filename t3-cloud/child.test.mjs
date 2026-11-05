@@ -36,11 +36,13 @@ test('cloud uses one public endpoint and trusted self hostname; reconciliation v
   const calls = []; const binding = { allocationId: 'allocation', threadId: 'thread', stack: 'sandbox-stack', briqId: 'bq_one', edgeTokenHash: digest('e'.repeat(32)), bridgeToken: 'a'.repeat(43), execToken: 'b'.repeat(43) };
   const cloud = new BriqCloud({ directory, env: { T3_CLOUD_EDGE_TOKEN: 'e'.repeat(32), BRIQ_MCP_TOKEN: 'fake-central-mcp-marker', briq_mcp_token: 'fake-case-marker' }, run: async (args, options) => {
     calls.push({ args, options });
-    if (args[0] === 'up') return { stack: binding.stack, briqs: [{ id: 'bq_one' }] };
+    if (args[0] === 'up') return { stack: binding.stack, briqs: [{ id: 'bq_one', name: 'sandbox', stackId: 'stack-one' }] };
     if (args[0] === 'expose') return { url: 'https://child.example' };
-    if (args[0] === 'list') return { briqs: [{ name: 'sandbox', id: 'bq_untrusted', env: { T3_CLOUD_BINDING_ID: 'other' } }] };
+    if (args[0] === 'list') return calls.filter(row=>row.args[0]==='list').length===1
+      ? {briqs:[{id:'bq_one',name:'sandbox',stackId:'stack-one',env:{T3_CLOUD_BINDING_ID:binding.allocationId,T3_CLOUD_THREAD_ID:binding.threadId}}]}
+      : { briqs: [{ name: 'sandbox', id: 'bq_untrusted', env: { T3_CLOUD_BINDING_ID: 'other' } }] };
   } });
-  await cloud.create(binding, { image: `image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', edgeCredential: 'e'.repeat(32) });
+  assert.deepEqual(await cloud.create(binding, { image: `image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', edgeCredential: 'e'.repeat(32) }), { id: 'bq_one', stackId: 'stack-one' });
   const spec = JSON.parse(await readFile(join(directory, 'allocation.json'), 'utf8'));
   assert.deepEqual(spec.services.sandbox.env.T3_CLOUD_EDGE_TOKEN, { secret: 'CHILD_EDGE_TOKEN' });
   assert.equal(JSON.stringify(spec).includes('e'.repeat(32)), false);
@@ -63,4 +65,26 @@ test('direct Briq CLI subprocess construction strips executing MCP markers', asy
     return child;
   });
   assert.deepEqual(result, {}); assert.deepEqual(options.env, { HOME: '/native-home' });
+});
+
+test('root namespace projection requires matching authoritative create and stack lookup identities',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'t3-root-namespace-'));t.after(()=>rm(directory,{recursive:true,force:true}));
+ const edgeCredential='e'.repeat(32);
+ for(const mode of ['valid','missing-stack','wrong-stack','wrong-root']){
+  const binding={allocationId:mode,threadId:'thread',stack:'t3-'+'a'.repeat(24),edgeTokenHash:digest(edgeCredential),bridgeToken:'a'.repeat(43),execToken:'b'.repeat(43)};
+  const cloud=new BriqCloud({directory,env:{},run:async args=>args[0]==='up'
+   ? {stack:binding.stack,briqs:[{id:'root',name:'sandbox',...(mode==='missing-stack'?{}:{stackId:'stack-a'})}]}
+   : {briqs:[{id:mode==='wrong-root'?'foreign':'root',name:'sandbox',stackId:mode==='wrong-stack'?'foreign-stack':'stack-a',env:{T3_CLOUD_BINDING_ID:binding.allocationId,T3_CLOUD_THREAD_ID:binding.threadId}}]}});
+  const create=()=>cloud.create(binding,{image:'image@sha256:'+'a'.repeat(64),bridgeUrl:'wss://central.example/_cloud/bridge',edgeCredential});
+  if(mode==='valid')assert.deepEqual(await create(),{id:'root',stackId:'stack-a'});else await assert.rejects(create());
+ }
+});
+
+test('root recovery returns exact stack identity and rejects a changed recorded root or stack',async()=>{
+ const binding={allocationId:'allocation',threadId:'thread',stack:'t3-'+'a'.repeat(24),briqId:'root',rootStackId:'stack-a'};
+ let row={id:'root',name:'sandbox',stackId:'stack-a',env:{T3_CLOUD_BINDING_ID:binding.allocationId,T3_CLOUD_THREAD_ID:binding.threadId}};
+ const cloud=new BriqCloud({directory:'/unused',env:{},run:async args=>{assert.deepEqual(args,['list','--stack',binding.stack]);return {briqs:[row]};}});
+ assert.deepEqual(await cloud.find(binding),{id:'root',stackId:'stack-a'});
+ row={...row,stackId:'foreign-stack'};assert.equal(await cloud.find(binding),null);
+ row={...row,stackId:'stack-a',id:'another-root'};assert.equal(await cloud.find(binding),null);
 });
