@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/pingdotgg/t3code.git",
+  "commit": "2359643cffa6ba9ee84d6f2694b935de54a8013e",
+  "patchSha256": "bbd7b21ea2d2bcbbe1030952b1f1b7285a75d9c74209533c1d25b49cb68e27bf",
+  "lockSha256": "e799bbbc9cd012f14be1a75a6fcdec81956c4386306fdc3a9285191c67290c13",
+  "node": "26.12.1",
+  "pnpm": "12.14.0"
+}

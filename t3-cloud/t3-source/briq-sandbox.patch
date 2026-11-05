@@ -1,0 +1,804 @@
+diff --git a/apps/server/src/auth/RpcAuthorization.test.ts b/apps/server/src/auth/RpcAuthorization.test.ts
+index 8044740a..f9407fea 100644
+--- a/apps/server/src/auth/RpcAuthorization.test.ts
++++ b/apps/server/src/auth/RpcAuthorization.test.ts
+@@ -15,6 +15,7 @@ import {
+   AuthTerminalReadScope,
+   AuthTerminalOperateScope,
+   WS_METHODS,
++  ORCHESTRATION_V2_WS_METHODS,
+   WsRpcGroup,
+ } from "@t3tools/contracts";
+ import { describe, expect, it } from "@effect/vitest";
+@@ -31,6 +32,10 @@ import {
+ import * as RpcAuthorization from "./RpcAuthorization.ts";
+ 
+ describe("RPC authorization scopes", () => {
++  it("requires the native orchestration write grant for cloud allocation", () => {
++    expect(requiredScopeForRpcMethod(ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread))
++      .toBe(AuthOrchestrationOperateScope);
++  });
+   it("declares exactly one scope for every RPC in the server group", () => {
+     expect(new Set(Object.keys(RPC_REQUIRED_SCOPES))).toEqual(new Set(WsRpcGroup.requests.keys()));
+   });
+diff --git a/apps/server/src/auth/RpcAuthorization.ts b/apps/server/src/auth/RpcAuthorization.ts
+index 6049121b..60a64129 100644
+--- a/apps/server/src/auth/RpcAuthorization.ts
++++ b/apps/server/src/auth/RpcAuthorization.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../briqSandbox.ts";
+ import {
+   CLIENT_GUARDED_RPC_SCOPES,
+   type DeviceListInput,
+@@ -283,6 +284,15 @@ export const layer = (
+ ) =>
+   Layer.succeed(RpcScopeAuthorization)((effect, { rpc, payload }) => {
+     const requiredScopes = requiredScopesForRpcCall(rpc._tag, payload);
++    const role = sandboxRole();
++    const sandboxDeniedScope = requiredScopes.find((scope) =>
++      role !== "standalone" && (scope === AuthProvidersManageScope ||
++        ((role === "central" || role === "invalid") &&
++          [AuthTerminalOperateScope, AuthEnvironmentMaintainScope, AuthFilesystemWriteScope].some((denied) => denied === scope))));
++    if (sandboxDeniedScope !== undefined) return Effect.fail(new EnvironmentAuthorizationError({
++      message: "This operation is unavailable in sandbox mode. Manage connections on the cloud home and execution in its allocated environment.",
++      requiredScope: sandboxDeniedScope,
++    }));
+     const requiredScope = requiredScopes.find((scope) => !scopes.includes(scope));
+     if (requiredScope !== undefined) return Effect.fail(rpcAuthorizationError(requiredScope));
+     return onAuthorized === undefined
+diff --git a/apps/server/src/briqSandbox.test.ts b/apps/server/src/briqSandbox.test.ts
+new file mode 100644
+index 00000000..3a649821
+--- /dev/null
++++ b/apps/server/src/briqSandbox.test.ts
+@@ -0,0 +1,33 @@
++import { describe, expect, it } from "vite-plus/test";
++import { sandboxCommandRejection, sandboxCreationRejection, sandboxRole } from "./briqSandbox.ts";
++
++const child = { T3_CLOUD_ROLE: "child", T3_CLOUD_THREAD_ID: "allocated" };
++const created = { type: "thread.created", threadId: "allocated", payload: {
++  createdBy: "user", modelSelection: { instanceId: "codex" },
++} };
++
++describe("sandbox creation authority", () => {
++  it("denies every home creation source before event append", () => {
++    for (const createdBy of ["user", "agent", "automation", undefined])
++      expect(sandboxCreationRejection({ ...created, payload: { ...created.payload, createdBy } },
++        { T3_CLOUD_ROLE: "central" })).toBeDefined();
++    for (const type of ["thread.create", "thread.fork", "message.dispatch", "thread.created.record", "subagent.start"])
++      expect(sandboxCommandRejection({ type, threadId: "allocated" }, { T3_CLOUD_ROLE: "central" })).toBeDefined();
++  });
++  it("allows only the bound user thread and Codex provider", () => {
++    expect(sandboxCreationRejection(created, child)).toBeUndefined();
++    expect(sandboxCreationRejection({ ...created, threadId: "other" }, child)).toBeDefined();
++    expect(sandboxCreationRejection({ ...created, payload: { ...created.payload, createdBy: "agent" } }, child)).toBeDefined();
++    expect(sandboxCreationRejection({ ...created, payload: { ...created.payload,
++      modelSelection: { instanceId: "claude" } } }, child)).toBeDefined();
++    for (const type of ["thread.fork", "thread.created.record", "subagent.start", "automation.run", "multi-model.start"])
++      expect(sandboxCommandRejection({ type, threadId: "allocated" }, child)).toBeDefined();
++    expect(sandboxCommandRejection({ type: "message.dispatch", threadId: "allocated" }, child)).toBeUndefined();
++  });
++  it("fails closed on missing binding or invalid role, preserving standalone", () => {
++    expect(sandboxRole({ T3_CLOUD_ROLE: "typo" })).toBe("invalid");
++    expect(sandboxCreationRejection(created, { T3_CLOUD_ROLE: "typo" })).toBeDefined();
++    expect(sandboxCreationRejection(created, { T3_CLOUD_ROLE: "child" })).toBeDefined();
++    expect(sandboxCreationRejection(created, {})).toBeUndefined();
++  });
++});
+diff --git a/apps/server/src/briqSandbox.ts b/apps/server/src/briqSandbox.ts
+new file mode 100644
+index 00000000..2b50805d
+--- /dev/null
++++ b/apps/server/src/briqSandbox.ts
+@@ -0,0 +1,34 @@
++type SandboxEnvironment = Readonly<Record<string, string | undefined>>;
++
++export function sandboxRole(env: SandboxEnvironment = process.env) {
++  const role = env.T3_CLOUD_ROLE;
++  if (role === undefined || role === "standalone") return "standalone";
++  return role === "central" || role === "child" ? role : "invalid";
++}
++
++export function sandboxCommandRejection(
++  command: { readonly type: string; readonly threadId?: string; readonly modelSelection?: { readonly instanceId: string } },
++  env: SandboxEnvironment = process.env,
++): string | undefined {
++  const role = sandboxRole(env);
++  if (role === "standalone") return;
++  if (role === "invalid") return "Invalid sandbox role.";
++  if (command.type.startsWith("project.")) return;
++  if (role === "central") return "Create a sandbox through the cloud allocator before running a thread.";
++  if (!env.T3_CLOUD_THREAD_ID || command.threadId !== env.T3_CLOUD_THREAD_ID)
++    return "This environment is bound to one allocated thread.";
++  if (command.modelSelection && command.modelSelection.instanceId !== "codex")
++    return "Only the central Codex bridge is supported in this sandbox.";
++  if (/fork|multi-model|automation|delegated|thread.created.record|subagent.start/.test(command.type))
++    return "This operation requires a broker allocation and is unavailable in this sandbox.";
++}
++
++export function sandboxCreationRejection(
++  event: { readonly type: string; readonly threadId: string; readonly payload?: { readonly modelSelection?: { readonly instanceId: string }; readonly createdBy?: string } },
++  env: SandboxEnvironment = process.env,
++): string | undefined {
++  if (event.type !== "thread.created" || sandboxRole(env) === "standalone") return;
++  return sandboxCommandRejection({ type: "thread.create", threadId: event.threadId,
++    ...(event.payload?.modelSelection ? { modelSelection: event.payload.modelSelection } : {}) }, env)
++    ?? (event.payload?.createdBy !== "user" ? "Only the allocated user thread can be created in this sandbox." : undefined);
++}
+diff --git a/apps/server/src/briqSandboxAllocator.ts b/apps/server/src/briqSandboxAllocator.ts
+new file mode 100644
+index 00000000..410ac502
+--- /dev/null
++++ b/apps/server/src/briqSandboxAllocator.ts
+@@ -0,0 +1,72 @@
++import {
++  BriqSandboxAllocation,
++  BriqSandboxAllocationError,
++  type BriqSandboxAllocationInput,
++} from "@t3tools/contracts";
++import * as Context from "effect/Context";
++import * as Effect from "effect/Effect";
++import * as Layer from "effect/Layer";
++import * as Schema from "effect/Schema";
++import { sandboxRole } from "./briqSandbox.ts";
++
++export class BriqSandboxAllocator extends Context.Service<BriqSandboxAllocator, {
++  readonly allocate: (input: typeof BriqSandboxAllocationInput.Type) => Effect.Effect<
++    typeof BriqSandboxAllocation.Type, BriqSandboxAllocationError
++  >;
++}>()("t3/briqSandboxAllocator") {}
++
++const unavailable = () => new BriqSandboxAllocationError({
++  message: "Sandbox allocation is unavailable. Check the cloud home before retrying; no local thread was created.",
++});
++
++export const layer = Layer.sync(BriqSandboxAllocator, () => {
++  // Only the supervised home receives this allocation-only capability. Never use
++  // the manager owner key or a request's headers as the allocator identity.
++  const role = sandboxRole();
++  const endpoint = process.env.T3_CLOUD_ALLOCATOR_URL;
++  const token = process.env.T3_CLOUD_ALLOCATOR_TOKEN;
++  let destination: URL | undefined;
++  try {
++    const url = new URL(endpoint ?? "");
++    if (url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port &&
++        url.pathname === "/_cloud/threads" && !url.username && !url.password && !url.search && !url.hash)
++      destination = url;
++  } catch { /* Missing or invalid configuration fails closed at allocation. */ }
++  return {
++    allocate: Effect.fn("BriqSandboxAllocator.allocate")(function* (input) {
++      if (role !== "central" || !destination || !token) return yield* Effect.fail(unavailable());
++      const response = yield* Effect.tryPromise({
++        try: async () => {
++          const response = await fetch(destination, {
++            method: "POST", redirect: "error", signal: AbortSignal.timeout(60_000),
++            headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
++            body: JSON.stringify({ threadId: input.threadId }),
++          });
++          if (!response.ok || !response.body) throw unavailable();
++          const reader = response.body.getReader();
++          const chunks: Uint8Array[] = [];
++          let length = 0;
++          try {
++            for (;;) {
++              const part = await reader.read();
++              if (part.done) break;
++              length += part.value.length;
++              if (length > 65_536) throw unavailable();
++              chunks.push(part.value);
++            }
++          } finally { await reader.cancel(); }
++          const bytes = new Uint8Array(length);
++          let offset = 0;
++          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
++          return JSON.parse(new TextDecoder().decode(bytes));
++        },
++        catch: unavailable,
++      });
++      const allocation = yield* Schema.decodeUnknownEffect(BriqSandboxAllocation)(response).pipe(
++        Effect.mapError(unavailable),
++      );
++      if (allocation.threadId !== input.threadId) return yield* Effect.fail(unavailable());
++      return allocation;
++    }),
++  };
++});
+diff --git a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts b/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
+index 821cf051..d5762976 100644
+--- a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
++++ b/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../../briqSandbox.ts";
+ import { pipe } from "effect/Function";
+ import * as DocumentText from "../../provider/DocumentText.ts";
+ import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
+@@ -1334,14 +1335,20 @@ export const CODEX_THREAD_CONFIG = {
+ const CODEX_T3_MCP_TOOL_TIMEOUT_SEC = 65 * 60;
+ 
+ function codexThreadRuntimeParams(input: {
++  readonly resume?: boolean;
+   readonly mcpSession: McpProviderSession.McpProviderSessionConfig | undefined;
+   readonly modelSelection?: { readonly model: string };
+   readonly runtimePolicy?: ProviderAdapter.ProviderAdapterV2RuntimePolicy;
+ }): {
+   readonly cwd?: string;
+   readonly model?: string;
+-  readonly config: Readonly<Record<string, Schema.Json>>;
++  readonly config?: Readonly<Record<string, Schema.Json>>;
+ } {
++  if (sandboxRole() === "child" && input.resume) return {};
++  if (sandboxRole() === "child") return {
++    ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
++    ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
++  };
+   const { mcpSession } = input;
+   return {
+     ...(input.runtimePolicy?.cwd == null ? {} : { cwd: input.runtimePolicy.cwd }),
+@@ -6642,7 +6649,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+           ) {
+             const threadId = yield* getNativeThreadId(turnInput.providerThread);
+             const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+-            const turnStartParams = yield* buildCodexTurnStartParams({
++            const fullTurnStartParams = yield* buildCodexTurnStartParams({
+               nativeThreadId: threadId,
+               codexInput,
+               runtimePolicy: turnInput.runtimePolicy,
+@@ -6653,6 +6660,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
+               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
+             });
++            const turnStartParams = sandboxRole() === "child" ? {
++              threadId, input: codexInput, model: turnInput.modelSelection.model,
++              ...(fullTurnStartParams.effort == null ? {} : { effort: fullTurnStartParams.effort }),
++            } : fullTurnStartParams;
+             yield* Ref.update(pendingRootTurns, (current) => {
+               const updated = new Map(current);
+               updated.set(threadId, turnInput);
+@@ -6660,8 +6671,8 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+             });
+             yield* Ref.update(additionalContextByThread, (current) => {
+               const next = new Map(current);
+-              if (turnStartParams.additionalContext)
+-                next.set(threadId, turnStartParams.additionalContext);
++              if (sandboxRole() !== "child" && fullTurnStartParams.additionalContext)
++                next.set(threadId, fullTurnStartParams.additionalContext);
+               else next.delete(threadId);
+               return next;
+             });
+@@ -6989,6 +7000,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+                 threadId: nativeThreadId,
+                 excludeTurns: true,
+                 ...codexThreadRuntimeParams({
++                  resume: true,
+                   mcpSession: yield* readMcpSession(
+                     threadInput.threadId ?? threadInput.providerThread.appThreadId,
+                   ),
+@@ -7776,6 +7788,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+                   threadId,
+                   excludeTurns: true,
+                   ...codexThreadRuntimeParams({
++                  resume: true,
+                     mcpSession: yield* readMcpSession(threadInput.providerThread.appThreadId),
+                     modelSelection: input.modelSelection,
+                     runtimePolicy: input.runtimePolicy,
+@@ -7828,6 +7841,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
+                       ? {}
+                       : { lastTurnId: boundary.lastTurnId }),
+                     ...codexThreadRuntimeParams({
++                  resume: true,
+                       mcpSession: yield* mcpSessions.read(threadInput.targetThreadId),
+                       ...(threadInput.modelSelection === undefined
+                         ? {}
+diff --git a/apps/server/src/orchestration-v2/EventStore.ts b/apps/server/src/orchestration-v2/EventStore.ts
+index e2125508..8f81d8da 100644
+--- a/apps/server/src/orchestration-v2/EventStore.ts
++++ b/apps/server/src/orchestration-v2/EventStore.ts
+@@ -1,3 +1,4 @@
++import { sandboxCreationRejection } from "../briqSandbox.ts";
+ import {
+   type ApplicationProjectEvent,
+   type ApplicationStoredEvent,
+@@ -108,6 +109,8 @@ const layerBase: Layer.Layer<EventStoreV2, never, OrchestrationEventStore.Orches
+ 
+       return EventStoreV2.of({
+         append: Effect.fn("EventStoreV2.append")(function (input) {
++          const rejection = input.events.some((event) => event.type === "thread.created" && sandboxCreationRejection(event) !== undefined);
++          if (rejection) return Effect.fail(new EventStoreAppendEventsError({ eventCount: input.events.length }));
+           return applicationEvents.appendAgentEvents(input).pipe(
+             Effect.mapError(
+               (cause) =>
+diff --git a/apps/server/src/orchestration-v2/Orchestrator.ts b/apps/server/src/orchestration-v2/Orchestrator.ts
+index 0a5e56d9..25ea336c 100644
+--- a/apps/server/src/orchestration-v2/Orchestrator.ts
++++ b/apps/server/src/orchestration-v2/Orchestrator.ts
+@@ -1,3 +1,4 @@
++import { sandboxCommandRejection } from "../briqSandbox.ts";
+ import type {
+   GuestShareId,
+   OrchestrationV2SearchThreadInput,
+@@ -13250,6 +13251,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
+       "orchestration_v2.thread_id": commandThreadId(command),
+     });
+ 
++    const sandboxRejection = sandboxCommandRejection(command);
++    if (sandboxRejection) return yield* new OrchestratorDispatchError({
++      commandId: command.commandId, commandType: command.type, cause: sandboxRejection,
++    });
++
+     const existingReceipt = yield* commandReceipts.getByCommandId(command.commandId).pipe(
+       Effect.mapError(
+         (cause) =>
+diff --git a/apps/server/src/orchestration-v2/ThreadLaunchService.ts b/apps/server/src/orchestration-v2/ThreadLaunchService.ts
+index b68eef4b..9ae2124b 100644
+--- a/apps/server/src/orchestration-v2/ThreadLaunchService.ts
++++ b/apps/server/src/orchestration-v2/ThreadLaunchService.ts
+@@ -1,3 +1,4 @@
++import { sandboxCommandRejection } from "../briqSandbox.ts";
+ import * as WorktreeSetupTracker from "../project/WorktreeSetupTracker.ts";
+ import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
+ import * as TerminalManager from "../terminal/Manager.ts";
+@@ -806,6 +807,8 @@ const make = Effect.gen(function* () {
+ 
+   const launch: ThreadLaunchService["Service"]["launch"] = Effect.fn("ThreadLaunchService.launch")(
+     function* (request) {
++      const rejection = sandboxCommandRejection({ type: "thread.create", ...request });
++      if (rejection) return yield* mapError(request, "create-thread", request.threadId)(rejection);
+       // Scratch has no Git repository. Normalize before folder allocation so
+       // durable preparation and retries use the thread's own Scratch folder.
+       const input: ThreadLaunchInput =
+diff --git a/apps/server/src/provider/Drivers/CodexDriver.ts b/apps/server/src/provider/Drivers/CodexDriver.ts
+index 97ec4954..7614d1a5 100644
+--- a/apps/server/src/provider/Drivers/CodexDriver.ts
++++ b/apps/server/src/provider/Drivers/CodexDriver.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../../briqSandbox.ts";
+ import { CodexSettings, ProviderDriverKind } from "@t3tools/contracts";
+ import * as Crypto from "effect/Crypto";
+ import * as Effect from "effect/Effect";
+@@ -218,7 +219,15 @@ export const CodexDriver: ProviderDriver<
+ 
+     // Kick the TTL-gated manifest refresh in the background and classify with the in-memory
+     // manifest, so a slow or hung fetch never delays the provider check.
+-    const checkProvider = modelCatalog.refreshInBackground.pipe(
++    const bridged = sandboxRole() === "child";
++    const bridgeSnapshot = Effect.zipWith(
++      makePendingCodexProvider(effectiveConfig), currentCatalog,
++      (draft, catalog) => stampIdentity(applyCodexModelCatalog({
++        ...draft, installed: true, version: "0.166.0", status: "ready",
++        message: "Execution uses the central Codex bridge; sign-in is managed on the home.",
++      }, catalog)),
++    );
++    const checkProvider = bridged ? bridgeSnapshot : modelCatalog.refreshInBackground.pipe(
+       Effect.andThen(
+         Effect.zipWith(
+           checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+@@ -237,7 +246,7 @@ export const CodexDriver: ProviderDriver<
+       getSettings: snapshotSettings.getSettings,
+       streamSettings: snapshotSettings.streamSettings,
+       haveSettingsChanged: haveProviderSnapshotSettingsChanged,
+-      initialSnapshot: (settings) =>
++      initialSnapshot: (settings) => bridged ? bridgeSnapshot :
+         Effect.zipWith(
+           makePendingCodexProvider(settings.provider),
+           currentCatalog,
+@@ -272,7 +281,7 @@ export const CodexDriver: ProviderDriver<
+       snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
+     );
+     const snapshotForCwd = (cwd: string) =>
+-      !effectiveConfig.enabled
++      !effectiveConfig.enabled || bridged
+         ? snapshot.getSnapshot
+         : Effect.all([
+             snapshot.getSnapshot,
+@@ -367,7 +376,7 @@ export const CodexDriver: ProviderDriver<
+       enabled,
+       snapshot,
+       snapshotForCwd,
+-      consumeResetCredit,
++      ...(bridged ? {} : { consumeResetCredit }),
+       orchestrationAdapter,
+       textGeneration,
+     } satisfies ProviderInstance;
+diff --git a/apps/server/src/provider/ProviderInstanceRegistry.ts b/apps/server/src/provider/ProviderInstanceRegistry.ts
+index a944f751..14b8fa29 100644
+--- a/apps/server/src/provider/ProviderInstanceRegistry.ts
++++ b/apps/server/src/provider/ProviderInstanceRegistry.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../briqSandbox.ts";
+ import {
+   providerInstanceConfigEnabledFlag,
+   ProviderInstanceId,
+@@ -155,6 +156,13 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+   R | SecretResolver.SecretResolver
+ > {
+   const { driversById, parentScope, instanceId, rawInstanceId, entry, deferSecrets } = input;
++  const role = sandboxRole();
++  if (role !== "standalone" && (role !== "child" || entry.driver !== "codex" || instanceId !== "codex")) {
++    return { kind: "unavailable" as const, snapshot: yield* buildUnavailableProviderSnapshot({
++      driverKind: entry.driver, instanceId, displayName: entry.displayName, accentColor: entry.accentColor,
++      reason: "Provider execution is available only through the allocated sandbox Codex bridge.",
++    }) };
++  }
+   const driver = driversById.get(entry.driver);
+   if (!driver) {
+     return {
+@@ -170,7 +178,11 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+   }
+ 
+   const decoder = Schema.decodeUnknownEffect(driver.configSchema);
+-  const decodeResult = yield* decoder(entry.config ?? driver.defaultConfig()).pipe(Effect.result);
++  const forcedConfig = role === "child" ? {
++    setupMode: "existing", binaryPath: "/opt/t3-cloud/bin/codex-remote",
++    homePath: "/work/.codex-empty", shadowHomePath: "", launchArgs: "",
++  } : entry.config;
++  const decodeResult = yield* decoder(forcedConfig ?? driver.defaultConfig()).pipe(Effect.result);
+   if (decodeResult._tag === "Failure") {
+     const issue = decodeResult.failure;
+     const detail = issue.message ?? String(issue);
+@@ -205,7 +217,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+       }),
+     };
+   }
+-  const { secrets, unreadable } = enabled
++  const { secrets, unreadable } = enabled && role === "standalone"
+     ? yield* readInstanceSecrets(driver, entry)
+     : {
+         secrets: { environment: withoutSecretReferences(entry.environment ?? []), config: {} },
+@@ -233,7 +245,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+       instanceId,
+       displayName: entry.displayName,
+       accentColor: entry.accentColor,
+-      environment: secrets.environment,
++      environment: role === "child" ? [] : secrets.environment,
+       enabled,
+       config:
+         Object.keys(secrets.config).length === 0
+diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
+index 452addfb..5dcbcdc3 100644
+--- a/apps/server/src/server.ts
++++ b/apps/server/src/server.ts
+@@ -1,3 +1,7 @@
++import { sandboxRole } from "./briqSandbox.ts";
++import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
++import * as PlatformError from "effect/PlatformError";
++import * as BriqSandboxAllocator from "./briqSandboxAllocator.ts";
+ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
+ import type { RelayManagedEndpointRuntimeConfig } from "@t3tools/contracts/relay";
+ import * as Random from "effect/Random";
+@@ -333,7 +337,17 @@ const layerHttpServer = Layer.unwrap(
+   }),
+ );
+ 
+-const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
++const layerSandboxProcesses = Layer.effect(ChildProcessSpawner.ChildProcessSpawner,
++  Effect.gen(function* () {
++    const native = yield* ChildProcessSpawner.ChildProcessSpawner;
++    return ChildProcessSpawner.make((command) =>
++      sandboxRole() === "central" || sandboxRole() === "invalid"
++        ? Effect.fail(PlatformError.badArgument({ module: "ChildProcessSpawner", method: "spawn",
++            description: "Local execution is disabled on the cloud home. Open a sandbox environment." }))
++        : native.spawn(command));
++  }),
++).pipe(Layer.provideMerge(NodeServices.layer));
++const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(layerSandboxProcesses));
+ 
+ const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
+ 
+@@ -1093,6 +1107,7 @@ const layerMakeServer = Layer.unwrap(
+     return layerServerApplication.pipe(
+       Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
+       Layer.provideMerge(layerRuntimeServices),
++      Layer.provideMerge(BriqSandboxAllocator.layer),
+       Layer.provideMerge(
+         McpSessionRegistry.layer.pipe(
+           Layer.provide(ServerEnvironment.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+diff --git a/apps/server/src/terminal/NodePtyAdapter.ts b/apps/server/src/terminal/NodePtyAdapter.ts
+index 4b83ddf6..255dc4f3 100644
+--- a/apps/server/src/terminal/NodePtyAdapter.ts
++++ b/apps/server/src/terminal/NodePtyAdapter.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../briqSandbox.ts";
+ import * as NodeModule from "node:module";
+ import * as NodeNet from "node:net";
+ 
+@@ -244,6 +245,11 @@ const make = Effect.fn("NodePtyAdapter.make")(function* () {
+ 
+   return PtyAdapter.PtyAdapter.of({
+     spawn: Effect.fn("NodePtyAdapter.spawn")(function* (input) {
++      if (sandboxRole() === "central" || sandboxRole() === "invalid")
++        return yield* Effect.fail(new PtyAdapter.PtySpawnError({
++          adapter: "sandbox-home", shell: input.shell,
++          cause: "Open a sandbox environment before starting a terminal.",
++        }));
+       yield* ensureNodePtySpawnHelperExecutableCached;
+       // ConPTY ignores node-pty's name option for TERM; set it explicitly to avoid missing/16-color values.
+       const env =
+diff --git a/apps/server/src/textGeneration/CodexTextGeneration.ts b/apps/server/src/textGeneration/CodexTextGeneration.ts
+index e17fa4c4..21e368d4 100644
+--- a/apps/server/src/textGeneration/CodexTextGeneration.ts
++++ b/apps/server/src/textGeneration/CodexTextGeneration.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../briqSandbox.ts";
+ import * as Effect from "effect/Effect";
+ import * as FileSystem from "effect/FileSystem";
+ import * as Option from "effect/Option";
+@@ -223,6 +224,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
+     TextGenerationError,
+     S["DecodingServices"]
+   > {
++    if (sandboxRole() !== "standalone") return yield* new TextGenerationError({
++      operation, detail: "Background text generation is disabled in sandbox mode.",
++    });
+     const imagePaths = yield* materializeImageAttachments(attachments);
+     const schemaJson = yield* encodeJsonForOperation(
+       operation,
+diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
+index 4781fcf7..863d534c 100644
+--- a/apps/server/src/ws.ts
++++ b/apps/server/src/ws.ts
+@@ -1,3 +1,5 @@
++import * as BriqSandboxAllocator from "./briqSandboxAllocator.ts";
++import { sandboxRole } from "./briqSandbox.ts";
+ import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+ import * as Context from "effect/Context";
+ import * as Crypto from "effect/Crypto";
+@@ -1269,6 +1271,7 @@ export const layerWsRpc = (
+           { discard: true },
+         ).pipe(Effect.ignore);
+       };
++      const sandboxAllocator = yield* BriqSandboxAllocator.BriqSandboxAllocator;
+       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
+       const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
+       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
+@@ -1753,6 +1756,7 @@ export const layerWsRpc = (
+           environment,
+           auth,
+           cwd: config.cwd,
++          briqSandboxRole: sandboxRole(),
+           keybindingsConfigPath: config.keybindingsConfigPath,
+           keybindings: keybindingsConfig.keybindings,
+           issues: keybindingsConfig.issues,
+@@ -2031,6 +2035,7 @@ export const layerWsRpc = (
+                 ),
+             ),
+           ),
++        [ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread]: (input) => sandboxAllocator.allocate(input),
+         [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
+           Effect.annotateCurrentSpan({
+             "orchestration_v2.command_id": input.commandId,
+diff --git a/apps/web/src/connection/onboarding.ts b/apps/web/src/connection/onboarding.ts
+index c4368b0b..d0191863 100644
+--- a/apps/web/src/connection/onboarding.ts
++++ b/apps/web/src/connection/onboarding.ts
+@@ -1,9 +1,12 @@
+-import { ConnectionOnboarding } from "@t3tools/client-runtime/connection";
++import * as Stream from "effect/Stream";
++import * as SubscriptionRef from "effect/SubscriptionRef";
++import * as Option from "effect/Option";
++import { ConnectionOnboarding, EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
+ import {
+   createAtomCommandScheduler,
+   createRuntimeCommand,
+ } from "@t3tools/client-runtime/state/runtime";
+-import type { DesktopSshEnvironmentTarget } from "@t3tools/contracts";
++import type { DesktopSshEnvironmentTarget, EnvironmentId } from "@t3tools/contracts";
+ import * as Effect from "effect/Effect";
+ 
+ import { connectionAtomRuntime } from "./runtime";
+@@ -35,3 +38,21 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
+       Effect.flatMap((onboarding) => onboarding.registerSsh(input)),
+     ),
+ });
++
++export const waitForSandboxConnection = createRuntimeCommand(connectionAtomRuntime, {
++  label: "web:connection:wait-for-sandbox",
++  execute: (environmentId: EnvironmentId) => Effect.gen(function* () {
++    const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
++    return yield* registry.run(environmentId, Effect.gen(function* () {
++      const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
++      return yield* SubscriptionRef.changes(supervisor.session).pipe(
++        Stream.filter(Option.isSome), Stream.take(1), Stream.runHead,
++        Effect.flatMap(Option.match({
++          onNone: () => Effect.die(new Error("Sandbox connection ended before it was ready.")),
++          onSome: (session) => session.value.initialConfig,
++        })),
++        Effect.timeout("30 seconds"),
++      );
++    }));
++  }),
++});
+diff --git a/apps/web/src/hooks/openBriqSandboxThread.ts b/apps/web/src/hooks/openBriqSandboxThread.ts
+new file mode 100644
+index 00000000..f26b1c5d
+--- /dev/null
++++ b/apps/web/src/hooks/openBriqSandboxThread.ts
+@@ -0,0 +1,46 @@
++import type { AnyRouter } from "@tanstack/react-router";
++import { ProviderInstanceId, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
++import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
++import { allocateSandboxThread } from "../state/briqSandbox";
++import { appAtomRegistry } from "../rpc/atomRegistry";
++import { connectPairing, waitForSandboxConnection } from "../connection/onboarding";
++import { projectEnvironment } from "../state/projects";
++import { threadEnvironment } from "../state/threads";
++
++export async function openBriqSandboxThread(router: AnyRouter, environmentId: EnvironmentId, threadId: ThreadId) {
++  const options = { reportFailure: false, reportDefect: false };
++  const result = await runAtomCommand(appAtomRegistry, allocateSandboxThread, {
++    environmentId, input: { threadId },
++  }, options);
++  if (result._tag === "Failure") throw new Error("Sandbox allocation failed. Check cloud connections before retrying; no local thread was created.");
++  const allocation = result.value;
++  const destination = new URL(allocation.connection.url);
++  if (allocation.threadId !== threadId || destination.protocol !== "https:" || destination.username ||
++      destination.password || destination.search || destination.hash || destination.pathname !== "/")
++    throw new Error("Invalid sandbox allocation destination.");
++  const connected = await runAtomCommand(appAtomRegistry, connectPairing, {
++    host: destination.origin, pairingCode: allocation.connection.credential,
++    expectedEnvironmentId: allocation.environmentId,
++  }, options);
++  if (connected._tag === "Failure") throw new Error("Could not pair the allocated sandbox.");
++  const ready = await runAtomCommand(appAtomRegistry, waitForSandboxConnection, allocation.environmentId, options);
++  if (ready._tag === "Failure" || ready.value.briqSandboxRole !== "child")
++    throw new Error("The allocated sandbox did not establish its native connection.");
++  const provider = ready.value.providers.find((item) => item.instanceId === "codex");
++  const model = provider?.models[0]?.slug;
++  if (!model) throw new Error("The sandbox Codex bridge has no available model catalog.");
++  const project = await runAtomCommand(appAtomRegistry, projectEnvironment.create, {
++    environmentId: allocation.environmentId,
++    input: { projectId: allocation.project.id, title: allocation.project.title,
++      workspaceRoot: allocation.project.workspaceRoot },
++  }, options);
++  if (project._tag === "Failure") throw new Error("Could not create the sandbox project.");
++  const thread = await runAtomCommand(appAtomRegistry, threadEnvironment.create, {
++    environmentId: allocation.environmentId,
++    input: { threadId, projectId: allocation.project.id, title: "New thread",
++      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model },
++      runtimeMode: "approval-required", interactionMode: "default", branch: null, worktreePath: null },
++  }, options);
++  if (thread._tag === "Failure") throw new Error("Could not create the allocated sandbox thread.");
++  await router.navigate({ to: "/$environmentId/$threadId", params: { environmentId: allocation.environmentId, threadId } });
++}
+diff --git a/apps/web/src/hooks/useHandleNewThread.ts b/apps/web/src/hooks/useHandleNewThread.ts
+index a4382547..8f5ec76b 100644
+--- a/apps/web/src/hooks/useHandleNewThread.ts
++++ b/apps/web/src/hooks/useHandleNewThread.ts
+@@ -87,6 +87,13 @@ export function createNewThreadHandler(router: AnyRouter) {
+       prompt?: string;
+     },
+   ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
++    const sandboxRole = appAtomRegistry.get(environmentServerConfigsAtom).get(projectRef.environmentId)?.briqSandboxRole;
++    if (sandboxRole && sandboxRole !== "standalone") {
++      const central = [...appAtomRegistry.get(environmentServerConfigsAtom)].find(([, config]) => config.briqSandboxRole === "central");
++      if (!central) return Promise.reject(new Error("Connect the cloud home before creating a sandbox thread."));
++      return import("./openBriqSandboxThread").then(({ openBriqSandboxThread }) =>
++        openBriqSandboxThread(router, central[0], newThreadId())).then(() => null);
++    }
+     const projects = readProjects();
+     const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
+     // Read at call time; status pushes replace the config map and would recreate every sidebar handler.
+diff --git a/apps/web/src/state/briqSandbox.ts b/apps/web/src/state/briqSandbox.ts
+new file mode 100644
+index 00000000..49c2f163
+--- /dev/null
++++ b/apps/web/src/state/briqSandbox.ts
+@@ -0,0 +1,8 @@
++import { createEnvironmentRpcCommand } from "@t3tools/client-runtime/state/runtime";
++import { ORCHESTRATION_V2_WS_METHODS } from "@t3tools/contracts";
++import { connectionAtomRuntime } from "../connection/runtime";
++
++export const allocateSandboxThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
++  label: "environment:briq-sandbox:allocate",
++  tag: ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread,
++});
+diff --git a/packages/contracts/src/briqSandbox.ts b/packages/contracts/src/briqSandbox.ts
+new file mode 100644
+index 00000000..bf7f747b
+--- /dev/null
++++ b/packages/contracts/src/briqSandbox.ts
+@@ -0,0 +1,16 @@
++import * as Schema from "effect/Schema";
++import { EnvironmentId, ProjectId, ThreadId } from "./baseSchemas.ts";
++import { TrimmedNonEmptyString } from "./baseSchemas.ts";
++
++export const BriqSandboxAllocationInput = Schema.Struct({ threadId: ThreadId });
++export const BriqSandboxAllocation = Schema.Struct({
++  allocationId: TrimmedNonEmptyString,
++  environmentId: EnvironmentId,
++  threadId: ThreadId,
++  project: Schema.Struct({ id: ProjectId, title: TrimmedNonEmptyString, workspaceRoot: Schema.Literal("/work") }),
++  connection: Schema.Struct({ url: TrimmedNonEmptyString, credential: TrimmedNonEmptyString }),
++});
++
++export class BriqSandboxAllocationError extends Schema.TaggedError<BriqSandboxAllocationError>()(
++  "BriqSandboxAllocationError", { message: Schema.String },
++) {}
+diff --git a/packages/contracts/src/clientRpcPermissions.ts b/packages/contracts/src/clientRpcPermissions.ts
+index d3139f2e..4642b673 100644
+--- a/packages/contracts/src/clientRpcPermissions.ts
++++ b/packages/contracts/src/clientRpcPermissions.ts
+@@ -15,6 +15,7 @@ import { WS_METHODS } from "./rpc.ts";
+ 
+ /** Incremental client enforcement; the server still authorizes every request. */
+ export const CLIENT_GUARDED_RPC_SCOPES = {
++  [ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread]: AuthOrchestrationOperateScope,
+   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
+   // Stopping a server signals its processes, as closing a terminal does.
+   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,
+diff --git a/packages/contracts/src/index.ts b/packages/contracts/src/index.ts
+index f00976d2..e0d38228 100644
+--- a/packages/contracts/src/index.ts
++++ b/packages/contracts/src/index.ts
+@@ -70,3 +70,5 @@ export * from "./secretRequest.ts";
+ export * from "./secretReference.ts";
+ export * from "./settingsSecretValue.ts";
+ export * from "./clientRpcPermissions.ts";
++
++export * from "./briqSandbox.ts";
+diff --git a/packages/contracts/src/orchestrationV2.ts b/packages/contracts/src/orchestrationV2.ts
+index 1c80128f..ca5a6921 100644
+--- a/packages/contracts/src/orchestrationV2.ts
++++ b/packages/contracts/src/orchestrationV2.ts
+@@ -1,3 +1,4 @@
++import { BriqSandboxAllocationInput, BriqSandboxAllocation } from "./briqSandbox.ts";
+ import { OrchestrationMessageContext } from "./composerContext.ts";
+ import { withRecordIdTable } from "./orchestrationV2IdTable.ts";
+ import * as DateTime from "effect/DateTime";
+@@ -3562,6 +3563,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
+   stopWorkflow: "orchestration.stopWorkflow",
+   forceStopThread: "orchestration.forceStopThread",
+   getTurnItem: "orchestration.getTurnItem",
++  allocateSandboxThread: "orchestration.allocateSandboxThread",
+   launchThread: "orchestration.launchThread",
+   subscribeShell: "orchestration.subscribeShell",
+   subscribeThread: "orchestration.subscribeThread",
+@@ -4181,6 +4183,7 @@ export const OrchestrationV2RpcSchemas = {
+     input: OrchestrationV2GetTurnItemInput,
+     output: OrchestrationV2GetTurnItemResult,
+   },
++  allocateSandboxThread: { input: BriqSandboxAllocationInput, output: BriqSandboxAllocation },
+   launchThread: {
+     input: OrchestrationV2ThreadLaunchInput,
+     output: OrchestrationV2ThreadLaunchResult,
+diff --git a/packages/contracts/src/rpc.ts b/packages/contracts/src/rpc.ts
+index 37ea5866..7956cc2b 100644
+--- a/packages/contracts/src/rpc.ts
++++ b/packages/contracts/src/rpc.ts
+@@ -1,3 +1,4 @@
++import { BriqSandboxAllocationError } from "./briqSandbox.ts";
+ import {
+   OrchestrationV2SearchThreadError,
+   OrchestrationV2SearchThreadInput,
+@@ -1822,6 +1823,12 @@ const WsOrchestrationV2GetTurnItemRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.get
+   error: Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
+ });
+ 
++const WsBriqSandboxAllocationRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread, {
++  payload: OrchestrationV2RpcSchemas.allocateSandboxThread.input,
++  success: OrchestrationV2RpcSchemas.allocateSandboxThread.output,
++  error: Schema.Union([BriqSandboxAllocationError, EnvironmentAuthorizationError]),
++});
++
+ const WsOrchestrationV2LaunchThreadRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+   payload: OrchestrationV2RpcSchemas.launchThread.input,
+   success: OrchestrationV2RpcSchemas.launchThread.output,
+@@ -2174,6 +2181,7 @@ export const WsRpcGroup = RpcGroup.make(
+   WsOrchestrationV2GetWorktreeThreadIdsRpc,
+   WsOrchestrationV2GetOlderSettledThreadsRpc,
+   WsOrchestrationV2GetThreadProjectionRpc,
++  WsBriqSandboxAllocationRpc,
+   WsOrchestrationV2LaunchThreadRpc,
+   WsOrchestrationV2SubscribeShellRpc,
+   WsOrchestrationV2SubscribeThreadRpc,
+diff --git a/packages/contracts/src/server.ts b/packages/contracts/src/server.ts
+index c36f724b..e0616bd3 100644
+--- a/packages/contracts/src/server.ts
++++ b/packages/contracts/src/server.ts
+@@ -607,6 +607,7 @@ export const ServerEventLoopStall = Schema.Struct({
+ export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
+ 
+ export const ServerConfig = Schema.Struct({
++  briqSandboxRole: Schema.optionalKey(Schema.Literals(["central", "child", "standalone", "invalid"])),
+   environment: ExecutionEnvironmentDescriptor,
+   auth: ServerAuthDescriptor,
+   cwd: TrimmedNonEmptyString,
