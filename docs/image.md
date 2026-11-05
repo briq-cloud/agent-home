@@ -59,7 +59,7 @@ docker run --rm -it ghcr.io/briq-cloud/agent-home:latest bash
 ## Build it
 
 ```bash
-docker build -t agent-home .
+docker build --target agent-home -t agent-home .
 docker run --rm agent-home agent-home-versions
 ```
 
@@ -74,3 +74,7 @@ MIT licensed. The briq service is operated by Uplab SAS under its
 ## Benchmarks
 
 [Small ACP benchmarks](../benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
+
+## T3 Cloud
+
+[T3 Cloud](t3-cloud.md) has a separate build target and image repository. Agent Home does not install T3 Code.

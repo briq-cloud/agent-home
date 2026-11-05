@@ -19,7 +19,7 @@ test('home service controls require explicit launch, pairing and paid routing co
     const path = new URL(route.request().url()).pathname;
     if (path === '/') return route.fulfill({ contentType: 'text/html', body:
       ids.map((id) => `<p id="${id}"></p>`).join('') + buttons.map((id) => `<button id="${id}">${id}</button>`).join('') +
-      '<input type="checkbox" id="t3-openrouter"><a id="t3-open" hidden>Open T3 Code</a><a id="t3-pair-open" hidden>Pair this browser</a><a id="briq-login-open" hidden>Approve Briq sign-in</a>' +
+      '<button id="tab-t3" aria-selected="false">T3 Code</button><section id="auto-t3-section"></section><input type="checkbox" id="t3-openrouter"><a id="t3-open" hidden>Open T3 Code</a><a id="t3-pair-open" hidden>Pair this browser</a><a id="briq-login-open" hidden>Approve Briq sign-in</a>' +
       '<script type="module">import{createHomeServices}from"/services.js";createHomeServices({byId:id=>document.getElementById(id),call:async(method,path,body)=>{const r=await fetch(path,{method,headers:{"content-type":"application/json"},body:body?JSON.stringify(body):undefined});return{ok:r.ok,body:await r.json()}}});</script>' });
     if (path === '/services.js') return route.fulfill({ contentType: 'text/javascript', body: readFileSync(new URL('../src/ui/web/services.js', import.meta.url), 'utf8') });
     const method = route.request().method();
@@ -45,6 +45,12 @@ test('home service controls require explicit launch, pairing and paid routing co
   await page.locator('#briq-check').click();
   await page.getByText('Briq CLI is connected.', { exact: true }).waitFor();
   assert.deepEqual(mutations, ['POST /home-services/t3', 'PUT /home-services/t3/routing', 'POST /home-services/t3/pair']);
+  assert.equal(await page.locator('#tab-t3').isVisible(), true);
+  state.t3.installed = false;
+  await page.locator('#services-refresh').click();
+  await page.getByText('T3 Code is not installed in this image.', { exact: true }).waitFor();
+  assert.equal(await page.locator('#tab-t3').isVisible(), false);
+  assert.equal(await page.locator('#auto-t3-section').isVisible(), false);
 });
 
 test('fresh browsers pass the private T3 gateway and preserve the native pairing fragment', { skip: !browserPath, timeout: 20_000 }, async (t) => {

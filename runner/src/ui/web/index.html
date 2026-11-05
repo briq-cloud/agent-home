@@ -23,7 +23,7 @@
     <button id="tab-auto-agent" role="tab" aria-controls="panel-auto-agent" aria-selected="false" tabindex="-1">Auto Agent</button>
     <button id="tab-connections" role="tab" aria-controls="panel-connections" aria-selected="false" tabindex="-1">Connections</button>
     <button id="tab-tools" role="tab" aria-controls="panel-tools" aria-selected="false" tabindex="-1">Tools</button>
-    <button id="tab-t3" role="tab" aria-controls="panel-t3" aria-selected="false" tabindex="-1">T3 Code</button>
+    <button id="tab-t3" hidden role="tab" aria-controls="panel-t3" aria-selected="false" tabindex="-1">T3 Code</button>
     <button id="tab-terminal" role="tab" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">Terminal</button>
     <button id="tab-briq" role="tab" aria-controls="panel-briq" aria-selected="false" tabindex="-1">Briq</button>
   </nav>
@@ -51,7 +51,7 @@
     </section>
     <section aria-labelledby="auto-accounts-title"><h2 id="auto-accounts-title">Subscription accounts</h2><p class="muted">Include or exclude Claude accounts from automatic selection. Excluded accounts remain available when selected explicitly.</p><div id="auto-accounts" class="grid"></div></section>
     <section aria-labelledby="auto-models-title"><h2 id="auto-models-title">Model profiles</h2><p class="muted">Prepare the default OpenRouter models in one click, or configure a profile below. Saving a key in Connections does not prepare models or approve paid tasks.</p><div id="auto-models" class="grid"></div></section>
-    <section aria-labelledby="auto-t3-title"><h2 id="auto-t3-title">T3 sessions</h2>
+    <section id="auto-t3-section" hidden aria-labelledby="auto-t3-title"><h2 id="auto-t3-title">T3 sessions</h2>
       <label class="api-choice"><input type="checkbox" id="t3-openrouter"> Allow OpenRouter API profiles and paid routing decisions for new Briq Agent connections in T3</label>
       <p class="muted">Requires your OpenRouter key in Connections. Admission estimates: $0.10 for execution and $0.001 for routing per task; actual CLI charges are unknown. Reconnect the Briq Agent in T3 after changing this choice.</p>
       <p class="muted">This setting does not change Chat or Fleet paid-use consent.</p>

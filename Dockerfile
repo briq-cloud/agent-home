@@ -15,7 +15,7 @@
 # Each one's sha256 is in /etc/agent-home/downloads and REFERENCE.md. The build passes BASE pinned
 # by digest; its provenance is attested on GitHub (`gh attestation verify`).
 ARG BASE=ghcr.io/briq-cloud/sandbox:latest
-FROM ${BASE}
+FROM ${BASE} AS native-clis
 
 ARG CLAUDE_VERSION=
 ARG CODEX_VERSION=
@@ -126,22 +126,6 @@ RUN cd /opt/briq-cli && npm ci --ignore-scripts --no-fund --no-audit \
   && briq --version \
   && npm cache clean --force
 
-# Optional DSH ACP harness: exact preview and full dependency closure, registry integrity
-# verified by npm ci. Disabled in the runner until RUNNER_DSH=1 and a provider patch is configured.
-# No lifecycle scripts or runtime package installation are needed.
-COPY dsh /opt/dsh
-RUN cd /opt/dsh && npm ci --ignore-scripts --no-fund --no-audit \
-  && ./node_modules/.bin/dsh --version \
-  && npm cache clean --force
-
-# T3 Code: official standalone Linux release, fixed version and publisher SHA-256.
-# T3 is started explicitly from the authenticated home; its state never shares CLI credentials.
-RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0.1.6-linux-x64.tar.gz -o /tmp/t3.tar.gz \
-  && echo '7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6  /tmp/t3.tar.gz' | sha256sum -c - \
-  && printf 'T3 Code\t7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6\tthe publisher SHA256SUMS\n' >> /etc/agent-home/downloads \
-  && mkdir -p /opt/t3 && tar --strip-components=1 -xzf /tmp/t3.tar.gz -C /opt/t3 && rm /tmp/t3.tar.gz \
-  && test -x /opt/t3/t3
-
 # The terminal page: ttyd, one static binary.
 RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/releases/latest | jq -r .tag_name)}" \
   && R="https://github.com/tsl0922/ttyd/releases/download/${V}" \
@@ -150,6 +134,35 @@ RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/re
   && echo "$H  /usr/local/bin/ttyd" | sha256sum -c - \
   && printf 'ttyd\t%s\tits SHA256SUMS\n' "$H" >> /etc/agent-home/downloads \
   && chmod 755 /usr/local/bin/ttyd
+
+# Shared native CLI tools; neither runtime owns the other runtime's state.
+COPY bin/show-url /usr/local/bin/show-url
+RUN chmod 755 /usr/local/bin/show-url && ln -s /usr/local/bin/show-url /usr/local/bin/xdg-open
+
+FROM native-clis AS t3-cloud
+# T3 Code: official standalone Linux release, fixed version and publisher SHA-256.
+# Native T3 owns provider connections in the standalone T3 Cloud image.
+RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0.1.6-linux-x64.tar.gz -o /tmp/t3.tar.gz \
+  && echo '7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6  /tmp/t3.tar.gz' | sha256sum -c - \
+  && printf 'T3 Code\t7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6\tthe publisher SHA256SUMS\n' >> /etc/agent-home/downloads \
+  && mkdir -p /opt/t3 && tar --strip-components=1 -xzf /tmp/t3.tar.gz -C /opt/t3 && rm /tmp/t3.tar.gz \
+  && test -x /opt/t3/t3
+
+COPY t3-cloud /opt/t3-cloud
+COPY bin/t3-cloud-start /usr/local/bin/t3-cloud-start
+RUN chmod 755 /usr/local/bin/t3-cloud-start
+EXPOSE 8080
+CMD ["t3-cloud-start"]
+
+# Keep the original default target for existing docker build callers.
+FROM native-clis AS agent-home
+# Optional DSH ACP harness: exact preview and full dependency closure, registry integrity
+# verified by npm ci. Disabled in the runner until RUNNER_DSH=1 and a provider patch is configured.
+# No lifecycle scripts or runtime package installation are needed.
+COPY dsh /opt/dsh
+RUN cd /opt/dsh && npm ci --ignore-scripts --no-fund --no-audit \
+  && ./node_modules/.bin/dsh --version \
+  && npm cache clean --force
 
 # The runner: drives the CLIs over ACP for apps, and keeps their sessions (runner/README.md). Its
 # two adapters are pinned in its lockfile, installed without the copies of the CLIs they bring:
@@ -166,12 +179,10 @@ RUN cd /opt/agent-home-runner \
 
 # A link a CLI opens (a sign-in page) shows in the terminal instead: `show-url`, as BROWSER and as
 # xdg-open (Vibe, Copilot and Cursor call it).
-COPY bin/show-url /usr/local/bin/show-url
 COPY bin/agent-home-versions /usr/local/bin/agent-home-versions
 COPY bin/agent-home-start /usr/local/bin/agent-home-start
 RUN chmod 755 /usr/local/bin/show-url /usr/local/bin/agent-home-versions \
   && chmod 755 /usr/local/bin/agent-home-start \
-  && ln -s /usr/local/bin/show-url /usr/local/bin/xdg-open \
   && agent-home-versions > /dev/null
 
 EXPOSE 8090
