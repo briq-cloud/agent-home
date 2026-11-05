@@ -438,13 +438,19 @@ test('actual local handoff button and direct navigation establish a first-party 
   const browser = await chromium.launch({ headless: true, executablePath: chrome });
   t.after(() => browser.close());
   const base = `http://localhost:${PORT}`;
-  for (const kind of ['direct', 'file-popup', 'fragment-network-path']) {
+  for (const kind of ['direct', 'file-popup', 'fragment-network-path', 'no-t3']) {
     const context = await browser.newContext();
     try {
       const hash = kind === 'fragment-network-path' ? '#//other.invalid/path' : '#t3';
       const link = `${base}/?token=${TOKEN}&extra=private-test-query${hash}`;
+      if (kind === 'no-t3') await context.route('**/home-services', async (route) => {
+        const response = await route.fetch();
+        const state = await response.json();
+        state.t3.installed = false;
+        await route.fulfill({ response, json: state });
+      });
       let page;
-      if (kind === 'direct') {
+      if (kind === 'direct' || kind === 'no-t3') {
         page = await context.newPage();
         await page.goto(link);
       } else {
@@ -456,8 +462,8 @@ test('actual local handoff button and direct navigation establish a first-party 
         await source.getByRole('link', { name: 'Open home' }).click();
         page = await popup;
       }
-      // Static tabs render before the module normalizes unknown fragments.
-      const expectedHash = kind === 'fragment-network-path' ? '#chat' : hash;
+      // The initial fragment is resolved again when image capabilities arrive.
+      const expectedHash = kind === 'fragment-network-path' || kind === 'no-t3' ? '#chat' : hash;
       await page.waitForURL((url) => url.origin === base && url.pathname === '/' &&
         url.search === '' && url.hash === expectedHash);
       await page.locator(`#tab-${expectedHash.slice(1)}[aria-selected="true"]`).waitFor();
@@ -465,8 +471,8 @@ test('actual local handoff button and direct navigation establish a first-party 
       assert.equal(final.origin, base);
       assert.equal(final.pathname, '/');
       assert.equal(final.search, '');
-      // The app normalizes unknown fragments to Chat after bootstrap navigation.
-      assert.equal(final.hash, kind === 'fragment-network-path' ? '#chat' : hash);
+      assert.equal(final.hash, expectedHash);
+      if (kind === 'no-t3') assert.equal(await page.locator('#tab-t3').isHidden(), true);
       const cookies = await context.cookies(base);
       const cookie = cookies.find((value) => value.name === 'agent_home_runner');
       assert.equal(cookie?.sameSite, 'Strict');

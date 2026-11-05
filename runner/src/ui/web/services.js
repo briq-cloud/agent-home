@@ -1,4 +1,4 @@
-export function createHomeServices({ call, byId }) {
+export function createHomeServices({ call, byId, onCapabilitiesChanged = () => {} }) {
   let pairingExpiry;
   async function request(method, path, body) {
     const result = await call(method, '/home-services' + path, body);
@@ -9,7 +9,7 @@ export function createHomeServices({ call, byId }) {
     const t3 = state.t3;
     if (byId('tab-t3')) byId('tab-t3').hidden = !t3.installed;
     if (byId('auto-t3-section')) byId('auto-t3-section').hidden = !t3.installed;
-    if (!t3.installed && byId('tab-t3')?.getAttribute('aria-selected') === 'true') byId('tab-chat')?.click();
+    onCapabilitiesChanged();
     byId('t3-openrouter').checked = t3.optinOpenRouter === true;
     byId('t3-status').textContent = !t3.installed ? 'T3 Code is not installed in this image.' :
       t3.state === 'running' ? 'T3 Code process is running. Pair your browser to connect.' :
