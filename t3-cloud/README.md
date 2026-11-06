@@ -41,6 +41,13 @@ than issuing another native mutation. Pending or denied receipts remain parked f
 Canonical history can replace partial progress and fill gaps only after the receipt is adopted.
 The transport shim still has no reconnect loop, and legacy mutation markers remain quarantined.
 
+The native source candidate adds a central project catalog and source-bound child preparation.
+Repository cloning and source control run in the bound child. Native thread launch records the
+project source and workspace strategy before allocation; preparation sessions are revoked before
+another use of that allocation. Provider status is read from the admitted central provider.
+This remains a source candidate: cloud execution, restart recovery and official iPhone use require
+acceptance. Claude cloud execution remains disabled.
+
 The packaged source patch replays to the exact reviewed source tree. These remain candidate
 paths: source checks and patch replay do not qualify native cloud allocation, subscription
 execution, restart recovery or deployment.

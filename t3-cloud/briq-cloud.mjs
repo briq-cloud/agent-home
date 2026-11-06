@@ -2,7 +2,7 @@ import { edgeToken, requireEdgeBinding, withoutEdgeEnvironment } from './edge-au
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { digest, identifier, providerInstanceId } from './allocations.mjs';
+import { digest, identifier, nativeSessionId, providerInstanceId, childIdentityMatches, canonicalJson } from './allocations.mjs';
 import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
 export function cli(args, { env = process.env, stdin, timeout = 120000, execResult = false } = {}, spawnProcess = spawn) {
@@ -66,37 +66,39 @@ export class BriqCloud {
     edgeToken(edgeCredential); requireEdgeBinding(binding, edgeCredential);
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const file = join(this.directory, `${binding.allocationId}.json`);
-    await writeFile(file, JSON.stringify({ stack: binding.stack, services: { sandbox: { image, size: 'medium',
-      ports: [8080], expose: 'public', volume: { mount: '/work', gb: 5 }, sleep: '3h',
-      cmd: ['node', '/opt/t3-cloud/child.mjs'], env: {
-        T3_CLOUD_PUBLIC_ORIGIN: 'https://{{self:host}}',
-        T3_CLOUD_ROLE: 'child', T3_CLOUD_PROVIDER_INSTANCE_ID: providerInstanceId(binding.providerInstanceId), T3_CLOUD_THREAD_ID: binding.threadId, T3_CLOUD_BINDING_ID: binding.allocationId,
-        T3_CLOUD_BRIDGE_URL: bridgeUrl, T3_CLOUD_BRIDGE_TOKEN: { secret: 'CHILD_BRIDGE_TOKEN' },
-        T3_CLOUD_EDGE_TOKEN: { secret: 'CHILD_EDGE_TOKEN' },
-        T3_CLOUD_EXEC_TOKEN_SHA256: digest(binding.execToken),
-      } } } }), { mode: 0o600, flag: 'wx' });
-    const response = await this.run(['up', '-f', file, '--secret', 'CHILD_BRIDGE_TOKEN', '--secret', 'CHILD_EDGE_TOKEN', '--no-wait'],
-      { env: { ...withoutEdgeEnvironment(this.env), CHILD_BRIDGE_TOKEN: binding.bridgeToken, CHILD_EDGE_TOKEN: edgeCredential } });
+    const sourceOnly = binding.purpose === 'project-source';
+    const projectEnv = binding.projectSource ? { T3_CLOUD_SOURCE_ID: binding.projectSource.sourceId, T3_CLOUD_SOURCE_DIGEST: binding.projectSource.sourceDigest,
+      T3_CLOUD_PROJECT_ID: binding.projectId, T3_CLOUD_PROJECT_ROOT: binding.workspaceRoot, T3_CLOUD_OWNER_GENERATION: binding.managedBridge?.ownerGeneration,
+      ...(binding.purpose === 'project-source' ? {} : { T3_CLOUD_LAUNCH_DIGEST: digest(canonicalJson({ projectSource: binding.projectSource, workspaceStrategy: binding.workspaceStrategy })) }) } : {};
+    const childEnv = sourceOnly ? { T3_CLOUD_PURPOSE: 'project-source', ...projectEnv } : {
+      T3_CLOUD_PROVIDER_INSTANCE_ID: providerInstanceId(binding.providerInstanceId), T3_CLOUD_THREAD_ID: binding.threadId,
+      T3_CLOUD_BRIDGE_URL: bridgeUrl, T3_CLOUD_BRIDGE_TOKEN: { secret: 'CHILD_BRIDGE_TOKEN' },
+      T3_CLOUD_EDGE_TOKEN: { secret: 'CHILD_EDGE_TOKEN' }, T3_CLOUD_EXEC_TOKEN_SHA256: digest(binding.execToken), ...projectEnv };
+    await writeFile(file, JSON.stringify({ stack: binding.stack, services: { sandbox: { image, size: sourceOnly ? 'small' : 'medium',
+      ports: [8080], expose: 'public', volume: { mount: '/work', gb: 5 }, sleep: sourceOnly ? '5m' : '3h',
+      cmd: ['node', '/opt/t3-cloud/child.mjs'], env: { T3_CLOUD_PUBLIC_ORIGIN: 'https://{{self:host}}',
+        T3_CLOUD_ROLE: 'child', T3_CLOUD_BINDING_ID: binding.allocationId, ...childEnv } } } }), { mode: 0o600, flag: 'wx' });
+    const secrets = sourceOnly ? [] : ['--secret', 'CHILD_BRIDGE_TOKEN', '--secret', 'CHILD_EDGE_TOKEN'];
+    const response = await this.run(['up', '-f', file, ...secrets, '--no-wait'],
+      { env: sourceOnly ? withoutEdgeEnvironment(this.env) : { ...withoutEdgeEnvironment(this.env), CHILD_BRIDGE_TOKEN: binding.bridgeToken, CHILD_EDGE_TOKEN: edgeCredential } });
     if (response.briqs?.length !== 1 || response.stack !== binding.stack || response.briqs[0].name !== 'sandbox') throw Error('Unexpected allocation result');
     const root = { id: identifier(response.briqs[0].id), stackId: identifier(response.briqs[0].stackId) };
     const listed = await this.run(['list', '--stack', binding.stack], { env: this.env });
     const exact = listed.briqs?.filter(row => row.id === root.id || row.name === 'sandbox');
     if (exact?.length !== 1 || exact[0].id !== root.id || exact[0].stackId !== root.stackId || exact[0].name !== 'sandbox' ||
-      exact[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || exact[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
-      providerInstanceId(exact[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) throw Error('Root namespace requires reconciliation');
+      !childIdentityMatches(binding, exact[0].env)) throw Error('Root namespace requires reconciliation');
     return root;
   }
   async find(binding) {
     const response = await this.run(['list', '--stack', binding.stack], { env: this.env });
     if (response.briqs?.length !== 1 || response.briqs[0].name !== 'sandbox' ||
       binding.briqId && response.briqs[0].id !== binding.briqId || binding.rootStackId && response.briqs[0].stackId !== binding.rootStackId ||
-      response.briqs[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || response.briqs[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
-      providerInstanceId(response.briqs[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) return null;
+      !childIdentityMatches(binding, response.briqs[0].env)) return null;
     return { id: identifier(response.briqs[0].id), stackId: identifier(response.briqs[0].stackId) };
   }
   async endpoints(binding) {
     const t3 = await this.run(['expose', binding.briqId, '8080', '--mode', 'public'], { env: this.env });
-    return { t3Url: endpoint(t3.url), execUrl: `${endpoint(t3.url).replace(/^https:/, 'wss:')}/_cloud/exec` };
+    return { t3Url: endpoint(t3.url), ...(binding.purpose === 'project-source' ? {} : { execUrl: `${endpoint(t3.url).replace(/^https:/, 'wss:')}/_cloud/exec` }) };
   }
   async descriptor(binding) {
     const response = await fetch(`${binding.t3Url}/.well-known/t3/environment`, { redirect: 'error', signal: AbortSignal.timeout(15000) });
@@ -113,8 +115,7 @@ export class BriqCloud {
       const listed = await run(['list', '--stack', binding.stack], { env: this.env });
       const rows = listed.briqs;
       if (rows?.length !== 1 || rows[0].id !== binding.briqId || rows[0].stackId !== binding.rootStackId || rows[0].name !== 'sandbox' ||
-          rows[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || rows[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
-          providerInstanceId(rows[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) throw Error('Child identity unavailable');
+          !childIdentityMatches(binding, rows[0].env)) throw Error('Child identity unavailable');
       const status = await run(['status', binding.briqId], { env: this.env });
       if (status.briq?.id !== binding.briqId || status.briq?.name !== 'sandbox' || !['running', 'sleeping'].includes(status.briq?.state)) throw Error('Child must be running or asleep');
       await validate();
@@ -132,6 +133,40 @@ export class BriqCloud {
         [...fragment.keys()].join(',') !== 'token' || fragment.get('token') !== pairing.credential ||
         !Number.isFinite(expiry) || remaining <= 0 || remaining > 300000) throw Error('Invalid child pairing metadata');
     return { url: base, code: pairing.credential, expiresAt: new Date(expiry).toISOString() };
+  }
+  async bridgeAuth(binding, args, validate, { canWake = false } = {}) {
+    const response = await this.run(['exec', binding.briqId, '--', '/opt/t3/t3', 'auth', 'session', ...args,
+      '--base-dir', '/work/.t3'], { env: this.env }, async run => {
+      await validate();
+      const listed = await run(['list', '--stack', binding.stack], { env: this.env });
+      const rows = listed.briqs;
+      if (rows?.length !== 1 || rows[0].id !== binding.briqId || rows[0].stackId !== binding.rootStackId || rows[0].name !== 'sandbox' ||
+          !childIdentityMatches(binding, rows[0].env)) throw Error('Child identity unavailable');
+      const status = await run(['status', binding.briqId], { env: this.env });
+      if (status.briq?.id !== binding.briqId || status.briq?.name !== 'sandbox' || !(canWake ? ['running', 'sleeping'] : ['running']).includes(status.briq?.state))
+        throw Error('Native bridge auth child unavailable');
+      await validate();
+    });
+    if (response.exitCode !== 0) throw Error('Native bridge auth requires reconciliation');
+    await validate();
+    return response.stdout;
+  }
+  async issueBridgeSession(binding, subject, validate, { preparation = false } = {}) {
+    if (binding.purpose === 'project-source' && !preparation) throw Error('Source child requires preparation session');
+    if (typeof subject !== 'string' || !/^briq-bridge:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+$/.test(subject))
+      throw Error('Invalid managed bridge subject');
+    return JSON.parse(await this.bridgeAuth(binding, ['issue', '--scope', 'orchestration:read', '--scope', 'orchestration:operate', ...(preparation ? ['--scope', 'source-control:write'] : []),
+      '--subject', subject, '--label', preparation ? 'Managed project preparation' : 'Managed child bridge', '--ttl', preparation ? '5m' : '30d', '--json'], validate, { canWake: true }));
+  }
+  async listBridgeSessions(binding, validate) {
+    const rows = JSON.parse(await this.bridgeAuth(binding, ['list', '--json'], validate));
+    if (!Array.isArray(rows) || rows.length > 4096 || rows.some(row => typeof row?.sessionId !== 'string' ||
+        typeof row.subject !== 'string')) throw Error('Native bridge session list unavailable');
+    return rows;
+  }
+  async revokeBridgeSession(binding, sessionId, validate) {
+    nativeSessionId(sessionId);
+    await this.bridgeAuth(binding, ['revoke', sessionId], validate);
   }
   async execAsync(briqId, command, timeoutMs) {
     return this.run(['exec', '--async', '--clear-env', '--timeout', String(timeoutMs), briqId,

@@ -278,3 +278,53 @@ test('phone pairing rechecks binding after queued grant and after mint',async t=
   await assert.rejects(f.pairing.pairChild('owner','t3','allocation'));
  }
 });
+
+test('managed native session generation owns actual close callbacks across revocation and runtime shutdown', async t => {
+ const f=await fixture(t);const sessions=new Map();const events=[];
+ const cloud={
+  issueBridgeSession:async(binding,subject,validate)=>{await validate();events.push('issue');const session={sessionId:'12345678-1234-4234-8234-123456789abc',token:'private-child-test-only',subject,
+   method:'bearer-access-token',scopes:['orchestration:read','orchestration:operate'],expiresAt:new Date(Date.now()+86400000).toISOString()};sessions.set(session.sessionId,session);return session;},
+  listBridgeSessions:async(_,validate)=>{await validate();events.push('list');return[...sessions.values()];},
+  revokeBridgeSession:async(_,id,validate)=>{await validate();events.push('revoke');sessions.delete(id);},
+  stop:async()=>{events.push('stop');},
+ };
+ const runtime=await createCentralRuntime(f.env,{...f.deps,cloud});f.runtimes.push(runtime);await runtime.restore();
+ const store=new AllocationStore(join(f.directory,'allocations'));
+ const threadId='thread:project:project%3Aphone%2Fone:generated';
+ const binding={ownerId:'owner',threadId,allocationId:'allocation',projectId:'project',providerInstanceId:'codex',briqId:'root',rootStackId:'stack',
+  environmentId:'environment',execEnvironmentId:'exec',execUrl:'wss://child.example/_cloud/exec',t3Url:'https://child.example',edgeTokenHash:digest(f.env.T3_CLOUD_EDGE_TOKEN),
+  state:'ready',managedBridge:{ownerGeneration:'generation'}};
+ await store.save(binding);
+ await assert.rejects(runtime.allocator.managedBridgeSession('owner',threadId,'allocation','foreign'),/generation/);
+ await runtime.allocator.managedBridgeSession('owner',threadId,'allocation','generation');
+ let closed=0;await runtime.allocator.openBridgeLease('owner',threadId,'allocation','generation',()=>{closed++;events.push('close');});
+ await runtime.allocator.revoke('owner',threadId);
+ assert.equal(closed,1);assert.deepEqual(events,['issue','close','list','revoke','list','stop']);
+ await assert.rejects(runtime.allocator.openBridgeLease('owner',threadId,'allocation','generation',()=>{}));
+ // An independently active link is closed by runtime shutdown as well.
+ const next={...binding,threadId:'thread:second',allocationId:'second',bridgeSession:undefined};await store.save(next);
+ await runtime.allocator.managedBridgeSession('owner',next.threadId,'second','generation');
+ await runtime.allocator.openBridgeLease('owner',next.threadId,'second','generation',()=>{closed++;});
+ await runtime.close();assert.equal(closed,2);
+ await assert.rejects(runtime.allocator.managedBridgeSession('owner',next.threadId,'second','generation'));
+});
+
+test('source preparation composition binds lease to source project/root and closes on revoke without broker registration', async t => {
+ const f=await fixture(t),sessions=new Map();let issued=0,stops=0,closed=0;
+ const cloud={issueBridgeSession:async(binding,subject,validate,{preparation})=>{await validate();assert.equal(preparation,true);issued++;const row={sessionId:'12345678-1234-4234-8234-123456789abc',token:'private-source-test',subject,method:'bearer-access-token',scopes:['orchestration:read','orchestration:operate','source-control:write'],expiresAt:new Date(Date.now()+240000).toISOString()};sessions.set(row.sessionId,row);return row;},
+  listBridgeSessions:async(_,validate)=>{await validate();return [...sessions.values()];},revokeBridgeSession:async(_,id,validate)=>{await validate();sessions.delete(id);},stop:async()=>{stops++;}};
+ const runtime=await createCentralRuntime(f.env,{...f.deps,cloud});f.runtimes.push(runtime);
+ const source={version:1,sourceId:'source-one-1234567890',hostProjectId:'project',logicalRoot:'/projects/source-one-1234567890',clone:{remoteUrl:'https://github.com/up-lab/example.git',protocol:'https'}};source.sourceDigest=digest(canonicalJson(source));
+ const store=new AllocationStore(join(f.directory,'allocations'));
+ const binding={purpose:'project-source',ownerId:'owner',projectSource:source,allocationId:'allocation',projectId:'native-project',workspaceRoot:'/work/projects/source-one-1234567890',managedBridge:{ownerGeneration:'generation'},briqId:'root',rootStackId:'stack',environmentId:'environment',t3Url:'https://child.example',edgeTokenHash:digest(f.env.T3_CLOUD_EDGE_TOKEN),state:'ready'};
+ await store.saveSource(binding);await runtime.restore();assert.deepEqual(f.calls,[]);
+ const identity={sourceDigest:source.sourceDigest,projectId:binding.projectId,workspaceRoot:binding.workspaceRoot};
+ const args=['owner',source.sourceId,'allocation','generation','project-source'];
+ await assert.rejects(runtime.allocator.managedPreparationSession(...args,{...identity,projectId:'foreign'}));assert.equal(issued,0);
+ const session=await runtime.allocator.managedPreparationSession(...args,identity);assert.equal(session.sourceId,source.sourceId);assert.equal(session.threadId,undefined);
+ await assert.rejects(runtime.allocator.openPreparationLease(...args,{...identity,workspaceRoot:'/work'},()=>{}));
+ const unregister=await runtime.allocator.openPreparationLease(...args,identity,()=>{closed++;});
+ await runtime.allocator.revokeSource('owner',source.sourceId,'allocation','generation');unregister();
+ assert.equal(closed,1);assert.equal(stops,1);assert.equal(sessions.size,0);assert.deepEqual(f.calls,[]);
+ await assert.rejects(runtime.allocator.managedPreparationSession(...args,identity));
+});

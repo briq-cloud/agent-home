@@ -3,7 +3,7 @@ import { edgeToken, edgeAuthorized, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AllocationStore, ThreadAllocator, identifier, providerInstanceId } from './allocations.mjs';
+import { AllocationStore, ThreadAllocator, identifier, threadIdentifier, providerInstanceId } from './allocations.mjs';
 import { BriqCloud } from './briq-cloud.mjs';
 import { startAppServer, CapabilityBroker } from './broker.mjs';
 import { ScopedBriq } from './scoped-briq.mjs';
@@ -16,7 +16,7 @@ export function childPairing({ store, cloud, edgeCredential, admittedProviders, 
       providerInstanceId: providerInstanceId(binding.providerInstanceId), url: binding.t3Url };
   }
   async function checked(ownerId, threadId, allocationId, expected) {
-    identifier(ownerId); identifier(threadId); identifier(allocationId);
+    identifier(ownerId); threadIdentifier(threadId); identifier(allocationId);
     const binding = await store.load(threadId);
     if (!ready() || !binding || binding.ownerId !== ownerId || binding.allocationId !== allocationId || binding.threadId !== threadId ||
         binding.state !== 'ready' || binding.restoreState || binding.nativeState !== undefined && binding.nativeState !== 'bound' || binding.turnState !== undefined && binding.turnState !== 'bound' ||
@@ -65,9 +65,16 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
   const lock = join(directory, 'central.lock');
   await mkdir(lock, { mode: 0o700 });
   let app, websocket, claude, briqTransport; const peers = new Set(); let stopped = false;
+  const bridgeLeases = new Map();
+  const closeManagedBridge = binding => {
+    for (const close of bridgeLeases.get(binding.allocationId) ?? []) close();
+    bridgeLeases.delete(binding.allocationId);
+  };
   async function close() {
     if (stopped) return; stopped = true;
     for (const peer of peers) peer.terminate();
+    for (const callbacks of bridgeLeases.values()) for (const close of callbacks) close();
+    bridgeLeases.clear();
     websocket?.close(); briqTransport?.close();
     await claude?.close();
     await app?.close();
@@ -77,7 +84,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     const handle = await open(join(lock, 'owner.json'), 'wx', 0o600);
     try { await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })); } finally { await handle.close(); }
     const store = new AllocationStore(join(directory, 'allocations')); await store.initialize();
-    for (const binding of await store.list()) if (binding.state !== 'revoked') requireEdgeBinding(binding, edgeCredential);
+    for (const binding of [...await store.list(), ...await store.listSources()]) if (binding.state !== 'revoked') requireEdgeBinding(binding, edgeCredential);
     app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex') });
     const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
     const scopedBriq = new ScopedBriq({ store, cloud });
@@ -136,7 +143,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
       })();
       return restoring.finally(() => { restoring = null; });
     }
-    const allocator = new ThreadAllocator({ store, cloud, admittedProviders, image: env.T3_CLOUD_CHILD_IMAGE,
+    const allocator = new ThreadAllocator({ store, cloud, admittedProviders, closeBridge: closeManagedBridge, image: env.T3_CLOUD_CHILD_IMAGE,
       edgeCredential, bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
       registerEnvironment: binding => broker.registerEnvironment(binding),
       reconcileCleanup: binding => scopedBriq.reconcileCleanup(binding),
@@ -158,6 +165,55 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
         if (failures.length) throw new AggregateError(failures, 'Allocation cleanup requires reconciliation');
       } });
+    const managedBinding = async (ownerId, threadId, allocationId, generation) => {
+      if (!ready || stopped) throw Error('Managed bridge unavailable');
+      const binding = await allocator.checkedBridgeBinding(ownerId, threadId, allocationId, generation);
+      if (binding.managedBridge?.ownerGeneration !== generation) throw Error('Managed launch binding required');
+      return binding;
+    };
+    allocator.managedBridgeSession = async (ownerId, threadId, allocationId, generation) => {
+      await managedBinding(ownerId, threadId, allocationId, generation);
+      return allocator.bridgeSession(ownerId, threadId, allocationId, generation);
+    };
+    allocator.openBridgeLease = (ownerId, threadId, allocationId, generation, close) => store.serialized(threadId, async () => {
+      const binding = await managedBinding(ownerId, threadId, allocationId, generation);
+      const session = binding.bridgeSession;
+      if (session?.state !== 'ready' || !session.token || Date.parse(session.expiresAt) <= Date.now()) throw Error('Managed session unavailable');
+      let callbacks = bridgeLeases.get(allocationId);
+      if (!callbacks) bridgeLeases.set(allocationId, callbacks = new Set());
+      callbacks.add(close);
+      return () => {
+        callbacks.delete(close);
+        if (!callbacks.size) bridgeLeases.delete(allocationId);
+      };
+    });
+    const preparationBinding = async (ownerId, key, allocationId, generation, purpose, identity) => {
+      if (!ready || stopped || !['thread', 'project-source'].includes(purpose)) throw Error('Managed preparation unavailable');
+      const binding = await allocator.checkedBridgeBinding(ownerId, key, allocationId, generation, undefined, false, purpose);
+      if (binding.managedBridge?.ownerGeneration !== generation || !binding.projectSource ||
+          binding.projectSource.sourceDigest !== identity.sourceDigest || binding.projectId !== identity.projectId || binding.workspaceRoot !== identity.workspaceRoot)
+        throw Error('Immutable preparation identity mismatch');
+      return binding;
+    };
+    allocator.managedPreparationSession = async (ownerId, key, allocationId, generation, purpose, identity) => {
+      await preparationBinding(ownerId, key, allocationId, generation, purpose, identity);
+      return allocator.bridgeSession(ownerId, key, allocationId, generation, purpose, true);
+    };
+    allocator.revokePreparationSession = async (ownerId, key, allocationId, generation, purpose, identity) => {
+      await preparationBinding(ownerId, key, allocationId, generation, purpose, identity);
+      return allocator.reconcileBridgeSession(ownerId, key, allocationId, generation, purpose, true);
+    };
+    allocator.openPreparationLease = (ownerId, key, allocationId, generation, purpose, identity, close) =>
+      store.serialized(purpose === 'project-source' ? `~project-source-${key}` : key, async () => {
+        const binding = await preparationBinding(ownerId, key, allocationId, generation, purpose, identity);
+        const session = binding.preparationSession;
+        if (session?.state !== 'ready' || !session.token || Date.parse(session.expiresAt) <= Date.now()) throw Error('Preparation session unavailable');
+        let callbacks = bridgeLeases.get(allocationId);
+        if (!callbacks) bridgeLeases.set(allocationId, callbacks = new Set());
+        callbacks.add(close);
+        const expiry = setTimeout(close, Math.max(1, Date.parse(session.expiresAt) - Date.now())); expiry.unref?.();
+        return () => { clearTimeout(expiry); callbacks.delete(close); if (!callbacks.size) bridgeLeases.delete(allocationId); };
+      });
     Object.assign(allocator, childPairing({ store, cloud, edgeCredential, admittedProviders, ready: () => ready && !stopped }));
     websocket = new WebSocketServer({ noServer: true, maxPayload: 2097152, perMessageDeflate: false });
     async function bridgeUpgrade(req, socket, head) {
