@@ -2243,10 +2243,10 @@ index 0000000000000000000000000000000000000000..8900ed354926eec0cc726cd996616af8
 +}
 diff --git a/apps/server/src/briqSandboxAccess.test.ts b/apps/server/src/briqSandboxAccess.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..6daf18e3928d9bafc82e554c1eeaec9f22cbd185
+index 0000000000000000000000000000000000000000..dc94e54fe0a1137cac955a5163d74a000e37aa49
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAccess.test.ts
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,149 @@
 +import { describe, expect, it } from "vite-plus/test";
 +import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
 +import {
@@ -2321,6 +2321,12 @@ index 0000000000000000000000000000000000000000..6daf18e3928d9bafc82e554c1eeaec9f
 +      expect(sandboxHttpAllowed(method!, route!, home)).toBe(false);
 +      expect(sandboxHttpAllowed(method!, route!, { T3_CLOUD_ROLE: "child" })).toBe(true);
 +    }
++    for (const suffix of ["", "/transcript", "/bounded", "/history"]) {
++      const route = `/api/orchestration/threads/:threadId${suffix}`;
++      expect(sandboxHttpAllowed("GET", route, home)).toBe(true);
++      expect(sandboxHttpAllowed("POST", route, home)).toBe(false);
++      expect(sandboxHttpAllowed("GET", route.replace(":threadId", "literal"), home)).toBe(false);
++    }
 +    expect(sandboxHttpAllowed("GET", "/api/assets/*", home)).toBe(true);
 +    expect(sandboxHttpAllowed("POST", "/api/attachments/upload/*", home)).toBe(true);
 +    expect(sandboxHttpAllowed("GET", "/api/assets/credential", home)).toBe(false);
@@ -2392,10 +2398,10 @@ index 0000000000000000000000000000000000000000..6daf18e3928d9bafc82e554c1eeaec9f
 +});
 diff --git a/apps/server/src/briqSandboxAccess.ts b/apps/server/src/briqSandboxAccess.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..336ec44e7bc9e43252683a2603089910ea087bc7
+index 0000000000000000000000000000000000000000..9cfa6360719482f4d3725f8a582ca3f804a4c83a
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAccess.ts
-@@ -0,0 +1,130 @@
+@@ -0,0 +1,135 @@
 +import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 +import { sandboxRole } from "./briqSandbox.ts";
 +
@@ -2496,6 +2502,11 @@ index 0000000000000000000000000000000000000000..336ec44e7bc9e43252683a2603089910
 +  "GET /api/auth/session",
 +  "GET /api/orchestration/shell",
 +  "GET /api/projects",
++  "GET /api/orchestration/threads/:threadId",
++  "GET /api/orchestration/threads/:threadId/transcript",
++  "GET /api/orchestration/threads/:threadId/bounded",
++  "GET /api/orchestration/threads/:threadId/history",
++
 +  "POST /api/auth/browser-session",
 +  "POST /oauth/token",
 +  "POST /api/auth/websocket-ticket",

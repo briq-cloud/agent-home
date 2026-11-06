@@ -87,3 +87,11 @@ test('manager restart launches recovery UI and device sign-in despite persisted 
  assert.equal(login.status,200);assert.equal((await login.json()).loginId,'recover');
  assert.equal(calls.some(row=>['thread/resume','turn/start'].includes(row.method)),false);
 });
+
+
+test('optional native transport fails closed before effects for invalid or primary origin',async()=>{
+ let started=0;
+ const env={T3_CLOUD_PUBLIC_ORIGIN:'https://private.example',T3_CLOUD_OWNER_KEY:'owner-key-test-only-at-least-32-bytes',T3_CLOUD_OWNER_ID:'owner',T3_CLOUD_EDGE_TOKEN:'e'.repeat(32)};
+ for(const native of ['https://private.example','http://native.example','https://native.example/path'])await assert.rejects(startManager({...env,T3_CLOUD_NATIVE_ORIGIN:native},{centralRuntime:async()=>{started++;}}),/origin/);
+ assert.equal(started,0);
+});

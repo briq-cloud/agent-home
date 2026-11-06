@@ -57,3 +57,18 @@ test('Briq native login/status share CLI refresh ownership until actual process 
  assert.throws(()=>owner.acquire({kind:'operation'}),/busy/);
  ended(); assert.equal((await connections.status()).briq.authenticated,true); assert.equal(reads,1);
 });
+
+
+test('central phone metadata and QR use native central code, expiry and isolated CLI state; native revocations stay separate',async()=>{
+ const calls=[], origin='https://native.example';let result={id:'pairing-id',credential:'ABCD1234EFGH',pairUrl:origin+'/pair#token=ABCD1234EFGH',expiresAt:new Date(Date.now()+290000).toISOString()};
+ const connections=nativeConnections({T3_STATE:'/central-native-state',T3_CLOUD_OWNER_KEY:'owner-secret',T3_CLOUD_EDGE_TOKEN:'edge-secret',T3_CLOUD_ALLOCATOR_TOKEN:'allocator-secret'}, {
+  signIn:()=>({status:{state:'idle'},cancel(){}}),pair:(command,args,options,done)=>{calls.push(args);assert.equal(options.env.T3_CLOUD_OWNER_KEY,undefined);assert.equal(options.env.T3_CLOUD_EDGE_TOKEN,undefined);assert.equal(options.env.T3_CLOUD_ALLOCATOR_TOKEN,undefined);done(null,JSON.stringify(result));},
+ });
+ const pair=await connections.phonePair(origin);assert.equal(pair.url,origin);assert.equal(pair.code,'ABCD1234EFGH');assert.equal(pair.id,'pairing-id');assert.equal(pair.qr.modules.length>0,true);assert.deepEqual(calls[0],['auth','pairing','create','--base-url',origin,'--ttl','5m','--base-dir','/central-native-state','--json']);
+ for(const change of [{pairUrl:'https://other.example/pair#token=ABCD1234EFGH'},{pairUrl:origin+'/pair?token=ABCD1234EFGH#token=ABCD1234EFGH'},{pairUrl:origin+'/pair#token=other'},{pairUrl:origin+'/pair#token=ABCD1234EFGH&extra=x'},{credential:'not-a-native-code'},{expiresAt:new Date(Date.now()-1).toISOString()},{expiresAt:new Date(Date.now()+600000).toISOString()},{id:'../bad'}]){const saved=result;result={...result,...change};await assert.rejects(connections.phonePair(origin),/unavailable/);result=saved;}
+ await connections.phoneRevoke('pairing','pending-id');assert.deepEqual(calls.at(-1),['auth','pairing','revoke','pending-id','--base-dir','/central-native-state']);
+ await connections.phoneRevoke('session','session-id');assert.deepEqual(calls.at(-1),['auth','session','revoke','session-id','--base-dir','/central-native-state']);
+ await assert.rejects(connections.phoneRevoke('other','id'));await assert.rejects(connections.phoneRevoke('pairing','../id'));
+ result=[];assert.deepEqual(await connections.phoneAccess(),{pairings:[],sessions:[]});
+ connections.close();
+});

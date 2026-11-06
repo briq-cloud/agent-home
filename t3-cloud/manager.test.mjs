@@ -114,3 +114,17 @@ test('owner-only existing-child phone action rejects CSRF/allocator capability/e
  const page=await f.send('/_cloud/',{headers:auth});assert.match(page.text,/one allocated workspace/);assert.match(page.text,/Create five-minute child pairing/);
  assert(!page.text.includes('fresh-test-only'));assert(!page.text.includes('localStorage'));assert(!page.text.includes('console.'));
 });
+
+
+test('central native phone action stays behind private owner and same-origin mutation checks',async t=>{
+ const calls=[];let revokeFails=false;
+ const manager=createCloudManager({role:'central',publicOrigin:origin,nativeOrigin:'https://native.example',invalidateNativeConnections:()=>calls.push(['fence']),ownerKey:key,ownerId:'owner',allocator:{allocate(){throw Error('must not preallocate child');}},broker:{ownerRequest(){}},connections:{...connections,phonePair:async value=>{calls.push(['pair',value]);return{url:value,code:'ABCD1234EFGH',expiresAt:'fixture'};},phoneAccess:async()=>({pairings:[],sessions:[]}),phoneRevoke:async(...args)=>{calls.push(['revoke',...args]);if(revokeFails)throw Error('Native outcome unknown');return{revoked:true};}}});
+ manager.listen(0,'127.0.0.1');await once(manager,'listening');t.after(()=>{manager.closeAllConnections();manager.close();});
+ const send=(path,headers={},data={})=>fetch(`http://127.0.0.1:${manager.address().port}${path}`,{method:'POST',headers:{'content-type':'application/json',origin,...headers},body:JSON.stringify(data)});
+ assert.equal((await send('/_cloud/phone/central/pair')).status,401);
+ assert.equal((await send('/_cloud/phone/central/pair',{authorization:`Bearer ${key}`,origin:'https://native.example'})).status,403);
+ const reply=await send('/_cloud/phone/central/pair',{authorization:`Bearer ${key}`});assert.equal(reply.status,200);assert.equal(reply.headers.get('cache-control'),'no-store');assert.equal((await reply.json()).url,'https://native.example');assert.deepEqual(calls,[['pair','https://native.example']]);
+ assert.equal((await send('/_cloud/phone/central/revoke',{authorization:`Bearer ${key}`},{kind:'pairing',id:'pending'})).status,200);assert.deepEqual(calls.at(-1),['revoke','pairing','pending']);
+ assert.equal((await send('/_cloud/phone/central/revoke',{authorization:`Bearer ${key}`},{kind:'session',id:'session'})).status,200);assert.deepEqual(calls.slice(-2),[['revoke','session','session'],['fence']]);
+ revokeFails=true;assert.equal((await send('/_cloud/phone/central/revoke',{authorization:`Bearer ${key}`},{kind:'session',id:'unknown'})).status,503);assert.deepEqual(calls.at(-1),['revoke','session','unknown']);
+});
