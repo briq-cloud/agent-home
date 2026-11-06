@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-05. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-06. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -10,9 +10,9 @@ The vendors' own binaries, unmodified, with their self-update off: a newer versi
 | --- | --- | --- |
 | Claude Code (`claude`) | 2.1.311 | `CLAUDE_CONFIG_DIR` |
 | Codex (`codex`) | 0.166.0 | `CODEX_HOME` |
-| Copilot CLI (`copilot`) | 1.0.105 | `COPILOT_HOME` |
+| Copilot CLI (`copilot`) | 1.0.106 | `COPILOT_HOME` |
 | Cursor (`agent`) | 2026.11.05-86047df | `XDG_CONFIG_HOME`/cursor |
-| Grok Build (`grok`) | 1.0.70 | `GROK_HOME` |
+| Grok Build (`grok`) | 1.0.77 | `GROK_HOME` |
 | Mistral Vibe (`vibe`) | 3.1.0 | `VIBE_HOME` |
 | Gemini CLI (`gemini`), API key only | 0.67.0 | `GEMINI_CLI_HOME`/.gemini |
 
@@ -39,13 +39,13 @@ Each one checked against its publisher's checksum at build, or recorded where no
 | --- | --- | --- |
 | Claude Code | `86dc1fcc69498159eaf15f446613e847010f9036bfbbdffd4c49350be8489ada` | its release manifest |
 | Codex | `1d44b28bc4ac9937d7d3532264baa68a507ce364956a0d4ebb856f331cdee254` | the GitHub release digest |
-| Copilot CLI | `aba1f06f27bc0447656647f76e0a4cf58b4b2a341c75ff04a750982b6aeb6bd2` | the GitHub release digest |
+| Copilot CLI | `bb2ac6a50c2d7ceffee3b489f278fb9ba4fd39d4678dd75b5b021d4feedcc3ef` | the GitHub release digest |
 | Cursor | `170b77786cbf4c93064d64fff12b71a178b968730561c64afc2e8e752535442e` | none published: recorded |
-| Grok Build | `22d281c5964c5444147328096ba2a221f3f0874c6858e27c825656a80f6e58e9` | none published: recorded |
+| Grok Build | `b702950aa5827d855e493278ab6215a4e0f5bceb5bba6c6243a9f55cdd143b0a` | none published: recorded |
 | Mistral Vibe | `214f2e6a392e0d057087fe0c706c9617bc0bcacea593a19b166b79a7ac05233c` | the PyPI digest of its wheel |
 | Gemini CLI | `3f42374e88171031459ad16e5fac32b161adba330292a1822fb7aae7fb476fc2` | the npm registry integrity |
 | ttyd | `8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55` | its SHA256SUMS |
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-11-05`, 1594 MB compressed, digest `sha256:26d2ddb406eab623d8b1ec6d60b328b7d38235a9d100521bfec171196b472ba7`, on `ghcr.io/briq-cloud/sandbox@sha256:1791ed759c6ecdc18546b76541194b60a4c25b2bf8e205de28476c0bf54c3e6d`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-05 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-11-06`, 1609 MB compressed, digest `sha256:ebad621a0e10253d9263258345bfe55b72c24f4c8642aa8f643c9e532f15a5b3`, on `ghcr.io/briq-cloud/sandbox@sha256:1791ed759c6ecdc18546b76541194b60a4c25b2bf8e205de28476c0bf54c3e6d`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-06 --repo briq-cloud/agent-home`.
