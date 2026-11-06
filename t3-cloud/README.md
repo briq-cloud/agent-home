@@ -74,9 +74,9 @@ never automatic replay. Revocation invalidates capabilities and durably records 
 failed descendant cleanup still attempts the exact workspace stop. Recovery checks unresolved
 outcomes without replaying a stop.
 
-The credential-free offline image fixture is configured to check bounded Claude
-fake-provider/fake-CLI scenarios and native Codex per-thread MCP start/resume inventory
-without model turns. Image CI remains pending.
+The credential-free offline image fixture checks Claude fake-provider/fake-CLI scenarios
+and native Codex MCP start, resume and bounded turns against a local fake Responses provider.
+It uses no credentials or real model network; image CI is a required release gate.
 It does not qualify cloud resources, subscription authentication, remote workspace composition
 or deployment. Those acceptance and recovery gates remain required before enablement.
 
