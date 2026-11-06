@@ -3,7 +3,7 @@ import { edgeToken, edgeAuthorized, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AllocationStore, ThreadAllocator } from './allocations.mjs';
+import { AllocationStore, ThreadAllocator, providerInstanceId } from './allocations.mjs';
 import { BriqCloud } from './briq-cloud.mjs';
 import { startAppServer, CapabilityBroker } from './broker.mjs';
 import { ScopedBriq } from './scoped-briq.mjs';
@@ -35,46 +35,83 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
     app = await (dependencies.startAppServer ?? startAppServer)({ binary: env.T3_CLOUD_CODEX_BINARY ?? 'codex', home: join(directory, 'codex') });
     const cloud = dependencies.cloud ?? new BriqCloud({ directory: join(directory, 'stacks'), env });
     const scopedBriq = new ScopedBriq({ store, cloud });
-    briqTransport = new ScopedMcpTransport({ store, scopedBriq, endpoint: `http://127.0.0.1:${env.PORT ?? 8080}/_cloud/briq/mcp` });
+    briqTransport = (dependencies.createScopedMcpTransport ?? (options => new ScopedMcpTransport(options)))({ store, scopedBriq, endpoint: `http://127.0.0.1:${env.PORT ?? 8080}/_cloud/briq/mcp` });
     const claudeLedger = new AllocationStore(join(directory, 'claude-ledger')); await claudeLedger.initialize();
-    claude = new ClaudeRuntime({ store, ledger: claudeLedger, cloud, scopedBriq, directory: join(directory, 'claude'), nativeHome: env.HOME, nativeConfigDirectory: env.CLAUDE_CONFIG_DIR });
-    const broker = new CapabilityBroker({ store, app, claude, briqTransport });
-    let ready = false, restoring;
+    claude = (dependencies.createClaudeRuntime ?? (options => new ClaudeRuntime(options)))({ store, ledger: claudeLedger, cloud, scopedBriq, directory: join(directory, 'claude'), nativeHome: env.HOME, nativeConfigDirectory: env.CLAUDE_CONFIG_DIR });
+    const admittedProviders = Object.freeze(['codex', ...(claude.enabled === true ? ['claudeAgent'] : [])]);
+    const broker = new CapabilityBroker({ store, app, claude, briqTransport, admittedProviders });
+    let ready = false, restoring, retryRestore = false;
     function restore() {
       if (stopped) throw Error('Central runtime stopped');
       if (restoring) return restoring;
+      if (ready && !retryRestore) return Promise.resolve();
+      retryRestore = false;
       restoring = (async () => {
         // The manager must bind the loopback MCP route before native restoration.
-        for (const binding of await store.list()) {
+        for (let binding of await store.list()) {
           if (binding.state === 'revoked') {
+            if (allocator.unresolvedNativeCleanup(binding)) claude.quarantineRevocation?.(binding);
             // Read-only evidence can settle an exact root stop. Unavailable auth or
             // unresolved cleanup stays per-allocation; managed owner sign-in remains usable.
             try { await store.serialized(binding.threadId, () => allocator.reconcileRevocation(binding)); } catch { /* Durable uncertainty remains visible through revocationIssues. */ }
             continue;
           }
-          if (binding.state !== 'ready') continue;
-          await broker.registerEnvironment(binding);
-          if (binding.nativeThreadId) {
-            const mcp = briqTransport.bind(binding);
-            let result;
-            try { result = await app.request('thread/resume', { threadId: binding.nativeThreadId, excludeTurns: false, config: mcp.config }); }
-            catch (error) { mcp.revoke(); throw error; }
-            if (result.thread?.id !== binding.nativeThreadId || !broker.matchesEnvironment(result.thread, binding)) throw Error('Persisted execution binding mismatch');
-            const turn = result.thread.turns?.findLast(value => value.status === 'inProgress');
-            if (turn) broker.activeTurns.set(binding.nativeThreadId, turn.id);
-            // History alone does not correlate an uncertain client mutation. Keep quarantine.
+          if (binding.state !== 'ready' || ready && !binding.restoreState) continue;
+          const provider = providerInstanceId(binding.providerInstanceId);
+          if (!admittedProviders.includes(provider)) throw Error('Persisted provider is not admitted');
+          if (provider === 'claudeAgent') {
+            if (binding.nativeThreadId) throw Error('Claude allocation contains Codex identity');
+            continue;
           }
+          await store.serialized(binding.threadId, async () => {
+            const current = await store.load(binding.threadId);
+            if (current?.state !== 'ready' || current.allocationId !== binding.allocationId || ready && !current.restoreState) return;
+            binding = current;
+            try {
+              await broker.registerEnvironment(binding);
+              if (binding.nativeThreadId) {
+                const model = await broker.effectiveCodexModel(binding);
+                const result = await broker.resumeNative(binding, { model, recovery: true, params: { excludeTurns: false } });
+                const turn = result.thread.turns?.findLast(value => value.status === 'inProgress');
+                if (turn) broker.activeTurns.set(binding.nativeThreadId, turn.id);
+                // History alone does not correlate an uncertain client mutation. Keep quarantine.
+              } else if (binding.restoreState) { delete binding.restoreState; await store.save(binding); }
+            } catch {
+              // Failure before resume leaves the previous binding intact; failure after
+              // its durable intent retains nativeState=unknown. Neither permits replay.
+              retryRestore = true;
+              binding.restoreState = binding.nativeState === 'unknown' ? 'reconciliation-required' : 'deferred';
+              await store.save(binding);
+            }
+          });
         }
         if (stopped) throw Error('Central runtime stopped');
         ready = true;
       })();
-      return restoring;
+      return restoring.finally(() => { restoring = null; });
     }
-    const allocator = new ThreadAllocator({ store, cloud, image: env.T3_CLOUD_CHILD_IMAGE,
+    const allocator = new ThreadAllocator({ store, cloud, admittedProviders, image: env.T3_CLOUD_CHILD_IMAGE,
       edgeCredential, bridgeUrl: new URL('/_cloud/bridge', env.T3_CLOUD_PUBLIC_ORIGIN).href.replace(/^https:/, 'wss:'),
       registerEnvironment: binding => broker.registerEnvironment(binding),
       reconcileCleanup: binding => scopedBriq.reconcileCleanup(binding),
-      cleanup: async binding => { briqTransport.revoke(binding.allocationId); await scopedBriq.cleanup(binding); } });
+      cleanup: async binding => {
+        briqTransport.revoke(binding.allocationId);
+        const nativeCleanup = async () => {
+          if (providerInstanceId(binding.providerInstanceId) !== 'claudeAgent') return;
+          binding.nativeCleanup.state = 'started'; await store.save(binding);
+          try {
+            await claude.revoke(binding);
+            binding.nativeCleanup.state = 'completed'; await store.save(binding);
+          } catch {
+            binding.nativeCleanup.state = 'unknown';
+            try { await store.save(binding); } catch { /* Durable intent stays unresolved. */ }
+            throw Error('Native termination requires reconciliation');
+          }
+        };
+        const results = await Promise.allSettled([nativeCleanup(), scopedBriq.cleanup(binding)]);
+        const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
+        if (failures.length) throw new AggregateError(failures, 'Allocation cleanup requires reconciliation');
+      } });
     websocket = new WebSocketServer({ noServer: true, maxPayload: 2097152, perMessageDeflate: false });
     async function bridgeUpgrade(req, socket, head) {
       let session;
@@ -95,7 +132,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         });
       } catch { session?.close(); socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); }
     }
-    return { allocator, broker, bridgeUpgrade, close, restore, ready: () => ready && !stopped, briqMcpRequest: (req, res) => briqTransport.handle(req, res),
+    return { allocator, broker, admittedProviders, bridgeUpgrade, close, restore, ready: () => ready && !stopped, briqMcpRequest: (req, res) => briqTransport.handle(req, res),
       claudeCredentialOwner: claude.credentials, briqCredentialOwner: cloud.credentialOwner };
   } catch (error) { await close(); throw error; }
 }

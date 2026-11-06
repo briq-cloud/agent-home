@@ -1,3 +1,4 @@
+import { providerInstanceId } from './allocations.mjs';
 import { bridgeOptions } from './edge-auth.mjs';
 import { childFrontdoor } from './child-frontdoor.mjs';
 import { spawn, spawnSync } from 'node:child_process';
@@ -10,20 +11,21 @@ const binding = envInput.T3_CLOUD_BINDING_ID; const threadId = envInput.T3_CLOUD
 if (envInput.T3_CLOUD_ROLE !== 'child' || !/^[a-f0-9-]{36}$/.test(binding ?? '') ||
   !/^[a-zA-Z0-9_-]{1,128}$/.test(threadId ?? '') || !/^[a-f0-9]{64}$/.test(envInput.T3_CLOUD_EXEC_TOKEN_SHA256 ?? ''))
   throw Error('Invalid child allocation binding');
+const provider = providerInstanceId(envInput.T3_CLOUD_PROVIDER_INSTANCE_ID);
 const { url } = bridgeOptions(envInput);
 for (const directory of [state, `${state}/userdata`, `${state}/home`, codexHome]) await mkdir(directory, { recursive: true, mode: 0o700 });
-const stamp = JSON.stringify({ binding, threadId });
+const stamp = JSON.stringify({ binding, threadId, providerInstanceId: provider });
 try { await writeFile(`${state}/briq-binding.json`, stamp, { flag: 'wx', mode: 0o600 }); }
-catch (error) { if (error.code !== 'EEXIST') throw error; if (await readFile(`${state}/briq-binding.json`, 'utf8') !== stamp) throw Error('Child volume belongs to another allocation'); }
+catch (error) { if (error.code !== 'EEXIST') throw error; const prior = JSON.parse(await readFile(`${state}/briq-binding.json`, 'utf8')); if (prior.binding !== binding || prior.threadId !== threadId || providerInstanceId(prior.providerInstanceId) !== provider) throw Error('Child volume belongs to another allocation'); }
 const settings = { providerInstances: {
-  codex: { driver: 'codex', enabled: true, config: { setupMode: 'existing', binaryPath: '/opt/t3-cloud/bin/codex-remote', homePath: codexHome, shadowHomePath: '', launchArgs: '' } },
-  claudeAgent: { driver: 'claudeAgent', enabled: false },
+  codex: { driver: 'codex', enabled: provider === 'codex', config: { setupMode: 'existing', binaryPath: '/opt/t3-cloud/bin/codex-remote', homePath: codexHome, shadowHomePath: '', launchArgs: '' } },
+  claudeAgent: { driver: 'claudeAgent', enabled: provider === 'claudeAgent' },
 } };
 // A fresh private native state is intentional; provider settings cannot select a real app-server.
 await writeFile(`${state}/userdata/settings.json`, JSON.stringify(settings), { mode: 0o600 });
 // No cloud keys, vendor login homes, or inherited MCP configuration enter either child runtime.
 const env = { HOME: `${state}/home`, CODEX_HOME: codexHome, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8',
-  T3_CLOUD_ROLE: 'child', T3_CLOUD_THREAD_ID: threadId, T3_CLOUD_BINDING_ID: binding,
+  T3_CLOUD_ROLE: 'child', T3_CLOUD_PROVIDER_INSTANCE_ID: provider, T3_CLOUD_THREAD_ID: threadId, T3_CLOUD_BINDING_ID: binding,
   T3_CLOUD_BRIDGE_URL: url, T3_CLOUD_BRIDGE_TOKEN: envInput.T3_CLOUD_BRIDGE_TOKEN, T3_CLOUD_EDGE_TOKEN: envInput.T3_CLOUD_EDGE_TOKEN };
 const checked = checkVersion('codex', ['--version'], { env: { HOME: env.HOME, CODEX_HOME: codexHome, PATH: env.PATH, LANG: env.LANG }, encoding: 'utf8', timeout: 15000 });
 if (checked.status !== 0 || checked.stdout.trim() !== 'codex-cli 0.166.0') throw Error('Codex 0.166.0 required');

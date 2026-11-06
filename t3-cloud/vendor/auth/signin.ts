@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 interface Cli { name: string; login?: string[] }
+import type { CredentialLifetime } from './status.ts';
 import { log } from '../telemetry/log.ts';
 
 /** What a sign-in shows the app: the vendor's page, and a code when the vendor gives one. */
@@ -13,6 +14,9 @@ export interface SignInOptions {
   timeoutMs?: number;
   pageWaitMs?: number;
   startWaitMs?: number;
+  direct?: boolean;
+  cleanupTimeoutMs?: number;
+  spawnProcess?: typeof spawn;
 }
 
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][0-9A-Za-z]/g;
@@ -24,7 +28,8 @@ const PLAINTEXT_RE = /plain ?text/i;
 const SIGN_IN_MS = 15 * 60_000;
 
 /**
- * The vendor's own sign-in command, in a terminal (`script` gives it one), the person approving
+ * The vendor's own sign-in command, directly for line-based commands or through
+ * `script` for terminal flows, with the person approving
  * on the vendor's page in their own browser. The runner reads the page's address and the code
  * from what the command prints, and passes on what the person types back (Claude's code). Only
  * those leave it: never the rest of the output.
@@ -32,21 +37,28 @@ const SIGN_IN_MS = 15 * 60_000;
 export class SignIn {
   readonly cli: Cli;
   private child: ChildProcess | undefined;
+  private lifetimeUnknown = false;
   private current: SignInState = { state: 'idle' };
   private seen = '';
   private answeredPlaintext = false;
   private readonly listeners = new Set<() => void>();
-  private readonly options: Required<SignInOptions>;
+  private readonly options: Required<Pick<SignInOptions, 'timeoutMs' | 'pageWaitMs' | 'startWaitMs' | 'cleanupTimeoutMs'>>;
+  private readonly direct: boolean;
+  private readonly spawnProcess: typeof spawn;
+  private finishLifetime?: (outcome: CredentialLifetime) => void;
 
   private readonly completed?: () => void;
-  private readonly ended?: () => void;
+  private readonly ended?: (outcome: CredentialLifetime) => void;
 
-  constructor(cli: Cli, completed?: () => void, options: SignInOptions = {}, ended?: () => void) {
+  constructor(cli: Cli, completed?: () => void, options: SignInOptions = {}, ended?: (outcome: CredentialLifetime) => void) {
     this.completed = completed;
     this.ended = ended;
     this.cli = cli;
+    this.direct = options.direct === true;
+    this.spawnProcess = options.spawnProcess ?? spawn;
     this.options = {
       timeoutMs: options.timeoutMs ?? SIGN_IN_MS,
+      cleanupTimeoutMs: options.cleanupTimeoutMs ?? 1000,
       pageWaitMs: options.pageWaitMs ?? 3000,
       startWaitMs: options.startWaitMs ?? 30_000,
     };
@@ -65,25 +77,36 @@ export class SignIn {
 
   /** Starts it, or keeps the one already waiting. Resolves once the page is known, or it ended. */
   start(env: Record<string, string>, options: { wait?: boolean } = {}): Promise<SignInState> {
+    if (this.lifetimeUnknown) return Promise.resolve(this.status);
     if (this.child) return options.wait === false ? Promise.resolve(this.status) : this.settled();
     this.update({ state: 'starting' });
     this.seen = '';
     this.answeredPlaintext = false;
     if (!this.cli.login?.length || this.cli.login.some((part) => typeof part !== 'string' || part.includes('\0'))) {
       this.update({ state: 'failed', reason: 'start_failed' });
-      this.ended?.();
+      this.ended?.('never-spawned');
       return Promise.resolve(this.status);
     }
     const command = (this.cli.login ?? []).map(shq).join(' ');
     // util-linux in the home. BSD's, on a Mac for tests, refuses a socket as its input: none there.
     const mac = process.platform === 'darwin';
     const args = mac ? ['-q', '/dev/null', 'sh', '-c', command] : ['-qfec', command, '/dev/null'];
-    const child = spawn('script', args, {
-      env,
-      detached: process.platform !== 'win32',
-      stdio: [mac ? 'ignore' : 'pipe', 'pipe', 'pipe'],
-    });
+    let child: ChildProcess;
+    try {
+      child = this.spawnProcess(this.direct ? this.cli.login[0]! : 'script', this.direct ? this.cli.login.slice(1) : args, {
+        env,
+        detached: process.platform !== 'win32',
+        stdio: [this.direct || !mac ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      });
+    } catch {
+      this.update({ state: 'failed', reason: 'start_failed' });
+      this.ended?.('never-spawned');
+      return Promise.resolve(this.status);
+    }
     this.child = child;
+    let spawned = false, finished = false;
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+    child.once('spawn', () => { spawned = true; });
     const timer = setTimeout(() => this.stop('timed_out'), this.options.timeoutMs);
     const read = (b: Buffer) => {
       if (this.child === child && ['starting', 'waiting'].includes(this.current.state)) this.read(b.toString());
@@ -92,8 +115,13 @@ export class SignIn {
     child.stderr?.on('data', read);
     // Writes can race vendor termination; an EPIPE must never crash the runner.
     child.stdin?.on('error', () => {});
-    const finish = (code: number | null, failedToStart = false) => {
+    const finish = (code: number | null, outcome: CredentialLifetime, failedToStart = false) => {
+      if (finished) return;
+      finished = true;
+      this.lifetimeUnknown = this.direct && outcome === 'unknown';
       clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      this.finishLifetime = undefined;
       child.stdout?.off('data', read);
       child.stderr?.off('data', read);
       child.stdin?.destroy();
@@ -116,11 +144,20 @@ export class SignIn {
           }
         }
       }
-      this.ended?.();
+      this.ended?.(outcome);
       log.info('sign-in ended', { cli: this.cli.name, code });
     };
-    child.once('error', () => finish(null, true));
-    child.once('exit', (code) => finish(code));
+    this.finishLifetime = outcome => {
+      if (!cleanupTimer) cleanupTimer = setTimeout(() => finish(null, outcome), this.options.cleanupTimeoutMs);
+    };
+    child.on('error', () => {
+      if (finished) return;
+      if (!spawned && child.pid === undefined) return finish(null, 'never-spawned', true);
+      this.stop('start_failed');
+    });
+    // For a PTY wrapper, exit is only UI completion. Only a captured direct
+    // credential child supplies the exact termination receipt.
+    child.once('exit', code => finish(code, this.direct ? 'terminated' : 'unknown'));
     return options.wait === false ? Promise.resolve(this.status) : this.settled();
   }
 
@@ -129,14 +166,17 @@ export class SignIn {
     this.stop('cancelled');
   }
 
-  private stop(reason: 'cancelled' | 'timed_out'): void {
+  private stop(reason: 'cancelled' | 'timed_out' | 'start_failed'): void {
     const child = this.child;
     if (!child) return;
     if (this.current.state !== 'failed') this.update({ ...this.current, state: 'failed', reason });
-    // Stop the private wrapper process group. Closing its pipes also tears down
-    // PTY observation; vendor commands may create their own PTY process groups.
+    // Only direct Claude completion has the new bounded quarantine outcome.
+    // PTY flows retain their wrapper/lease until the actual wrapper exit.
+    if (this.direct) this.finishLifetime?.('unknown');
+    // The direct child owns the line-based login. PTY flows keep their private
+    // wrapper group cleanup, which does not prove the credential child ended.
     try {
-      if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+      if (!this.direct && process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
       else child.kill('SIGKILL');
     } catch {
       /* The process may have exited between the state change and kill. */
@@ -162,7 +202,7 @@ export class SignIn {
     )
       return false;
     try {
-      child.stdin.write(`${text}\r`);
+      child.stdin.write(`${text}${this.direct ? '\n' : '\r'}`);
       return true;
     } catch {
       return false;

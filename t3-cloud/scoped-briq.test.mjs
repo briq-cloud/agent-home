@@ -10,7 +10,8 @@ import { ScopedBriq } from './scoped-briq.mjs';
 async function fixture(t, override) {
   const directory = await mkdtemp(join(tmpdir(), 'scoped-briq-')); t.after(() => rm(directory, { recursive: true, force: true }));
   const store = new AllocationStore(directory); await store.initialize();
-  const identity = { threadId: 'thread-a', allocationId: 'allocation-a', nativeId: 'native-a' };
+  const lease = { closed: false };
+  const identity = { providerInstanceId: 'codex', threadId: 'thread-a', allocationId: 'allocation-a', nativeId: 'native-a', turnId: 'turn-a', validate: () => { if (lease.closed) throw Error('Turn closed'); } };
   const binding = { ...identity, nativeThreadId: identity.nativeId, briqId: 'root-a', stack: 't3-'+'a'.repeat(24), rootStackId: 'stack-a', state: 'ready' };
   await store.save(binding);
   const calls = [], resources = new Map([['root-a',{id:'root-a',name:'sandbox',stackId:binding.rootStackId,state:'running'}]]), files = new Map(); let sequence = 0;
@@ -37,7 +38,7 @@ async function fixture(t, override) {
   let request = 0;
   const call = (name, input = {}, requestId = ++request) => scoped.call(identity, requestId, name, input);
   const create = async () => (await call('briq_run', { recipe: 'sandbox' })).briqs[0].id;
-  return { directory, identity, binding, store, cloud, scoped, call, create, calls, resources };
+  return { directory, identity, lease, binding, store, cloud, scoped, call, create, calls, resources };
 }
 
 test('recorded create supports list/status, exec/files and exact lifecycle with fixed CLI arguments', async t => {
@@ -180,6 +181,7 @@ test('revocation tries all exact cleanup handles and the root stop despite indep
  f.binding.ownerId='owner'; await f.store.save(f.binding);
  const allocator = new ThreadAllocator({store:f.store, cloud:{stop:async binding=>{
   rootStops++; assert.equal(binding.briqId,'root-a'); assert.equal((await f.store.load(binding.threadId)).state,'revoked');
+  assert.deepEqual(f.calls.filter(row=>row.args[0]==='destroy').map(row=>row.args[1]).sort(),[first,second].sort());
   throw Error('lost root stop acknowledgment');
  }}, image:'registry/child@sha256:'+'a'.repeat(64), bridgeUrl:'wss://central.example/_cloud/bridge', edgeCredential:'e'.repeat(43),
  registerEnvironment:async()=>{}, cleanup:async binding=>{
@@ -187,8 +189,11 @@ test('revocation tries all exact cleanup handles and the root stop despite indep
  }});
  await assert.rejects(allocator.revoke('owner',f.identity.threadId),error=>error instanceof AggregateError && error.errors.length===2);
  assert.equal(revokedBeforeCleanup,true); assert.equal(rootStops,1);
- assert.deepEqual(f.calls.filter(row=>row.args[0]==='exec-stop').map(row=>row.args[1]),[first,second]);
- assert.deepEqual(f.calls.filter(row=>row.args[0]==='destroy').map(row=>row.args[1]),[first,second]);
+ assert.deepEqual(f.calls.filter(row=>row.args[0]==='exec-stop').map(row=>row.args).sort((a,b)=>a[1].localeCompare(b[1])),[['exec-stop',first,'exec-1'],['exec-stop',second,'exec-1']].sort((a,b)=>a[1].localeCompare(b[1])));
+ assert.deepEqual(f.calls.filter(row=>row.args[0]==='destroy').map(row=>row.args[1]).sort(),[first,second].sort());
+ const cleanupCommands=f.calls.filter(row=>['exec-stop','destroy'].includes(row.args[0]));
+ assert.deepEqual(cleanupCommands.map(row=>row.args[0]),['exec-stop','exec-stop','destroy','destroy']);
+ assert.equal(cleanupCommands.some(row=>row.args[1]==='root-a'),false);
  const records=await f.store.listOperations(f.identity.threadId);
  assert.equal(records.find(row=>row.resource?.id===first).resource.state,'live');
  assert.equal(records.find(row=>row.resource?.id===first).cleanup.state,'unknown');
@@ -264,7 +269,7 @@ test('descendants share the recorded workspace stack while root and sibling rows
  assert.equal(runs.length,2);assert.equal(runs.every(row=>row.args[row.args.indexOf('--stack')+1]===f.binding.stack),true);
  assert.notEqual(runs[0].args[runs[0].args.indexOf('--name')+1],runs[1].args[runs[1].args.indexOf('--name')+1]);
  assert.equal(f.resources.get(first).stackId,f.binding.rootStackId);assert.equal(f.resources.get(second).stackId,f.binding.rootStackId);
- assert.deepEqual((await f.call('briq_list')).briqs.map(row=>row.id),[first,second]);
+ assert.deepEqual((await f.call('briq_list')).briqs.map(row=>row.id).sort(),[first,second].sort());
  const count=f.calls.length;await assert.rejects(f.call('briq_destroy',{id:'root-a'}));await assert.rejects(f.call('briq_status',{id:'unrecorded-sibling'}));assert.equal(f.calls.length,count);
 });
 
@@ -355,4 +360,107 @@ test('read-only cleanup reconciliation settles only pending destroys and leaves 
  assert.equal(rows.find(row=>row.resource?.id===pending).cleanup.state,'completed');
  assert.equal(rows.find(row=>row.resource?.id===untouched).resource.state,'live');
  assert.equal(Boolean(rows.find(row=>row.exec).exec.terminal),false);
+});
+
+
+test('queued old-turn request revalidates its immutable lease inside allocation lock', async t => {
+  const f = await fixture(t); let entered, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const acquired = new Promise(resolve => { entered = resolve; });
+  const held = f.store.serialized(f.identity.threadId, async () => { entered(); await gate; });
+  await acquired;
+  const queued = f.call('briq_run', { recipe: 'sandbox' }, 'queued');
+  const denied = assert.rejects(queued, /Turn closed/);
+  f.lease.closed = true; release(); await held; await denied;
+  assert.equal(f.calls.length, 0); assert.deepEqual(await f.store.listOperations(f.identity.threadId), []);
+});
+
+test('revocation during durable admission never dispatches and leaves conservative uncertainty', async t => {
+  const f = await fixture(t); const save = f.store.saveOperation.bind(f.store);
+  f.store.saveOperation = async (...args) => { await save(...args); f.lease.closed = true; };
+  await assert.rejects(f.create(), /unavailable/);
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.store.listOperations(f.identity.threadId))[0].state, 'unknown');
+});
+
+test('shared scoped authorization requires explicit corresponding provider identity', async t => {
+  const f = await fixture(t);
+  for (const identity of [{ ...f.identity, providerInstanceId: undefined }, { ...f.identity, providerInstanceId: 'claudeAgent' },
+    { ...f.identity, validate: undefined }]) await assert.rejects(f.scoped.call(identity, 'attempt', 'briq_run', { recipe: 'sandbox' }));
+  f.binding.claudeNativeSessionId = f.identity.nativeId; await f.store.save(f.binding);
+  await assert.rejects(f.create()); assert.equal(f.calls.length, 0);
+});
+
+for (const closure of ['turn completion', 'owner revocation']) {
+ for (const name of ['briq_exec', 'briq_exec_stop', 'briq_files_put', 'briq_start', 'briq_stop', 'briq_destroy', 'briq_logs']) {
+  test(`${closure} during deferred status fences subsequent ${name} dispatch`, async t => {
+   let entered, release, deferStatus = false;
+   const statusEntered = new Promise(resolve => { entered = resolve; });
+   const statusGate = new Promise(resolve => { release = resolve; });
+   const f = await fixture(t, async args => {
+    if (deferStatus && args[0] === 'status') { entered(); await statusGate; }
+   });
+   const id = await f.create();
+   const launch = name === 'briq_exec_stop' ? await f.call('briq_exec', { id, command: 'long command' }) : undefined;
+   const input = { id, ...(name === 'briq_exec' ? { command: 'must not execute' } : {}),
+    ...(launch ? { execId: launch.exec.id } : {}),
+    ...(name === 'briq_files_put' ? { path: '/work/blocked', content: 'must not write' } : {}) };
+   const before = f.calls.length;
+   deferStatus = true;
+   const pending = f.call(name, input, 'deferred-dispatch');
+   const denied = assert.rejects(pending, /unavailable/);
+   await statusEntered;
+   // Both lifecycle signals synchronously close this captured per-turn lease.
+   f.lease.closed = true; release(); await denied;
+   assert.deepEqual(f.calls.slice(before).map(row => row.args), [['status', id]]);
+   if (name !== 'briq_logs') {
+    const record = (await f.store.listOperations(f.identity.threadId)).find(row => row.requestId === 'deferred-dispatch');
+    assert.equal(record.state, 'unknown');
+    // Reopening a later lease cannot turn an uncertain request into a retry.
+    f.lease.closed = false;
+    const restarted = new ScopedBriq({ store: new AllocationStore(f.directory), cloud: f.cloud });
+    await assert.rejects(restarted.call(f.identity, 'deferred-dispatch', name, input), /unknown/);
+    assert.deepEqual(f.calls.slice(before).map(row => row.args), [['status', id]]);
+   }
+  });
+ }
+}
+
+for (const closure of ['turn completion', 'owner revocation']) test(`${closure} fences mutation queued behind the existing credential owner`, async t => {
+ let statusEntered, releaseStatus, ownerEntered, releaseOwner, execEnqueued, deferStatus = false;
+ const statusStarted = new Promise(resolve => { statusEntered = resolve; });
+ const statusGate = new Promise(resolve => { releaseStatus = resolve; });
+ const ownerStarted = new Promise(resolve => { ownerEntered = resolve; });
+ const ownerGate = new Promise(resolve => { releaseOwner = resolve; });
+ const execQueued = new Promise(resolve => { execEnqueued = resolve; });
+ const f = await fixture(t, async args => {
+  if (deferStatus && args[0] === 'status') { statusEntered(); await statusGate; }
+ });
+ const id = await f.create(), before = f.calls.length;
+ const run = f.cloud.run;
+ f.cloud.run = (args, ...options) => {
+  const result = run(args, ...options);
+  if (args[0] === 'exec') execEnqueued();
+  return result;
+ };
+ deferStatus = true;
+ const pending = f.call('briq_exec', { id, command: 'must not execute' }, 'queued-cloud-dispatch');
+ const denied = assert.rejects(pending, /unavailable/);
+ await statusStarted;
+ // Queue existing owner work behind status, ahead of the following mutation.
+ const held = f.cloud.credentialOwner.run(async () => { ownerEntered(); await ownerGate; });
+ releaseStatus(); await ownerStarted;
+ await execQueued;
+ assert.equal(f.cloud.credentialOwner.waiters.length, 1);
+ f.lease.closed = true; releaseOwner(); await held; await denied;
+ assert.deepEqual(f.calls.slice(before).map(row => row.args), [['status', id]]);
+ assert.equal(f.cloud.credentialOwner.current, null);
+ assert.equal(f.cloud.credentialOwner.waiters.length, 0);
+ assert.equal(await f.cloud.credentialOwner.run(() => 'owner released'), 'owner released');
+ const rows = await f.store.listOperations(f.identity.threadId);
+ assert.equal(rows.find(row => row.requestId === 'queued-cloud-dispatch').state, 'unknown');
+ f.lease.closed = false;
+ const restarted = new ScopedBriq({ store: new AllocationStore(f.directory), cloud: f.cloud });
+ await assert.rejects(restarted.call(f.identity, 'queued-cloud-dispatch', 'briq_exec', { id, command: 'must not execute' }), /unknown/);
+ assert.deepEqual(f.calls.slice(before).map(row => row.args), [['status', id]]);
 });

@@ -1,4 +1,12 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
+
+// This extracted cloud helper has independent lifecycle ownership requirements.
+export type CredentialLifetime = 'never-spawned' | 'terminated' | 'unknown';
+export interface StatusProcessOptions {
+  spawnProcess?: typeof spawn;
+  cleanupTimeoutMs?: number;
+  onLifetime?: (outcome: CredentialLifetime) => void;
+}
 
 const STATUS_OUTPUT_LIMIT = 16_384;
 
@@ -46,10 +54,37 @@ export function commandStatus(
   timeoutMs = 10_000,
   subscriptionOnly = false,
   onBilling?: (billing: 'subscription' | 'use' | 'unknown') => void,
+  processOptions: StatusProcessOptions = {},
 ): Promise<boolean | null> {
   return new Promise((resolve) => {
     const [cmd, ...args] = command;
-    const child = spawn(cmd as string, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let child: ChildProcess;
+    let spawned = false, terminated = false, settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: boolean | null, lifetime: CredentialLifetime) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      processOptions.onLifetime?.(lifetime);
+      resolve(result);
+    };
+    try {
+      child = (processOptions.spawnProcess ?? spawn)(cmd as string, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch {
+      finish(null, 'never-spawned');
+      return;
+    }
+    const cleanup = () => {
+      // A kill request is not a termination receipt. Keep a bounded wait for this
+      // exact direct child; uncertainty is reported once and cannot clear later.
+      if (settled || cleanupTimer) return;
+      cleanupTimer = setTimeout(() => finish(null, terminated ? 'terminated' : 'unknown'), processOptions.cleanupTimeoutMs ?? 1000);
+      try { child.kill('SIGKILL'); } catch { /* bounded unknown */ }
+    };
+    child.once('spawn', () => { spawned = true; });
+    child.once('exit', () => { terminated = true; });
     const stdout: Buffer[] = [],
       stderr: Buffer[] = [];
     let outputBytes = 0;
@@ -59,21 +94,26 @@ export function commandStatus(
       outputBytes += chunk.length;
       if (outputBytes > STATUS_OUTPUT_LIMIT) {
         invalid = true;
-        child.kill('SIGKILL');
+        cleanup();
       } else chunks.push(Buffer.from(chunk));
     };
     child.stdout?.on('data', collect(stdout));
     child.stderr?.on('data', collect(stderr));
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      cleanup();
     }, timeoutMs);
     child.on('error', () => {
-      clearTimeout(timer);
-      resolve(null);
+      if (settled) return;
+      invalid = true;
+      if (!spawned && child.pid === undefined) return finish(null, 'never-spawned');
+      cleanup();
     });
     child.on('close', (code, signal) => {
-      clearTimeout(timer);
+      if (settled) return;
+      // Node close also follows a failed spawn; distinguish it from child exit.
+      const lifetime: CredentialLifetime = terminated || spawned || child.pid !== undefined ? 'terminated' : 'never-spawned';
+      const resolve = (result: boolean | null) => finish(result, lifetime);
       if (timedOut || invalid || signal || code === null) return resolve(null);
       const out = Buffer.concat(stdout).toString('utf8');
       const err = Buffer.concat(stderr).toString('utf8');

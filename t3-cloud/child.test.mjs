@@ -88,3 +88,26 @@ test('root recovery returns exact stack identity and rejects a changed recorded 
  row={...row,stackId:'foreign-stack'};assert.equal(await cloud.find(binding),null);
  row={...row,stackId:'stack-a',id:'another-root'};assert.equal(await cloud.find(binding),null);
 });
+
+test('Claude child assignment is stamped, propagated and cannot reuse a legacy Codex volume', async t => {
+ const root=await mkdtemp(join(tmpdir(),'t3-child-provider-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const calls=[];const env={T3_CLOUD_ROLE:'child',T3_CLOUD_BINDING_ID:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',T3_CLOUD_THREAD_ID:'thread',T3_CLOUD_PROVIDER_INSTANCE_ID:'claudeAgent',T3_CLOUD_BRIDGE_URL:'wss://central.example/_cloud/bridge',T3_CLOUD_BRIDGE_TOKEN:'a'.repeat(43),T3_CLOUD_EDGE_TOKEN:'e'.repeat(32),T3_CLOUD_EXEC_TOKEN_SHA256:digest('b'.repeat(43)),T3_CLOUD_PUBLIC_ORIGIN:'https://child.example'};
+ const options={root,listen:{port:0,host:'127.0.0.1'},checkVersion:()=>({status:0,stdout:'codex-cli 0.166.0'}),spawnProcess:(command,args,options)=>{calls.push({command,args,options});const child=new EventEmitter();child.kill=()=>{};return child;}};
+ const runtime=await startChild(env,options);t.after(()=>runtime.close());
+ const settings=JSON.parse(await readFile(join(root,'.t3/userdata/settings.json'),'utf8'));
+ assert.equal(settings.providerInstances.codex.enabled,false);assert.equal(settings.providerInstances.claudeAgent.enabled,true);
+ assert.equal(calls[1].options.env.T3_CLOUD_PROVIDER_INSTANCE_ID,'claudeAgent');
+ assert.deepEqual(JSON.parse(await readFile(join(root,'.t3/briq-binding.json'),'utf8')),{binding:env.T3_CLOUD_BINDING_ID,threadId:'thread',providerInstanceId:'claudeAgent'});
+ await assert.rejects(startChild({...env,T3_CLOUD_PROVIDER_INSTANCE_ID:'codex'},options),/another allocation/);
+ await assert.rejects(startChild({...env,T3_CLOUD_PROVIDER_INSTANCE_ID:'custom'},options),/Unsupported/);
+ assert.equal(calls.length,2);
+});
+
+test('root reconciliation binds exact provider and treats missing legacy provider as Codex only',async()=>{
+ const binding={allocationId:'allocation',threadId:'thread',stack:'t3-fixture',briqId:'root',rootStackId:'stack-a',providerInstanceId:'claudeAgent'};
+ let provider='claudeAgent';const cloud=new BriqCloud({directory:'/unused',env:{},run:async()=>({briqs:[{id:'root',name:'sandbox',stackId:'stack-a',env:{T3_CLOUD_BINDING_ID:'allocation',T3_CLOUD_THREAD_ID:'thread',T3_CLOUD_PROVIDER_INSTANCE_ID:provider}}]})});
+ assert.deepEqual(await cloud.find(binding),{id:'root',stackId:'stack-a'});
+ provider='codex';assert.equal(await cloud.find(binding),null);
+ provider=undefined;assert.equal(await cloud.find(binding),null);
+ assert.deepEqual(await cloud.find({...binding,providerInstanceId:undefined}),{id:'root',stackId:'stack-a'});
+});

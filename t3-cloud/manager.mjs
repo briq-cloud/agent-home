@@ -1,3 +1,4 @@
+import { providerInstanceId } from './allocations.mjs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createOwnerAuth, equalKey } from './cloud-auth.mjs';
@@ -68,19 +69,26 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
       if (url.pathname === '/_cloud/logout' && req.method === 'POST') return json(res, 200, { authenticated: false }, { 'set-cookie': auth.logout(req) });
       if (url.pathname.startsWith('/_cloud/terminal/') && req.method === 'GET') return terminal.http(req, res);
       if (url.pathname === '/_cloud/connections' && req.method === 'GET') {
-        const codex = role === 'central' ? await broker.ownerRequest('account/read', { refreshToken: false }) : { unavailable: true };
+        let codex = { unavailable: true };
+        if (role === 'central') {
+          try { codex = await broker.ownerRequest('account/read', { refreshToken: false }); } catch { /* Sign-in and other owner recovery stay available. */ }
+        }
+        const restorations = role === 'central' && allocator.restorationIssues ? (await allocator.restorationIssues()).map(value => ({
+          threadId: value.threadId, allocationId: value.allocationId, state: value.state === 'deferred' ? 'deferred' : 'reconciliation-required',
+        })) : [];
         const revocations = role === 'central' && allocator.revocationIssues ? (await allocator.revocationIssues()).map(value => ({
           threadId: value.threadId, allocationId: value.allocationId, state: 'reconciliation-required',
         })) : [];
-        return json(res, 200, { role, codex, ...(await connections.status()), ...(revocations.length ? { revocations } : {}) });
+        return json(res, 200, { role, codex, ...(await connections.status()), ...(revocations.length ? { revocations } : {}), ...(restorations.length ? { restorations } : {}) });
       }
       if (url.pathname === '/_cloud/threads' && req.method === 'POST') {
         if (role !== 'central') return json(res, 409, { error: 'Thread sandbox allocation requires a central runtime' });
         const input = await body(req);
-        if (!only(input, ['threadId']) || !threadId(input.threadId)) return json(res, 400, { error: 'Invalid thread identity' });
+        if (!only(input, ['threadId', 'providerInstanceId']) || !threadId(input.threadId) ||
+          input.providerInstanceId !== undefined && !['codex', 'claudeAgent'].includes(input.providerInstanceId)) return json(res, 400, { error: 'Invalid thread identity' });
         if (allocating >= 8) return json(res, 429, { error: 'Sandbox allocation is busy' });
         allocating++;
-        try { return json(res, 200, await allocator.allocate(ownerId, input.threadId)); }
+        try { return json(res, 200, await allocator.allocate(ownerId, input.threadId, providerInstanceId(input.providerInstanceId))); }
         finally { allocating--; }
       }
       if (req.method === 'POST' && url.pathname.startsWith('/_cloud/codex/')) {

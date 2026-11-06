@@ -3,6 +3,19 @@ import { mkdir, readFile, open, rename, readdir } from 'node:fs/promises';
 import { randomUUID, randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 
+// Missing provider fields belong to legacy Codex allocations only.
+export function providerInstanceId(value = 'codex') {
+  if (!['codex', 'claudeAgent'].includes(value)) throw Error('Unsupported provider instance');
+  return value;
+}
+export function providerMetadata(value) {
+  if (!value || !['authenticated', 'unauthenticated', 'unknown'].includes(value.authStatus) ||
+    !Array.isArray(value.models) || value.models.length > 256) throw Error('Provider metadata unavailable');
+  const slugs = value.models.map(model => model?.slug);
+  if (slugs.some(slug => typeof slug !== 'string' || !/^[a-zA-Z0-9._:-]{1,128}$/.test(slug)) || new Set(slugs).size !== slugs.length)
+    throw Error('Provider catalog unavailable');
+  return { models: slugs.map(slug => ({ slug })), authStatus: value.authStatus };
+}
 export const digest = value => createHash('sha256').update(value).digest('hex');
 export function canonicalJson(value) {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
@@ -81,20 +94,27 @@ export class AllocationStore {
   }
 }
 export class ThreadAllocator {
-  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup, reconcileCleanup }) {
+  constructor({ store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup, reconcileCleanup, admittedProviders = ['codex'] }) {
     if (!/^.+@sha256:[a-f0-9]{64}$/.test(image)) throw Error('Child image must be pinned by digest');
     bridgeAddress(bridgeUrl); edgeToken(edgeCredential);
+    this.admittedProviders = new Set(admittedProviders.map(providerInstanceId));
     Object.assign(this, { store, cloud, image, bridgeUrl, edgeCredential, registerEnvironment, cleanup, reconcileCleanup });
   }
-  async allocate(ownerId, threadId) {
+  async allocate(ownerId, threadId, requestedProvider) {
+    const provider = providerInstanceId(requestedProvider);
+    if (!this.admittedProviders.has(provider)) throw Error('Provider admission unavailable');
     identifier(ownerId); identifier(threadId);
     return this.store.serialized(threadId, async () => {
       let binding = await this.store.load(threadId);
       if (binding && binding.ownerId !== ownerId) throw Error('Allocation belongs to another owner');
+      if (binding && providerInstanceId(binding.providerInstanceId) !== provider) throw Error('Immutable allocation provider mismatch');
       if (binding?.state === 'revoked') throw Error('Allocation revoked');
-      if (binding) requireEdgeBinding(binding, this.edgeCredential);
+      if (binding) {
+        requireEdgeBinding(binding, this.edgeCredential);
+        if (binding.providerInstanceId === undefined) { binding.providerInstanceId = provider; await this.store.save(binding); }
+      }
       if (!binding) {
-        binding = { version: 1, ownerId, threadId, allocationId: randomUUID(), projectId: randomUUID(),
+        binding = { version: 1, ownerId, threadId, providerInstanceId: provider, allocationId: randomUUID(), projectId: randomUUID(),
           bridgeToken: randomBytes(32).toString('base64url'), execToken: randomBytes(32).toString('base64url'),
           edgeTokenHash: digest(this.edgeCredential), state: 'creating', nativeThreadId: null };
         binding.stack = `t3-${binding.allocationId.replaceAll('-', '').slice(0, 24)}`;
@@ -121,7 +141,7 @@ export class ThreadAllocator {
       if (binding.state !== 'ready') throw Error('Allocation not ready');
       await this.registerEnvironment(binding);
       const credential = await this.cloud.pair(binding);
-      return { allocationId: binding.allocationId, environmentId: binding.environmentId, threadId,
+      return { allocationId: binding.allocationId, environmentId: binding.environmentId, threadId, providerInstanceId: provider,
         project: { id: binding.projectId, title: 'Sandbox', workspaceRoot: '/work' },
         connection: { url: binding.t3Url, credential } };
     });
@@ -133,6 +153,10 @@ export class ThreadAllocator {
       if (binding.state === 'revoked') return this.reconcileRevocation(binding);
       binding.state = 'revoked';
       binding.rootStop = { briqId: binding.briqId, state: 'pending' };
+      if (providerInstanceId(binding.providerInstanceId) === 'claudeAgent') binding.nativeCleanup = {
+        allocationId: binding.allocationId, threadId: binding.threadId,
+        nativeId: binding.claudeNativeSessionId ?? null, state: 'pending',
+      };
       await this.store.save(binding);
       const failures = [];
       try { await this.cleanup?.(binding); } catch { failures.push(Error('Descendant cleanup requires reconciliation')); }
@@ -146,8 +170,15 @@ export class ThreadAllocator {
         try { await this.store.save(binding); } catch { /* Previous durable intent remains unresolved. */ }
         failures.push(Error('Workspace stop requires reconciliation'));
       }
+      if (this.unresolvedNativeCleanup(binding)) failures.push(Error('Native cleanup requires reconciliation'));
       if (failures.length) throw new AggregateError(failures, 'Allocation revoked; cleanup requires reconciliation');
     });
+  }
+  async restorationIssues() {
+    return (await this.store.list()).filter(binding => binding.state === 'ready' && binding.restoreState).map(binding => ({
+      threadId: binding.threadId, allocationId: binding.allocationId,
+      state: binding.restoreState === 'deferred' ? 'deferred' : 'reconciliation-required',
+    }));
   }
   async revocationIssues() {
     const issues = [];
@@ -159,7 +190,15 @@ export class ThreadAllocator {
     }
     return issues;
   }
+  unresolvedNativeCleanup(binding) {
+    const native = binding.nativeCleanup;
+    return providerInstanceId(binding.providerInstanceId) === 'claudeAgent' &&
+      (!native || native.allocationId !== binding.allocationId || native.threadId !== binding.threadId ||
+       native.nativeId !== (binding.claudeNativeSessionId ?? null) || native.state !== 'completed');
+  }
   unresolvedCleanup(binding, operations) {
+    // Root/descendant evidence cannot establish the central native owner's lifetime.
+    if (this.unresolvedNativeCleanup(binding)) return true;
     return operations.some(row => row.method === 'briq/scoped' && row.allocationId === binding.allocationId &&
       (row.state !== 'completed' || row.cleanup && row.cleanup.state !== 'completed' || row.resource?.state === 'live' || row.exec && !row.exec.terminal));
   }
@@ -174,7 +213,7 @@ export class ThreadAllocator {
     await this.reconcileCleanup?.(binding);
     const operations = await this.store.listOperations(binding.threadId);
     if (this.unresolvedCleanup(binding, operations))
-      throw Error('Revoked descendant cleanup requires reconciliation');
+      throw Error('Revoked allocation cleanup requires reconciliation');
   }
 
 }

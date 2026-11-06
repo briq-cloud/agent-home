@@ -15,17 +15,28 @@ export function briqStatus(env, run = execFile) {
 }
 
 // Keep credential files under each native CLI's existing home. No credentials are read here.
-export function nativeConnections(env = process.env, { signIn = (options, ended) => new SignIn(options, undefined, {}, ended), claudeCredentialOwner, briqCredentialOwner, status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
+export function nativeConnections(env = process.env, { signIn = (options, ended) => new SignIn(options, undefined, { direct: options.name === 'claude' }, ended), claudeCredentialOwner, briqCredentialOwner, status = commandStatus, briqIdentity = briqStatus, pair = execFile } = {}) {
   const mcpConfigured = Boolean(env.BRIQ_MCP_TOKEN);
   env = helperEnvironment(env);
   let releaseClaude, releaseBriq;
-  const claude = signIn({ name: 'claude', login: ['claude', 'auth', 'login'] }, () => { releaseClaude?.(); releaseClaude = undefined; });
+  let claudeLifetimeUnknown = false;
+  const claude = signIn({ name: 'claude', login: ['claude', 'auth', 'login'] }, outcome => {
+    if (outcome === 'terminated' || outcome === 'never-spawned') { releaseClaude?.(); releaseClaude = undefined; }
+    else { claudeLifetimeUnknown = true; claudeCredentialOwner?.quarantine(); }
+  });
   const claudeStatus = async () => {
     if (releaseClaude) return null;
     let release;
     try { release = claudeCredentialOwner?.acquire({ kind: 'status' }); }
     catch { return null; }
-    try { return await status(['claude', 'auth', 'status'], env); } finally { release?.(); }
+    let lifetime = 'unknown';
+    try {
+      return await status(['claude', 'auth', 'status'], env, undefined, false, undefined,
+        { onLifetime: outcome => { lifetime = outcome; } });
+    } finally {
+      if (lifetime === 'terminated' || lifetime === 'never-spawned') release?.();
+      else claudeCredentialOwner?.quarantine();
+    }
   };
   const briq = signIn({ name: 'briq', login: ['briq', 'login'] }, () => { releaseBriq?.(); releaseBriq = undefined; });
   const briqStatusOwned = async () => {
@@ -40,6 +51,7 @@ export function nativeConnections(env = process.env, { signIn = (options, ended)
         briq: { authenticated: await briqStatusOwned(), signIn: briq.status, mcp: mcpConfigured ? 'configured-unverified' : 'unconfigured' } };
     },
     claudeLogin: () => {
+      if (claudeLifetimeUnknown) throw Error('Claude credential process lifetime unknown');
       if (!releaseClaude) releaseClaude = claudeCredentialOwner?.acquire({ kind: 'sign-in' });
       // start() returns at the authorization page. Release only when its native
       // process exits; cancel() and a failed UI state are not exit evidence.

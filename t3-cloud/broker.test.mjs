@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
 import { AllocationStore, ThreadAllocator } from './allocations.mjs';
-import { CapabilityBroker } from './broker.mjs';
+import { CapabilityBroker, resumeScopedCodex } from './broker.mjs';
 
 async function fixture(t, { send, briqTransport } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 't3-bindings-'));
@@ -13,15 +13,19 @@ async function fixture(t, { send, briqTransport } = {}) {
   const store = new AllocationStore(directory); await store.initialize();
   const calls = []; const responses = new Map(); const wire = [];
   const app = { events: new EventEmitter(), notify: message => wire.push(message), request: async (method, params) => {
+    if (['account/read', 'model/list'].includes(method) && responses.has(method)) return responses.get(method)(params);
+    if (method === 'account/read') return { account: { type: 'chatgpt' } };
+    if (method === 'model/list') return { data: [{ model: 'mock', isDefault: true }] };
     calls.push({ method, params });
     if (responses.has(method)) return responses.get(method)(params);
+    if (method === 'thread/unsubscribe') return { status: 'unsubscribed' };
     if (method === 'turn/start') return { turn: { id: 'turn-a', status: 'inProgress' } };
-    if (method === 'thread/start') return { thread: { id: 'native-a', environments: params.environments } };
+    if (method === 'thread/start') return { model: 'mock', thread: { model: 'mock', id: 'native-a', environments: params.environments } };
     return {};
   } };
   const broker = new CapabilityBroker({ store, app, briqTransport });
   for (const name of ['a', 'b']) await store.save({ ownerId: 'owner', threadId: name, allocationId: `allocation-${name}`, bridgeToken: `cap-${name}`, execToken: `exec-${name}`,
-    execEnvironmentId: `exec-${name}`, execUrl: `wss://exec-${name}.example`, state: 'ready', nativeThreadId: name === 'b' ? 'native-b' : null });
+    execEnvironmentId: `exec-${name}`, execUrl: `wss://exec-${name}.example`, state: 'ready', nativeModel: 'mock', nativeThreadId: name === 'b' ? 'native-b' : null });
   const received = []; const bReceived = [];
   const session = await broker.connect('cap-a', message => { received.push(message); return send?.(message); }, () => {});
   const bSession = await broker.connect('cap-b', message => bReceived.push(message), () => {});
@@ -43,7 +47,7 @@ test('replays a durable scoped result after disconnect and broker restart withou
   const f = await fixture(t);
   let resolveNative; let dispatched;
   const started = new Promise(resolve => { dispatched = resolve; });
-  f.responses.set('thread/start', params => new Promise(resolve => { resolveNative = () => resolve({ thread: { id: 'native-a', environments: params.environments } }); dispatched(); }));
+  f.responses.set('thread/start', params => new Promise(resolve => { resolveNative = () => resolve({ model: 'mock', thread: { model: 'mock', id: 'native-a', environments: params.environments } }); dispatched(); }));
   const request = scoped(1, 'thread-intent-a', 'thread/start', { model: 'mock' });
   const pending = f.session.receive(request); await started; f.session.close(); resolveNative(); await pending;
   assert.equal((await f.store.loadOperation('a', 'thread-intent-a')).state, 'completed');
@@ -81,7 +85,7 @@ test('a local send callback followed by disconnect still replays the same scoped
 });
 test('requires a correlated adoption receipt before another scoped mutation and keeps adopted replay results', async t => {
   const f = await fixture(t);
-  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  f.responses.set('thread/read', () => ({ model: 'mock', thread: { model: 'mock', id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
   const request = scoped(1, 'thread-intent-a', 'thread/start', {});
   await f.session.receive(request);
   const resultHash = f.received.at(-1).result.resultHash;
@@ -168,19 +172,23 @@ test('retains unknown native create outcome without replay', async t => {
 });
 test('checks returned resume binding and forces every turn selection', async t => {
   const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
-  f.responses.set('thread/resume', () => ({ thread: { id: 'native-a', environments: [{ environmentId: 'local', cwd: '/work' }] } }));
+  f.responses.set('thread/resume', () => ({ model: 'mock', thread: { model: 'mock', id: 'native-a', environments: [{ environmentId: 'local', cwd: '/work' }] } }));
   await f.session.receive({ id: 1, method: 'thread/resume', params: { threadId: 'native-a', excludeTurns: true } });
   assert.ok(f.received.at(-1).error);
-  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
-  await f.session.receive({ id: 2, method: 'turn/start', params: { threadId: 'native-a', input: [{ type: 'text', text: 'hello' }] } });
-  assert.equal(f.calls.find(x => x.method === 'turn/start').params.environments[0].environmentId, 'exec-a');
-  assert.ok(f.received.at(-1).result);
+  assert.equal((await f.store.load('a')).nativeState, 'unknown');
+  const verified = await fixture(t); const current = await verified.store.load('a'); current.nativeThreadId = 'native-a'; await verified.store.save(current);
+  verified.responses.set('thread/read', () => ({ thread: { model: 'mock', id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  await verified.session.receive({ id: 2, method: 'turn/start', params: { threadId: 'native-a', input: [{ type: 'text', text: 'hello' }] } });
+  assert.equal(verified.calls.find(x => x.method === 'turn/start').params.environments[0].environmentId, 'exec-a');
+  assert.ok(verified.received.at(-1).result);
 });
 test('demultiplexes notifications and approvals; one shim exit never closes the app-server or peer', async t => {
   const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
   await f.bSession.receive({ id: 0, method: 'initialize', params: {} });
   await f.broker.deliver({ method: 'item/agentMessage/delta', params: { threadId: 'native-a', delta: 'a' } });
   assert.equal(f.bReceived.length, 1);
+  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', model: 'mock', environments: [{environmentId:'exec-a',cwd:'/work'}] } }));
+  await f.session.receive({ id: 50, method: 'turn/start', params: { threadId:'native-a',input:[{type:'text',text:'approval fixture'}] } });
   await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
   await f.broker.deliver({ id: 100, method: 'item/commandExecution/requestApproval', params: { threadId: 'native-a', environmentId: 'exec-b', turnId: 'turn-a', itemId: 'item-a', startedAtMs: 123 } });
   assert.ok(f.wire.at(-1).error);
@@ -214,7 +222,7 @@ test('interrupt bypasses a pending turn start; late completion never resurrects 
   const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
   let finish, started; const signal = new Promise(resolve => { started = resolve; });
   f.responses.set('turn/start', () => { started(); return new Promise(resolve => { finish = resolve; }); });
-  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  f.responses.set('thread/read', () => ({ model: 'mock', thread: { model: 'mock', id: 'native-a', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
   const pending = f.session.receive({ id: 1, method: 'turn/start', params: { threadId: 'native-a', input: [{ type: 'text', text: 'hello' }] } });
   await signal;
   await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
@@ -228,6 +236,8 @@ test('interrupt bypasses a pending turn start; late completion never resurrects 
 });
 test('approval response revalidates current turn and file approvals bind without fictional environmentId', async t => {
   const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', model: 'mock', environments: [{environmentId:'exec-a',cwd:'/work'}] } }));
+  await f.session.receive({ id: 50, method: 'turn/start', params: { threadId:'native-a',input:[{type:'text',text:'approval fixture'}] } });
   await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
   await f.broker.deliver({ id: 7, method: 'item/fileChange/requestApproval', params: { threadId: 'native-a', turnId: 'turn-a', itemId: 'file-a', startedAtMs: 123 } });
   const id = f.received.at(-1).id; assert.match(id, /^approval-/);
@@ -243,7 +253,7 @@ async function reconnect(f) {
 async function prepareCompletedTurn(f) {
  const binding=await f.store.load('a');binding.nativeThreadId='native-a';await f.store.save(binding);
  f.responses.set('turn/start',()=>({turn:{id:'completed-turn',status:'completed'}}));
- f.responses.set('thread/read',()=>({thread:{id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+ f.responses.set('thread/read',()=>({thread:{model:'mock',id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
 }
 const turnRequest=id=>({id,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'once'}]}});
 test('disconnect during native mutation retains quarantine after authoritative native response arrives',async t=>{
@@ -426,6 +436,7 @@ test('receipt-only lookup enforces initialization, request identity and current 
   const f = await fixture(t);
   const request = scoped(1, 'receipt-boundary', 'thread/start', {});
   await f.session.receive(request);
+  f.session.close();
   const replies = []; const session = await f.broker.connect('cap-a', message => replies.push(message), () => {});
   await session.receive(receiptRequest(request, 2));
   assert.equal(replies.at(-1).error.code, -32600);
@@ -450,7 +461,7 @@ test('receipt-only lookups serialize with a live execute and never cause a secon
   let releaseNative, signalStarted;
   const started = new Promise(resolve => { signalStarted = resolve; });
   f.responses.set('thread/start', params => new Promise(resolve => {
-    releaseNative = () => resolve({ thread: { id: 'native-a', environments: params.environments } }); signalStarted();
+    releaseNative = () => resolve({ model: 'mock', thread: { model: 'mock', id: 'native-a', environments: params.environments } }); signalStarted();
   }));
   const request = scoped(1, 'receipt-concurrent', 'thread/start', {});
   const execution = f.session.receive(request); await started;
@@ -483,19 +494,214 @@ test('receipt-only delivery failure stays pending and the stored receipt remains
 
  test('central start and resume own scoped MCP config and child config cannot override it', async t => {
   const bindings=[];
-  const briqTransport={bind:binding=>{bindings.push(binding.threadId);return{config:{'mcp_servers.briq':{url:'http://127.0.0.1:8080/_cloud/briq/mcp',http_headers:{Authorization:`Bearer scoped-${binding.threadId}`}}},activate:()=>{},revoke:()=>{}};},revoke:()=>{}};
+  const briqTransport={closeTurn:nativeId=>assert.equal(nativeId,'native-a'),claimOwner:(binding,owner)=>{assert.ok(['a','b'].includes(binding.threadId));assert.ok(owner);},toolNames:()=>['briq_docs'],bind:binding=>{bindings.push(binding.threadId);return{config:{'mcp_servers.briq':{url:'http://127.0.0.1:8080/_cloud/briq/mcp',http_headers:{Authorization:`Bearer scoped-${binding.threadId}`}}},activate:()=>{},waitObserved:async()=>{},ready:()=>{},revoke:()=>{}};},revoke:()=>{}};
   const f=await fixture(t,{briqTransport});
   await f.session.receive({id:1,method:'thread/start',params:{config:{'mcp_servers.evil':{url:'https://evil.example'}}}});
   assert.equal(f.calls.length,0);
-  f.responses.set('thread/start',params=>({config:params.config,thread:{id:'native-a',environments:params.environments,config:params.config}}));
+  f.responses.set('thread/start',params=>({model:'mock',config:params.config,thread:{model:'mock',id:'native-a',environments:params.environments,config:params.config}}));
   await f.session.receive({id:2,method:'thread/start',params:{}});
   assert.equal(f.calls[0].params.config['mcp_servers.briq'].http_headers.Authorization,'Bearer scoped-a');
   assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
-  f.responses.set('thread/resume',params=>({config:params.config,thread:{id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+  f.responses.set('thread/resume',params=>({model:'mock',config:params.config,thread:{model:'mock',id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+  f.responses.set('thread/read',()=>({thread:{id:'native-a',status:{type:'idle'},canAcceptDirectInput:true,environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+  f.responses.set('mcpServerStatus/list',()=>({data:[{name:'briq',tools:{briq_docs:{}}}]}));
   await f.session.receive({id:3,method:'thread/resume',params:{threadId:'native-a'}});
-  assert.equal(f.calls.at(-1).params.config['mcp_servers.briq'].http_headers.Authorization,'Bearer scoped-a');
+  assert.equal(f.calls.findLast(row=>row.method==='thread/resume').params.config['mcp_servers.briq'].http_headers.Authorization,'Bearer scoped-a');
   assert.deepEqual(bindings,['a','a']);
   assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
   await f.broker.deliver({method:'thread/started',params:{threadId:'native-a',config:{'mcp_servers.briq':{http_headers:{Authorization:'Bearer scoped-a'}}}}});
   assert.equal(JSON.stringify(f.received.at(-1)).includes('scoped-a'),false);
  });
+
+test('immutable allocation provider is durable before effect and rejects incompatible retry and default admission', async t => {
+  const f = await fixture(t); let creates = 0;
+  const cloud = { create: async binding => {
+    creates++; assert.equal((await f.store.load(binding.threadId)).providerInstanceId, 'claudeAgent');
+    throw Error('uncertain');
+  }, find: async () => null };
+  const options = { store: f.store, cloud, image: `image@sha256:${'a'.repeat(64)}`, bridgeUrl: 'wss://central.example/_cloud/bridge', edgeCredential: 'e'.repeat(32), registerEnvironment: async () => {} };
+  await assert.rejects(new ThreadAllocator(options).allocate('owner', 'new', 'claudeAgent'), /admission/);
+  assert.equal(await f.store.load('new'), null); assert.equal(creates, 0);
+  const allocator = new ThreadAllocator({ ...options, admittedProviders: ['codex', 'claudeAgent'] });
+  await assert.rejects(allocator.allocate('owner', 'new', 'claudeAgent'), /unknown/);
+  await assert.rejects(allocator.allocate('owner', 'new'), /provider mismatch/);
+  await assert.rejects(allocator.allocate('owner', 'new', 'claudeAgent'), /unknown/);
+  await assert.rejects(allocator.allocate('owner', 'a', 'claudeAgent'), /provider mismatch/);
+  await assert.rejects(allocator.allocate('owner', 'custom', 'custom'), /Unsupported/);
+  assert.equal(creates, 1);
+});
+test('bridge capabilities expose exact safe metadata and bind every request to persisted provider', async t => {
+  const f = await fixture(t);
+  await f.session.receive({ id: 1, method: 'bridge/capabilities' });
+  assert.deepEqual(f.received.at(-1).result, { providerInstanceId: 'codex', threadId: 'a', models: [{ slug: 'mock' }], authStatus: 'authenticated' });
+  await f.session.receive({ id: 2, method: 'claude/allocate' });
+  assert.ok(f.received.at(-1).error); assert.equal(f.calls.length, 0);
+  const binding = await f.store.load('a');
+  await f.store.save({ ...binding, providerInstanceId: 'claudeAgent' });
+  await f.session.receive({ id: 3, method: 'bridge/capabilities' });
+  assert.ok(f.received.at(-1).error);
+});
+test('Claude capability cannot use Codex initialization, operation receipts or environment registration', async t => {
+  const f = await fixture(t); const binding = { ...await f.store.load('a'), providerInstanceId: 'claudeAgent' }; await f.store.save(binding);
+  const broker = new CapabilityBroker({ store: f.store, app: f.app, admittedProviders: ['codex', 'claudeAgent'], claude: { enabled: true, capabilities: async () => ({ models: [{ slug: 'claude-fixture' }], authStatus: 'authenticated', secret: 'never-return' }) } });
+  await broker.registerEnvironment(binding); assert.equal(f.calls.length, 0);
+  const replies = []; const session = await broker.connect('cap-a', message => replies.push(message), () => {});
+  await session.receive({ id: 1, method: 'bridge/capabilities' });
+  assert.deepEqual(replies.at(-1).result, { providerInstanceId: 'claudeAgent', threadId: 'a', models: [{ slug: 'claude-fixture' }], authStatus: 'authenticated' });
+  for (const method of ['initialize', 'thread/start', 'briq/operation/receipt']) {
+    await session.receive({ id: 2, method }); assert.ok(replies.at(-1).error);
+  }
+  assert.equal(f.calls.length, 0);
+});
+
+test('omitted initial model uses unique native catalog default and verifies top-level start model', async t => {
+  const f = await fixture(t);
+  await f.session.receive({ id: 1, method: 'thread/start', params: {} });
+  assert.equal(f.calls[0].params.model, 'mock');
+  assert.equal((await f.store.load('a')).nativeModel, 'mock');
+  const other = await fixture(t);
+  other.responses.set('model/list', () => ({ data: [{ model: 'mock', isDefault: false }] }));
+  await other.session.receive({ id: 1, method: 'thread/start', params: {} });
+  assert.ok(other.received.at(-1).error); assert.equal(other.calls.length, 0);
+});
+test('removed model cannot continue by explicit selection, omission, steer or resume', async t => {
+  const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; binding.nativeModel = 'old'; await f.store.save(binding);
+  f.responses.set('model/list', () => ({ data: [{ model: 'new', isDefault: true }] }));
+  f.broker.activeTurns.set('native-a', 'active');
+  for (const [method, params] of [
+    ['turn/start', { threadId: 'native-a', model: 'old', input: [{ type: 'text', text: 'denied' }] }],
+    ['turn/start', { threadId: 'native-a', input: [{ type: 'text', text: 'denied' }] }],
+    ['thread/resume', { threadId: 'native-a' }],
+    ['turn/steer', { threadId: 'native-a', expectedTurnId: 'active', input: [{ type: 'text', text: 'denied' }] }],
+  ]) { await f.session.receive({ id: 2, method, params }); assert.ok(f.received.at(-1).error); }
+  assert.equal(f.calls.length, 0);
+});
+test('omitted turn pins admitted binding model rather than changed account default', async t => {
+  const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.responses.set('model/list', () => ({ data: [{ model: 'mock', isDefault: false }, { model: 'new', isDefault: true }] }));
+  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', model: 'mock', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  await f.session.receive({ id: 1, method: 'turn/start', params: { threadId: 'native-a', input: [{ type: 'text', text: 'hello' }] } });
+  assert.equal(f.calls.find(call => call.method === 'turn/start').params.model, 'mock');
+  assert.equal((await f.store.load('a')).turnState, 'bound');
+});
+test('resume validates native top-level model and quarantines mismatched response', async t => {
+  const f = await fixture(t); const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.responses.set('thread/resume', () => ({ model: 'wrong', thread: { id: 'native-a', model: 'mock', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  await f.session.receive({ id: 1, method: 'thread/resume', params: { threadId: 'native-a' } });
+  assert.ok(f.received.at(-1).error); assert.equal((await f.store.load('a')).nativeState, 'unknown');
+  const count = f.calls.length;
+  await f.session.receive({ id: 2, method: 'turn/start', params: { threadId: 'native-a', model: 'mock', input: [{ type: 'text', text: 'denied' }] } });
+  assert.ok(f.received.at(-1).error); assert.equal(f.calls.length, count);
+});
+test('start response model mismatch retains unknown effect and cannot produce a clean durable receipt', async t => {
+  const f = await fixture(t);
+  f.responses.set('thread/start', params => ({ model: 'wrong', thread: { id: 'native-a', environments: params.environments } }));
+  await f.session.receive(scoped(1, 'wrong-model-start', 'thread/start', {}));
+  assert.equal((await f.store.load('a')).nativeState, 'unknown');
+  assert.equal((await f.store.loadOperation('a', 'wrong-model-start')).state, 'uncertain');
+  assert.ok(f.received.at(-1).error);
+});
+
+test('Codex durable receipt/adoption and exact interrupt remain available during metadata outage',async t=>{
+ const f=await fixture(t);const request=scoped(1,'recover-no-auth','thread/start',{});await f.session.receive(request);
+ const receipt=f.received.at(-1).result;assert.ok(receipt.result.thread.id);
+ f.responses.set('account/read',()=>{throw Error('metadata unavailable');});
+ await f.session.receive({id:2,method:'briq/operation/receipt',params:request.params});assert.deepEqual(f.received.at(-1).result,receipt);
+ await f.session.receive({id:3,method:'briq/operation/adopt',params:{key:'recover-no-auth',nativeId:'native-a',resultHash:receipt.resultHash,eventSequence:7}});assert.deepEqual(f.received.at(-1).result,{});
+ f.broker.activeTurns.set('native-a','active');
+ await f.session.receive({id:4,method:'turn/interrupt',params:{threadId:'native-a',turnId:'active'}});assert.deepEqual(f.received.at(-1).result,{});
+ const count=f.calls.length;
+ await f.session.receive({id:5,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'denied'}]}});assert.ok(f.received.at(-1).error);assert.equal(f.calls.length,count);
+});
+
+test('deferred restart requires admitted verified resume before new prompt dispatch',async t=>{
+ const f=await fixture(t);const binding=await f.store.load('a');Object.assign(binding,{nativeThreadId:'native-a',nativeState:'bound',restoreState:'deferred'});await f.store.save(binding);
+ await f.session.receive({id:1,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'blocked until resumed'}]}});
+ assert.ok(f.received.at(-1).error);assert.deepEqual(f.calls,[]);
+ f.responses.set('thread/resume',()=>({model:'mock',thread:{id:'native-a',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+ f.responses.set('thread/read',()=>({thread:{id:'native-a',model:'mock',status:{type:'idle'},canAcceptDirectInput:true,environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+ await f.session.receive({id:2,method:'thread/resume',params:{threadId:'native-a'}});assert.equal(f.received.at(-1).error,undefined);
+ assert.equal((await f.store.load('a')).restoreState,undefined);assert.equal(f.calls.find(row=>row.method==='thread/resume').params.model,'mock');
+ await f.session.receive({id:3,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'new prompt'}]}});
+ assert.equal(f.received.at(-1).error,undefined);assert.equal(f.calls.filter(row=>row.method==='turn/start').length,1);
+});
+
+
+for (const shutdownSucceeds of [true, false]) test(`idle scoped resume detects subscribed override fallback (shutdown=${shutdownSucceeds})`, async () => {
+ const binding={threadId:'a',allocationId:'allocation-a',nativeThreadId:'native-a'};
+ const owner={closed:false}, calls=[], other={id:'native-b',token:'unchanged-b'};
+ let subscribed=true, installed='old', observed=false, revoked=0, usable=false;
+ const config={'mcp_servers.briq':{http_headers:{Authorization:'new'}}};
+ const transport={closeTurn:()=>calls.push('lease-close'),toolNames:()=>['briq_docs'],bind:()=>{
+  calls.push('bind');installed=installed==='old'?'old':installed;
+  return {config,activate:(native,session)=>{assert.equal(native,'native-a');assert.equal(session,'session-a');},
+   waitObserved:async()=>{if(!observed)throw Error('New MCP client not observed');},ready:()=>{usable=true;},revoke:()=>{revoked++;}};
+ }};
+ const app={request:async(method,params)=>{
+  calls.push(method);
+  if(method==='thread/read')return{thread:{id:'native-a',status:{type:'idle'},canAcceptDirectInput:true}};
+  if(method==='thread/unsubscribe'){assert.deepEqual(params,{threadId:'native-a'});subscribed=false;return{status:'unsubscribed'};}
+  if(method==='thread/resume'){
+   // Faithful pinned behavior: config is ignored while subscribed or if native
+   // shutdown fails; the RPC itself still succeeds with the old client.
+   if(!subscribed&&shutdownSucceeds)installed=params.config['mcp_servers.briq'].http_headers.Authorization;
+   subscribed=true;return{thread:{id:'native-a',sessionId:'session-a'}};
+  }
+  if(method==='mcpServerStatus/list'){if(installed==='new')observed=true;return{data:[{name:'briq',tools:{briq_docs:{}}}]};}
+  throw Error('unexpected request');
+ }};
+ await app.request('thread/resume',{threadId:'native-a',config});assert.equal(installed,'old');calls.length=0;
+ const attempt=resumeScopedCodex({app,transport,binding,owner,params:{excludeTurns:true},check:async()=>{},verify:async()=>{}});
+ if(shutdownSucceeds){await attempt;assert.equal(usable,true);assert.equal(revoked,0);}
+ else{await assert.rejects(attempt,/not observed/);assert.equal(usable,false);assert.equal(revoked,1);}
+ assert.deepEqual(calls,['thread/read','lease-close','bind','thread/unsubscribe','thread/resume','mcpServerStatus/list']);
+ assert.deepEqual(other,{id:'native-b',token:'unchanged-b'});
+});
+
+test('unsolicited or completed native turn events cannot reopen scoped turn authority', async t => {
+ const f=await fixture(t);
+ f.broker.observeTurn({method:'turn/started',params:{threadId:'native-a',turn:{id:'unsolicited'}}});
+ assert.equal(f.broker.activeTurns.has('native-a'),false);
+ const owner=[...f.broker.sessions].find(session=>session.threadId==='a');
+ const pending={session:owner,intent:'pending',turnId:null,closed:false};f.broker.pendingTurns.set('native-a',pending);
+ f.broker.observeTurn({method:'turn/completed',params:{threadId:'native-a',turn:{id:'early-completed'}}});
+ f.broker.observeTurn({method:'turn/started',params:{threadId:'native-a',turn:{id:'early-completed'}}});
+ assert.equal(pending.closed,true);assert.equal(f.broker.activeTurns.has('native-a'),false);
+});
+
+test('settled scoped operations admit next native turn; unknown families and uncertainty do not', async t => {
+ const f=await fixture(t);const binding=await f.store.load('a');binding.nativeThreadId='native-a';await f.store.save(binding);
+ const session=[...f.broker.sessions].find(value=>value.threadId==='a');
+ const record={version:1,key:'scoped-receipt',method:'briq/scoped',providerInstanceId:'codex',threadId:'a',allocationId:'allocation-a',nativeId:'native-a',turnId:'completed-turn',requestId:'native-call',state:'completed'};
+ await f.store.saveOperation('a',record);await f.broker.assertMutationAllowed(session);
+ for(const changed of [{state:'unknown'},{state:'started'},{method:'unknown/family'},{providerInstanceId:'claudeAgent'},{nativeId:'native-b'}]){
+  await f.store.saveOperation('a',{...record,...changed});await assert.rejects(f.broker.assertMutationAllowed(session));
+ }
+});
+
+
+test('completed scoped mutation permits the next native turn and preserves later turn admission', async t => {
+ const f=await fixture(t);const binding=await f.store.load('a');binding.nativeThreadId='native-a';await f.store.save(binding);
+ await f.store.saveOperation('a',{version:1,key:'completed-scoped',method:'briq/scoped',providerInstanceId:'codex',threadId:'a',allocationId:'allocation-a',nativeId:'native-a',turnId:'old-turn',requestId:'old-call',state:'completed'});
+ let count=0;f.responses.set('turn/start',()=>({turn:{id:`next-${++count}`,status:'inProgress'}}));
+ f.responses.set('thread/read',()=>({thread:{id:'native-a',model:'mock',environments:[{environmentId:'exec-a',cwd:'/work'}]}}));
+ for(const id of [1,2]){
+  await f.session.receive({id,method:'turn/start',params:{threadId:'native-a',input:[{type:'text',text:'next task'}]}});
+  assert.equal(f.received.at(-1).error,undefined);
+  await f.broker.deliver({method:'turn/completed',params:{threadId:'native-a',turn:{id:`next-${id}`}}});
+ }
+ assert.equal(count,2);assert.equal((await f.store.loadOperation('a','completed-scoped')).state,'completed');
+});
+
+test('active or pending native turn denies rotation and competing bridge owner', async t => {
+ const f=await fixture(t);const binding=await f.store.load('a');binding.nativeThreadId='native-a';await f.store.save(binding);
+ await assert.rejects(f.broker.connect('cap-a',()=>{},()=>{}),/owner busy/);
+ for(const state of ['active','pending']){
+  if(state==='active')f.broker.activeTurns.set('native-a','running');
+  else{f.broker.activeTurns.clear();f.broker.pendingTurns.set('native-a',{intent:'pending',closed:false});}
+  await f.session.receive({id:state,method:'thread/resume',params:{threadId:'native-a'}});
+  assert.ok(f.received.at(-1).error);
+ }
+ assert.equal(f.calls.some(row=>['thread/unsubscribe','thread/resume'].includes(row.method)),false);
+ assert.equal((await f.store.load('a')).nativeState,undefined);
+});

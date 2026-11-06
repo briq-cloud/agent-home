@@ -32,14 +32,14 @@ test('Claude sign-in retains the query credential owner through cancel until nat
  const owner=new ClaudeCredentialOwner();let ended,statusCalls=0,cancels=0;
  const connections=nativeConnections({}, {claudeCredentialOwner:owner,
   signIn:({name},onEnd)=>{if(name==='claude')ended=onEnd;return{status:{state:'waiting'},start:async()=>({state:'waiting'}),cancel:()=>{cancels++;},input:()=>true};},
-  status:async()=>{statusCalls++;return true;},briqIdentity:async()=>false});
+  status:async(_command,_env,_timeout,_subscription,_billing,options)=>{statusCalls++;options.onLifetime('terminated');return true;},briqIdentity:async()=>false});
  const releaseQuery=owner.acquire({kind:'query'});
  assert.throws(()=>connections.claudeLogin(),/busy/);
  assert.equal((await connections.status()).claude.authenticated,null);assert.equal(statusCalls,0);
  releaseQuery();await connections.claudeLogin();
  assert.throws(()=>owner.acquire({kind:'query'}),/busy/);
  connections.claudeCancel();assert.equal(cancels,1);assert.throws(()=>owner.acquire({kind:'query'}),/busy/);
- ended();const release=owner.acquire({kind:'query'});release();
+ ended('terminated');const release=owner.acquire({kind:'query'});release();
  assert.equal((await connections.status()).claude.authenticated,true);assert.equal(statusCalls,1);
 });
 

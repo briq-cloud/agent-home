@@ -9,15 +9,15 @@ const key = 'owner-key-for-test-only-1234567890123456';
 const allocationKey = 'allocation-key-test-only-1234567890123456';
 const origin = 'https://cloud.example';
 const connections = { status: async () => ({claude: { authenticated: false }, briq: { authenticated: null }}), pair: async () => ({pairUrl: 'https://cloud.example/pair#token=short-lived'}) };
-async function fixture(t, revocationIssues) {
+async function fixture(t, revocationIssues, ownerRequest, restorationIssues) {
   const seen = [];
   const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged','briq_token=forged']); res.end(req.url); });
   upstream.on('upgrade', (req,socket,head) => { seen.push(req.headers); socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'); if(head.length)socket.write(head); socket.pipe(socket); });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
   const allocations = [], rpc=[];
   const manager = createCloudManager({role:'central',publicOrigin:origin,ownerKey:key,ownerId:'owner-1',allocatorToken:allocationKey,connections,
-    allocator:{revocationIssues, async allocate(owner,thread){allocations.push([owner,thread]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
-    broker:{async ownerRequest(method,params){rpc.push([method,params]); return method==='account/login/start'?{type:'chatgptDeviceCode',loginId:'native-login',userCode:'TEST-CODE',verificationUrl:'https://auth.example/device',accessToken:'never-export'}:{account:null};}},
+    allocator:{revocationIssues,restorationIssues, async allocate(owner,thread,provider){allocations.push([owner,thread,provider]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
+    broker:{async ownerRequest(method,params){rpc.push([method,params]);if(ownerRequest)return ownerRequest(method,params); return method==='account/login/start'?{type:'chatgptDeviceCode',loginId:'native-login',userCode:'TEST-CODE',verificationUrl:'https://auth.example/device',accessToken:'never-export'}:{account:null};}},
     t3Target:`http://127.0.0.1:${upstream.address().port}`,terminalTarget:`http://127.0.0.1:${upstream.address().port}`});
   manager.listen(0,'127.0.0.1');await once(manager,'listening');
   t.after(()=>{manager.closeAllConnections();manager.close();upstream.closeAllConnections();upstream.close();});
@@ -34,7 +34,7 @@ test('owner bootstrap creates secure opaque cookie; rejects cross-origin mutatio
 });
 test('allocation-only capability cannot access owner APIs or change owner binding',async t=>{
  const f=await fixture(t);const authorization=`Bearer ${allocationKey}`;
- let r=await f.post('/_cloud/threads',{threadId:'thread-1'},{authorization,origin:''});assert.equal(r.status,200);assert.deepEqual(f.allocations,[['owner-1','thread-1']]);
+ let r=await f.post('/_cloud/threads',{threadId:'thread-1'},{authorization,origin:''});assert.equal(r.status,200);assert.deepEqual(f.allocations,[['owner-1','thread-1','codex']]);
  r=await f.post('/_cloud/threads',{threadId:'thread-2',ownerId:'other'},{authorization});assert.equal(r.status,400);
  r=await f.send('/_cloud/connections',{headers:{authorization}});assert.equal(r.status,401);
  r=await f.post('/_cloud/threads',{threadId:'thread-3'},{authorization:'Bearer wrong'});assert.equal(r.status,401);
@@ -75,4 +75,22 @@ test('owner connection status exposes only safe revoked allocation recovery fiel
  assert.equal(result.status,200);assert.equal(reads,1);
  assert.deepEqual(JSON.parse(result.text).revocations,[{threadId:'thread-revoked',allocationId:'allocation-revoked',state:'reconciliation-required'}]);
  assert.equal(result.text.includes('never-export'),false);
+});
+
+test('allocator HTTP contract carries exact provider preference and rejects arbitrary instance IDs',async t=>{
+ const f=await fixture(t);const authorization=`Bearer ${allocationKey}`;
+ let r=await f.post('/_cloud/threads',{threadId:'claude',providerInstanceId:'claudeAgent'},{authorization});
+ assert.equal(r.status,200);assert.deepEqual(f.allocations,[['owner-1','claude','claudeAgent']]);
+ for(const providerInstanceId of ['custom','claude',null]) {
+  r=await f.post('/_cloud/threads',{threadId:'denied',providerInstanceId},{authorization});assert.equal(r.status,400);
+ }
+ assert.equal(f.allocations.length,1);
+});
+
+test('owner status and device sign-in remain available when account metadata fails',async t=>{
+ const f=await fixture(t,undefined,async method=>{if(method==='account/read')throw Error('unavailable private detail');return{type:'chatgptDeviceCode',loginId:'recover',userCode:'CODE',verificationUrl:'https://auth.example/device'};},async()=>[{threadId:'t3',allocationId:'allocation',state:'deferred',privateDetail:'must not export'}]);
+ const status=await f.send('/_cloud/connections',{headers:{authorization:`Bearer ${key}`}});
+ assert.equal(status.status,200);const value=JSON.parse(status.text);assert.deepEqual(value.codex,{unavailable:true});
+ assert.deepEqual(value.restorations,[{threadId:'t3',allocationId:'allocation',state:'deferred'}]);assert.equal(status.text.includes('private'),false);
+ const login=await f.post('/_cloud/codex/login',{}, {authorization:`Bearer ${key}`});assert.equal(login.status,200);assert.equal(JSON.parse(login.text).loginId,'recover');
 });

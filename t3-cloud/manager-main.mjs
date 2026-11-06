@@ -43,6 +43,7 @@ export async function startManager(env = process.env, { centralRuntime, spawnPro
   if (role === 'central') {
     nativeEnv.T3_CLOUD_ALLOCATOR_URL = `http://127.0.0.1:${port}/_cloud/threads`;
     nativeEnv.T3_CLOUD_ALLOCATOR_TOKEN = allocatorToken;
+    nativeEnv.T3_CLOUD_ADMITTED_PROVIDERS = JSON.stringify(runtime.admittedProviders ?? ['codex']);
   }
   function launch(command, args, childEnv) {
     const child = spawnProcess(command,args,{env:childEnv,cwd:env.T3_CWD,stdio:'ignore'});

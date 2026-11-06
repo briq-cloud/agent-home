@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { canonicalJson, digest, identifier } from './allocations.mjs';
+import { canonicalJson, digest, identifier, providerInstanceId } from './allocations.mjs';
 
 const string = { type: 'string', minLength: 1, maxLength: 65536 };
 const id = { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,128}$' };
@@ -52,14 +52,18 @@ export class ScopedBriq {
   constructor({ store, cloud }) { Object.assign(this, { store, cloud }); }
   async binding(identity) {
     const binding = await this.store.load(identity.threadId);
-    if (identity.closed || binding?.state !== 'ready' || binding.allocationId !== identity.allocationId ||
-      !identity.nativeId || ![binding.nativeThreadId, binding.claudeNativeSessionId].includes(identity.nativeId)) throw Error('Scoped Briq allocation unavailable');
+    identity.validate?.();
+    const provider = providerInstanceId(identity.providerInstanceId);
+    if (typeof identity.validate !== 'function' || !['codex', 'claudeAgent'].includes(identity.providerInstanceId) || !identity.turnId || providerInstanceId(binding?.providerInstanceId) !== provider || identity.closed || binding?.state !== 'ready' || binding.allocationId !== identity.allocationId ||
+      !identity.nativeId || (provider === 'codex' ? binding.claudeNativeSessionId || binding.nativeThreadId !== identity.nativeId : binding.nativeThreadId || binding.claudeNativeSessionId !== identity.nativeId)) throw Error('Scoped Briq allocation unavailable');
     return binding;
   }
   async records(binding) {
     return (await this.store.listOperations(binding.threadId)).filter(row => row.method === 'briq/scoped' && row.allocationId === binding.allocationId);
   }
   async call(identity, requestId, name, input = {}) {
+    // Immutable per-request snapshot supplied by the authenticated native owner.
+    identity.validate?.();
     const schema = schemas.get(name);
     if (!schema || !['string', 'number'].includes(typeof requestId) || String(requestId).length > 128) throw Error('Unknown scoped Briq request');
     validate(schema, input);
@@ -70,8 +74,9 @@ export class ScopedBriq {
     return this.store.serialized(identity.threadId, async () => {
       const binding = await this.binding(identity);
       const rows = await this.records(binding);
-      const key = `briq-${digest(canonicalJson([identity.allocationId, identity.nativeId, requestId]))}`;
-      const requestHash = digest(canonicalJson({ name, input, nativeId: identity.nativeId, allocationId: binding.allocationId }));
+      identity.validate();
+      const key = `briq-${digest(canonicalJson([identity.providerInstanceId, identity.allocationId, identity.nativeId, identity.turnId, requestId]))}`;
+      const requestHash = digest(canonicalJson({ name, input, providerInstanceId: identity.providerInstanceId, nativeId: identity.nativeId, turnId: identity.turnId, allocationId: binding.allocationId }));
       const prior = rows.find(row => row.key === key);
       if (prior) {
         if (prior.requestHash !== requestHash) throw Error('Scoped Briq request conflict');
@@ -87,7 +92,7 @@ export class ScopedBriq {
         if (!resource) throw Error('Resource is outside this allocation');
       }
       const record = { version: 1, method: 'briq/scoped', key, allocationId: binding.allocationId,
-        threadId: binding.threadId, nativeId: identity.nativeId, requestHash, state: 'started', tool: name };
+        threadId: binding.threadId, providerInstanceId: identity.providerInstanceId, nativeId: identity.nativeId, turnId: identity.turnId, requestId, requestHash, state: 'started', tool: name };
       if (name === 'briq_run') {
         const nonce = randomUUID().replaceAll('-', '');
         if (!/^t3-[a-f0-9]{24}$/.test(binding.stack) || !binding.rootStackId) throw Error('Allocation namespace requires reconciliation');
@@ -95,9 +100,11 @@ export class ScopedBriq {
         record.intent = { stack: binding.stack, stackId: binding.rootStackId, name: `r-${nonce.slice(0, 16)}`, recipe: input.recipe };
       }
       if (name === 'briq_destroy') record.destroy = { resourceId: resource.id, sourceKey: rows.find(row => row.resource === resource).key, state: 'started' };
+      identity.validate();
       if (mutation) await this.store.saveOperation(binding.threadId, record);
       try {
-        const result = await this.perform(binding, rows, resource, record, name, input);
+        identity.validate();
+        const result = await this.perform(binding, rows, resource, record, name, input, identity.validate);
         if (mutation) { record.state = 'completed'; record.result = result; await this.store.saveOperation(binding.threadId, record); }
         return result;
       } catch {
@@ -106,8 +113,13 @@ export class ScopedBriq {
       }
     });
   }
-  async perform(binding, rows, resource, record, name, input) {
-    const run = (args, options) => this.cloud.run(args, { ...options, env: this.cloud.env });
+  async perform(binding, rows, resource, record, name, input, validate) {
+    // Status and receipt persistence can yield while the native turn closes.
+    // Recheck the captured lease synchronously at every actual cloud dispatch.
+    const run = (args, options) => {
+      validate();
+      return this.cloud.run(args, { ...options, env: this.cloud.env }, validate);
+    };
     if (name === 'briq_docs') return { text: 'Use briq_catalog for sandbox, postgres and redis. briq_run creates recorded descendants. Only their returned IDs work with status/logs/exec/files/start/stop/destroy. Use workspace tools for the protected thread workspace. Uncertain mutations require operator reconciliation; never repeat a create.' };
     if (name === 'briq_catalog') {
       // Project a fixed recipe set; never advertise unrestricted cloud administration.

@@ -1,3 +1,812 @@
+diff --git a/apps/server/integration/native-child/README.md b/apps/server/integration/native-child/README.md
+new file mode 100644
+index 00000000..24bc2546
+--- /dev/null
++++ b/apps/server/integration/native-child/README.md
+@@ -0,0 +1,47 @@
++# Native child acceptance driver
++
++Candidate source only; not executed or typechecked. This is a real official-client driver against an existing deployment, with no direct broker/executor calls and no protocol mocks. Run only after independent source review and the reviewed refreshed source package's focused typecheck pass.
++
++Required deployment:
++
++- A disposable manager started through `startManager`, its actual central T3 server, `ThreadAllocator`, cloud boundary, and real `startChild` in distinct machines/namespaces. Keep child T3/executor ports 3773/3774 and the normal HTTPS/WSS frontdoor. Do not redirect those entries to a substitute.
++- Refreshed packaged T3 containing the reviewed reviewed source changes. Current public `t3-source/source.json` still names source tree `422950d7be201e8b277b186ba661a7d2fd88ce64`; that is not qualification of the external V4/V5 candidate.
++- Both `codex` and `claudeAgent` admitted in this disposable fixture. Production `CLAUDE_CLOUD_ENABLED=false` stays unchanged. Fixture admission/auth metadata must be explicitly labeled synthetic.
++- Actual pinned Codex 0.166.0 and Claude 2.1.276 / SDK 0.3.276. Fake only external model-provider/cloud API boundaries. No real vendor auth, subscriptions, model requests, cloud resources, or owner credentials.
++- The deterministic model boundary recognizes `ACCEPTANCE_WRITE_READ <marker>` and returns real native file-write and shell-read tool requests followed by streamed assistant text containing the returned marker. `ACCEPTANCE_FOLLOWUP <marker>` returns the exact prompted shell command, which prefixes a distinct followup marker and reads the original file without rewriting it, followed by streamed text containing both markers. Each command string must match the prompt exactly. It must not fabricate tool results.
++
++From `apps/server`, with the checkout's dependencies installed, the later Luna execution is:
++
++```sh
++node integration/native-child/acceptance.ts exercise < /private/tmp/native-child-input.json
++node integration/native-child/acceptance.ts recover < /private/tmp/native-child-input.json
++```
++
++Input is private JSON with `origin` (clean HTTPS manager origin ending `/`), `environmentId`, `pairingCredential` (fresh T3 bootstrap grant), absolute `statePath` (new private file), and optional `edgeCookie` (fixture edge cookie). Never put credentials in argv or print the input/state. The exercise stores child bearer sessions at mode 0600 and refuses to overwrite prior state. This is a synthetic disposable fixture only; delete its state through the fixture's normal cleanup after collecting evidence.
++
++Between phases restart the exact fixture processes through the existing machine/cloud harness, preserving central allocation/native ledgers and child T3 database/workspace. `recover` performs read-only RPCs and checks stable native identities, run IDs and intent keys plus existing adoption. It does not trigger a model turn.
++
++The driver fetches omitted shell output through official `getTurnItem` detail RPC. Every stream, command detail, assistant message, provider thread and native receipt is correlated with the newly dispatched message/run/attempt. Followup uses a distinct marker, the same active provider thread/native identity, a new receipt key, and no file-change events. Each turn subscription is interrupted after collecting its evidence.
++
++Foreign-thread reads require successful local control reads before and after, a healthy session probe, and the exact outer `OrchestrationV2GetThreadProjectionError` tag, thread ID and server message, followed by decoded `Error` instances named `OrchestratorProjectionError` and `ProjectionStoreThreadNotFoundError` with their exact server messages containing that foreign ID. The leaf must have no further cause. Generic RPC/transport/database failures fail the driver. Installed Effect 4.0.5 `Schema.Defect` retains nested Error name/message/cause and drops custom nested tags/thread IDs; the predicate checks this actual wire shape. The colocated `acceptance.test.ts` roundtrips the real server error classes through the actual RPC error-union JSON codec, verifying missing custom fields, the positive case, and wrong identities/messages/names, database/transport/auth failures and malformed nested shapes. No generic Failure fallback is accepted.
++
++Passing output only qualifies the declared client path. The output deliberately retains `subscriptionQualified=false`, `uncertainReceiptQualified=false`, `childProcessIsolationQualified=false`, `noModelReplayQualified=false`, and `claudeBrokerAdoptionQualified=false`.
++
++Remaining full-proof evidence must come from the exact deployed fixture boundary:
++
++1. Before/after fake-provider request counts correlated to these two allocation/thread IDs, proving no model replay across restart.
++2. Both-provider central ledger acknowledgment matched to the current run/native receipt: Codex attempt intents carry result/adoption; Claude exposes a persisted `providerTurns[].sandboxResult` and committed event, which does not prove the broker received its adoption acknowledgment. Inspect the exact fixture central Claude ledger through the existing bounded machine reader. A deliberate transport interruption after native durable result but before T3 durable adoption, followed by recovery through the real `RunExecutionService`, and matching broker/Claude ledger result hash and committed event sequence. Normal completed-turn restart is insufficient.
++3. Exact child environment/process inventory from the existing bounded machine exec reader, proving no vendor credentials and no local Codex app-server/Claude native process; the legitimate Codex remote exec-server is expected.
++4. Broker/executor cross-allocation native/tool denial and unchanged foreign workspace. The driver checks T3 foreign-thread denial, which alone does not prove those lower boundaries.
++
++No public client RPC exposes process inventory, fake-provider counters, or crash-at-receipt control. Do not add these as product APIs or claim that the client assertions replace this evidence. This driver creates real allocations through the deployed allocator; fixture cleanup must revoke only its exact allocation IDs. It has no broad cleanup or provisioning controller.
++
++V5 targeted review/execution plan (not performed): independently re-review R1/R2/R3 against `getTurnItem`/wire projection, current run/attempt/provider receipt contracts, and the deployed typed not-found serialization. Then, after the reviewed source package refresh, run the focused `vp test run integration/native-child/acceptance.test.ts` codec regression from `apps/server` and the changed driver's owning-package focused typecheck. The driver is import-safe for this regression: stdin and network entry execute only when invoked as the main file. In the approved synthetic fixture run `exercise` once, observing its exact live process handle; a timeout leaves an uncertain run and does not authorize replay. Verify both distinct per-turn markers and exact read commands at the fake-provider boundary. Restart only the captured fixture targets, then run `recover` once and collect the separate external ledger/counter/process/isolation evidence above. Preserve all false qualification flags until that evidence is reviewed.
++
++V4 dependency correction: the executable imports the already declared `@effect/platform-node/NodeSocket` public API, not an undeclared `ws` package. Installed 4.0.5 `NodeSocket.layerWebSocketConstructor` uses the global constructor for ordinary protocol-only requests and its supported Node constructor for options objects with handshake headers (`src/NodeSocket.ts:25-49`). `Socket.WebSocketClientOptions` explicitly supports `headers` and `protocols` (`effect/src/socket/Socket.ts:815-843`). The actual driver layer forwards existing protocols/headers and supplies the exact optional edge cookie through that supported options object, without casts or lockfile changes. The colocated codec test imports the executable driver and builds this actual Node layer both with and without the cookie; these are compile/runtime import guards that never invoke the constructor or open a socket. They do not prove live cookie transmission. Re-run this focused test only through the authorized Luna validation gate; no test/typecheck/runtime execution occurred while authoring V4.
++
++V5 type corrections keep the same actual client proof and six false qualification flags. The subscription Deferred error channels now derive from the official `subscribeThread` stream error type; failures retain their real typed causes. UUIDs use the declared Effect Node Crypto service. Private saved state uses the declared Effect Node FileSystem service with the same 0600/exclusive-create policy, and both input and saved-state parsing use the concrete schemas. The HTTP layer uses the official Effect HttpClient request transform for the optional edge-cookie header, preserves `redirect: error`, and supplies HTTP observability alongside the existing real Node WebSocket layer in one combined application layer. Both allocated-thread/session array entries are asserted before use. The codec test narrows the decoded typed error with `Schema.is`. No proof/admission assertion, compiler inclusion, dependency or lockfile was weakened or removed.
++
++Prior V4 validation passed all 18 actual-codec/import tests; the affected typecheck reported 22 errors plus one warning confined to these integration files. V5 is authored only and has not been typechecked or executed. Handoff is one combined retry of the same focused codec/import suite and affected typecheck through the authorized Luna runner, then source review of any remaining diagnostics. Do not replay a timed-out handle. Full native fixture evidence remains separately gated.
++
++V6 changes only the two typed string decoder entry points: `Schema.decodeEffect` for the saved-state file and `Schema.decodeSync` for stdin JSON. Both inputs are already strings matching the codecs' Encoded type; the same schemas and validation remain in place. V5's actual-codec/import suite passed 18/18; only two typed-decoder diagnostics remained in the affected typecheck. The codec test and import/WebSocket code are unchanged by V6, so only the affected typecheck needs a retry for this delta. No author validation was executed.
+diff --git a/apps/server/integration/native-child/acceptance.test.ts b/apps/server/integration/native-child/acceptance.test.ts
+new file mode 100644
+index 00000000..b45dbf9d
+--- /dev/null
++++ b/apps/server/integration/native-child/acceptance.test.ts
+@@ -0,0 +1,146 @@
++import { describe, expect, it } from "@effect/vitest";
++import {
++  EnvironmentAuthorizationError,
++  OrchestrationV2GetThreadProjectionError,
++  ThreadId,
++} from "@t3tools/contracts";
++import * as Schema from "effect/Schema";
++import * as Effect from "effect/Effect";
++import * as Socket from "effect/socket/Socket";
++import { OrchestratorProjectionError } from "../../src/orchestration-v2/Orchestrator.ts";
++import { ProjectionStoreThreadNotFoundError } from "../../src/orchestration-v2/ProjectionStore.ts";
++import { expectedMissingProjection, makeAcceptanceSocketLayer } from "./acceptance.ts";
++
++const foreign = ThreadId.make("foreign-allocated-thread");
++const other = ThreadId.make("different-thread");
++const codec = Schema.toCodecJson(
++  Schema.Union([OrchestrationV2GetThreadProjectionError, EnvironmentAuthorizationError]),
++);
++const isThreadProjectionError = Schema.is(OrchestrationV2GetThreadProjectionError);
++const roundtrip = (error: OrchestrationV2GetThreadProjectionError) => {
++  const decoded = Schema.decodeUnknownSync(codec)(
++    JSON.parse(JSON.stringify(Schema.encodeSync(codec)(error))),
++  );
++  if (!isThreadProjectionError(decoded)) throw new Error("Unexpected RPC error variant");
++  return decoded;
++};
++const outer = (
++  cause: unknown,
++  threadId = foreign,
++  message = `Failed to load orchestration V2 thread ${threadId}`,
++) => new OrchestrationV2GetThreadProjectionError({ threadId, message, cause });
++const missing = (threadId = foreign) => new ProjectionStoreThreadNotFoundError({ threadId });
++const middle = (cause: unknown = missing(), threadId = foreign) =>
++  new OrchestratorProjectionError({ threadId, cause });
++const namedError = (name: string, message: string, cause?: unknown) =>
++  Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { name });
++
++describe("native child foreign-read recognition through the installed RPC error codec", () => {
++  it("recognizes the actual missing-projection wire shape without nested custom fields", () => {
++    const error = roundtrip(outer(middle()));
++    expect(expectedMissingProjection(error, foreign)).toBe(true);
++    expect(error).toBeInstanceOf(OrchestrationV2GetThreadProjectionError);
++    expect(error.cause).toBeInstanceOf(Error);
++    const cause = error.cause as Error;
++    expect(cause.name).toBe("OrchestratorProjectionError");
++    expect(cause.message).toBe(`Failed to load orchestration projection for thread ${foreign}.`);
++    expect(cause).not.toHaveProperty("_tag");
++    expect(cause).not.toHaveProperty("threadId");
++    expect(cause.cause).toBeInstanceOf(Error);
++    const leaf = cause.cause as Error;
++    expect(leaf.name).toBe("ProjectionStoreThreadNotFoundError");
++    expect(leaf.message).toBe(`No orchestration projection exists for thread ${foreign}.`);
++    expect(leaf.cause).toBeUndefined();
++    expect(leaf).not.toHaveProperty("_tag");
++    expect(leaf).not.toHaveProperty("threadId");
++  });
++
++  it.each([
++    ["wrong outer identity", () => outer(middle(), other)],
++    ["wrong outer message", () => outer(middle(), foreign, "Failed to load thread")],
++    ["wrong middle identity", () => outer(middle(missing(), other))],
++    ["wrong leaf identity", () => outer(middle(missing(other)))],
++    ["absent middle cause", () => outer(undefined)],
++    ["absent leaf cause", () => outer(new OrchestratorProjectionError({ threadId: foreign }))],
++    [
++      "database read failure",
++      () => outer(middle(namedError("ProjectionStoreReadError", "Database unavailable"))),
++    ],
++    [
++      "wrong middle name",
++      () =>
++        outer(
++          namedError(
++            "Error",
++            `Failed to load orchestration projection for thread ${foreign}.`,
++            missing(),
++          ),
++        ),
++    ],
++    [
++      "wrong leaf name",
++      () =>
++        outer(
++          middle(namedError("Error", `No orchestration projection exists for thread ${foreign}.`)),
++        ),
++    ],
++    [
++      "unexpected deeper cause",
++      () =>
++        outer(
++          middle(
++            namedError(
++              "ProjectionStoreThreadNotFoundError",
++              `No orchestration projection exists for thread ${foreign}.`,
++              new Error("database unavailable"),
++            ),
++          ),
++        ),
++    ],
++    [
++      "tagged object instead of decoded Error",
++      () => outer({ _tag: "OrchestratorProjectionError", threadId: foreign, cause: missing() }),
++    ],
++  ] as const)("rejects %s after real codec roundtrip", (_label, makeError) => {
++    expect(expectedMissingProjection(roundtrip(makeError()), foreign)).toBe(false);
++  });
++
++  it.each([
++    new Error("WebSocket disconnected"),
++    { _tag: "RpcClientError", reason: "transport" },
++    { _tag: "EnvironmentAuthorizationError", message: "session expired" },
++    {
++      _tag: "OrchestrationV2GetThreadProjectionError",
++      threadId: foreign,
++      message: `Failed to load orchestration V2 thread ${foreign}`,
++      cause: {
++        name: "OrchestratorProjectionError",
++        message: `Failed to load orchestration projection for thread ${foreign}.`,
++        cause: {
++          name: "ProjectionStoreThreadNotFoundError",
++          message: `No orchestration projection exists for thread ${foreign}.`,
++        },
++      },
++    },
++  ])("rejects transport/auth failures and undecoded nested shapes", (error) => {
++    expect(expectedMissingProjection(error, foreign)).toBe(false);
++  });
++});
++
++// Import the executable driver itself; building its declared Node layer must not dial or read stdin.
++it.effect(
++  "imports the executable driver and constructs its real Node WebSocket service without dialing",
++  () =>
++    Effect.gen(function* () {
++      const constructor = yield* Socket.WebSocketConstructor;
++      expect(typeof constructor).toBe("function");
++    }).pipe(Effect.provide(makeAcceptanceSocketLayer())),
++);
++it.effect(
++  "constructs the actual executable WebSocket service with the optional edge-cookie configuration",
++  () =>
++    Effect.gen(function* () {
++      const constructor = yield* Socket.WebSocketConstructor;
++      expect(typeof constructor).toBe("function");
++    }).pipe(Effect.provide(makeAcceptanceSocketLayer("briq_token=FIXTURE_IMPORT_GUARD_ONLY"))),
++);
+diff --git a/apps/server/integration/native-child/acceptance.ts b/apps/server/integration/native-child/acceptance.ts
+new file mode 100644
+index 00000000..733fbfc2
+--- /dev/null
++++ b/apps/server/integration/native-child/acceptance.ts
+@@ -0,0 +1,598 @@
++import * as NodeAssert from "node:assert/strict";
++import * as NodeURL from "node:url";
++import {
++  CommandId,
++  EnvironmentId,
++  MessageId,
++  ProviderInstanceId,
++  ThreadId,
++  WS_METHODS,
++  ORCHESTRATION_V2_WS_METHODS as RPC,
++  BriqSandboxAllocation,
++  type OrchestrationV2ThreadProjection,
++  type OrchestrationV2Run,
++  type OrchestrationV2TurnItem,
++  type OrchestrationV2ProviderTurn,
++} from "@t3tools/contracts";
++import * as Deferred from "effect/Deferred";
++import * as Crypto from "effect/Crypto";
++import * as FileSystem from "effect/FileSystem";
++import * as Schema from "effect/Schema";
++import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
++import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
++import * as HttpObservability from "@t3tools/shared/httpObservability";
++import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
++import * as Effect from "effect/Effect";
++import * as Fiber from "effect/Fiber";
++import * as Layer from "effect/Layer";
++import * as Redacted from "effect/Redacted";
++import * as Stream from "effect/Stream";
++import * as Socket from "effect/socket/Socket";
++import * as NodeSocket from "@effect/platform-node/NodeSocket";
++import {
++  bootstrapRemoteBearerSession,
++  issueRemoteWebSocketTicket,
++} from "../../../../packages/client-runtime/src/authorization/remote.ts";
++import { BearerConnectionTarget } from "../../../../packages/client-runtime/src/connection/model.ts";
++import {
++  make as makeSessions,
++  type RpcSession,
++} from "../../../../packages/client-runtime/src/rpc/session.ts";
++
++const AccessSchema = Schema.Struct({
++  origin: Schema.String,
++  environmentId: Schema.String,
++  token: Schema.String,
++});
++type Access = typeof AccessSchema.Type;
++const SavedThreadSchema = Schema.Struct({
++  allocation: BriqSandboxAllocation,
++  access: AccessSchema,
++  nativeIds: Schema.Array(Schema.String),
++  intentKeys: Schema.Array(Schema.String),
++  receiptBindings: Schema.Array(Schema.String),
++  runIds: Schema.Array(Schema.String),
++});
++type SavedThread = typeof SavedThreadSchema.Type;
++const SavedSchema = Schema.Struct({
++  version: Schema.Literal(2),
++  threads: Schema.Array(SavedThreadSchema),
++});
++const savedJson = Schema.fromJsonString(SavedSchema);
++const InputSchema = Schema.Struct({
++  origin: Schema.String,
++  environmentId: Schema.String,
++  pairingCredential: Schema.String,
++  edgeCookie: Schema.optionalKey(Schema.String),
++  statePath: Schema.String,
++});
++const decodeInputJson = Schema.decodeSync(Schema.fromJsonString(InputSchema));
++type Input = typeof InputSchema.Type;
++type SubscriptionError = Stream.Error<ReturnType<RpcSession["client"][typeof RPC.subscribeThread]>>;
++let input: Input;
++let phase: string | undefined;
++const origin = (value: string) => {
++  const url = new URL(value);
++  NodeAssert.equal(url.protocol, "https:");
++  NodeAssert.equal(url.origin + "/", url.href);
++  return url.origin;
++};
++const uuid = Effect.flatMap(Crypto.Crypto, (crypto) => crypto.randomUUIDv4());
++const commandId = uuid.pipe(Effect.map(CommandId.make));
++const connect = Effect.fn("nativeChildAcceptance.connect")(function* (access: Access) {
++  const httpBaseUrl = origin(access.origin);
++  const ticket = yield* issueRemoteWebSocketTicket({
++    httpBaseUrl,
++    bearerToken: access.token,
++    use: "rpc",
++  });
++  const socketUrl = new URL("/ws", httpBaseUrl);
++  socketUrl.protocol = "wss:";
++  socketUrl.searchParams.set("wsTicket", Redacted.value(ticket.ticket));
++  const environmentId = EnvironmentId.make(access.environmentId);
++  const factory = yield* makeSessions();
++  const session = yield* factory.connect({
++    environmentId,
++    label: "native child acceptance",
++    httpBaseUrl,
++    socketUrl: socketUrl.href,
++    httpAuthorization: null,
++    target: new BearerConnectionTarget({
++      environmentId,
++      label: "native child acceptance",
++      connectionId: yield* uuid,
++    }),
++  });
++  yield* session.ready;
++  return session;
++});
++const pair = Effect.fn("nativeChildAcceptance.pair")(function* (
++  url: string,
++  credential: string,
++  environmentId: string,
++) {
++  const result = yield* bootstrapRemoteBearerSession({ httpBaseUrl: origin(url), credential });
++  return { origin: origin(url), environmentId, token: result.access_token } satisfies Access;
++});
++const nativeIds = (projection: OrchestrationV2ThreadProjection) => {
++  const ids = projection.providerThreads
++    .map((row) => row.nativeThreadRef?.nativeId)
++    .filter((id): id is string => !!id);
++  NodeAssert.ok(ids.length > 0, "native provider identity must be persisted");
++  return [...new Set(ids)].sort();
++};
++const intents = (projection: OrchestrationV2ThreadProjection) =>
++  projection.attempts.flatMap((attempt) => Object.values(attempt.sandboxIntents ?? {}));
++const receiptBindings = (projection: OrchestrationV2ThreadProjection) =>
++  [
++    ...intents(projection)
++      .filter((intent) => intent.result)
++      .map((intent) => `${intent.key}:${intent.result!.nativeId}:${intent.result!.resultHash}`),
++    ...projection.providerTurns
++      .filter((turn) => turn.sandboxResult)
++      .map(
++        (turn) =>
++          `${turn.sandboxResult!.key}:${turn.sandboxResult!.nativeId}:${turn.sandboxResult!.resultHash}`,
++      ),
++  ].sort();
++const turn = Effect.fn("nativeChildAcceptance.turn")(function* (
++  session: RpcSession,
++  threadId: ThreadId,
++  provider: "codex" | "claudeAgent",
++  text: string,
++  marker: string,
++  fileMarker: string,
++  requiredCommand: string,
++  previousKeys: readonly string[],
++) {
++  const messageId = MessageId.make(yield* uuid);
++  const subscribed = yield* Deferred.make<void, SubscriptionError>();
++  const completed = yield* Deferred.make<OrchestrationV2Run, SubscriptionError>();
++  const streamed: OrchestrationV2TurnItem[] = [];
++  const receiptEvents: Array<{ sequence: number; turn: OrchestrationV2ProviderTurn }> = [];
++  let events = 0;
++  const stream = session.client[RPC.subscribeThread]({ threadId, requestCompletionMarker: true });
++  const subscription = yield* stream.pipe(
++    Stream.runForEach((item) =>
++      Effect.gen(function* () {
++        NodeAssert.ok(++events <= 4096, "bounded acceptance event stream");
++        if (item.kind === "snapshot" || item.kind === "synchronized")
++          yield* Deferred.succeed(subscribed, undefined);
++        if (item.kind !== "event") return;
++        const event = item.event;
++        if (
++          event.type === "turn-item.updated" &&
++          event.payload.type === "assistant_message" &&
++          event.payload.streaming
++        )
++          streamed.push(event.payload);
++        if (event.type === "provider-turn.updated")
++          receiptEvents.push({ sequence: item.sequence, turn: event.payload });
++        if (
++          (event.type === "run.created" || event.type === "run.updated") &&
++          event.payload.userMessageId === messageId
++        ) {
++          NodeAssert.equal(event.payload.threadId, threadId);
++          NodeAssert.equal(event.payload.providerInstanceId, provider);
++          NodeAssert.ok(
++            !["failed", "cancelled", "interrupted"].includes(event.payload.status),
++            "native turn must complete",
++          );
++          if (event.payload.status === "completed")
++            yield* Deferred.succeed(completed, event.payload);
++        }
++      }),
++    ),
++    Effect.catchCause((cause) =>
++      Effect.all([Deferred.failCause(subscribed, cause), Deferred.failCause(completed, cause)]),
++    ),
++    Effect.forkScoped,
++  );
++  yield* Deferred.await(subscribed).pipe(Effect.raceFirst(session.closed));
++  yield* session.client[RPC.dispatchCommand]({
++    type: "message.dispatch",
++    commandId: yield* commandId,
++    createdBy: "user",
++    creationSource: "web",
++    threadId,
++    messageId,
++    text,
++    attachments: [],
++    dispatchMode: { type: "start_immediately" },
++  });
++  const completedRun = yield* Deferred.await(completed).pipe(Effect.raceFirst(session.closed));
++  const projection = yield* session.client[RPC.getThreadProjection]({ threadId });
++  const run = projection.runs.find((row) => row.id === completedRun.id);
++  NodeAssert.ok(run && run.providerThreadId);
++  NodeAssert.equal(run.userMessageId, messageId);
++  NodeAssert.equal(run.threadId, threadId);
++  NodeAssert.equal(run.providerInstanceId, provider);
++  NodeAssert.equal(run.status, "completed");
++  NodeAssert.equal(run.providerThreadId, completedRun.providerThreadId);
++  const providerThread = projection.providerThreads.find((row) => row.id === run.providerThreadId);
++  NodeAssert.ok(providerThread?.nativeThreadRef?.nativeId);
++  NodeAssert.equal(providerThread.appThreadId, threadId);
++  NodeAssert.equal(providerThread.providerInstanceId, provider);
++  NodeAssert.equal(providerThread.driver, provider);
++  const nativeId = providerThread.nativeThreadRef.nativeId;
++  const attempts = projection.attempts.filter((row) => row.runId === run.id);
++  NodeAssert.ok(attempts.length > 0);
++  for (const attempt of attempts) {
++    NodeAssert.equal(attempt.providerThreadId, run.providerThreadId);
++    NodeAssert.equal(attempt.providerInstanceId, provider);
++    if (attempt.nativeThreadId !== undefined) NodeAssert.equal(attempt.nativeThreadId, nativeId);
++  }
++  NodeAssert.ok(
++    streamed.some(
++      (item) =>
++        item.threadId === threadId &&
++        item.runId === run.id &&
++        item.providerThreadId === run.providerThreadId &&
++        item.type === "assistant_message" &&
++        item.text.includes(marker),
++    ),
++    "this run must stream its own distinct marker",
++  );
++  const commands = projection.turnItems.filter(
++    (item) =>
++      item.threadId === threadId &&
++      item.runId === run.id &&
++      item.providerThreadId === run.providerThreadId &&
++      item.type === "command_execution",
++  );
++  NodeAssert.ok(commands.length > 0);
++  for (const command of commands) {
++    const { item } = yield* session.client[RPC.getTurnItem]({ threadId, itemId: command.id });
++    NodeAssert.ok(item && item.type === "command_execution");
++    NodeAssert.equal(item.id, command.id);
++    NodeAssert.equal(item.threadId, threadId);
++    NodeAssert.equal(item.runId, run.id);
++    NodeAssert.equal(item.providerThreadId, run.providerThreadId);
++    NodeAssert.equal(item.input, requiredCommand, "only the scripted read command is allowed");
++    NodeAssert.equal(item.exitCode, 0);
++    NodeAssert.ok(
++      item.output?.includes(marker) && item.output.includes(fileMarker),
++      "official item detail must contain this turn marker and the file content",
++    );
++  }
++  if (previousKeys.length > 0)
++    NodeAssert.ok(
++      !projection.turnItems.some((item) => item.runId === run.id && item.type === "file_change"),
++      "followup must read without rewriting",
++    );
++  NodeAssert.ok(
++    projection.messages.some(
++      (message) =>
++        message.threadId === threadId &&
++        message.runId === run.id &&
++        message.role === "assistant" &&
++        !message.streaming &&
++        message.text.includes(marker) &&
++        message.text.includes(fileMarker),
++    ),
++    "this run's assistant must consume its own tool result",
++  );
++  const currentIntents = attempts.flatMap((attempt) => Object.values(attempt.sandboxIntents ?? {}));
++  const keys: string[] = [];
++  if (provider === "codex") {
++    NodeAssert.ok(
++      currentIntents.length > 0,
++      "current attempt needs durable sandbox operation intent",
++    );
++    for (const intent of currentIntents) {
++      NodeAssert.ok(!previousKeys.includes(intent.key), "followup must adopt a new operation");
++      NodeAssert.ok(intent.result && intent.adoption);
++      NodeAssert.equal(intent.adoption.resultHash, intent.result.resultHash);
++      NodeAssert.equal(intent.adoption.nativeId, intent.result.nativeId);
++      NodeAssert.ok(
++        receiptEvents.some(
++          (event) =>
++            event.sequence === intent.adoption?.eventSequence &&
++            event.turn.providerThreadId === run.providerThreadId &&
++            attempts.some((attempt) => attempt.id === event.turn.runAttemptId) &&
++            event.turn.nativeTurnRef?.nativeId === intent.result?.nativeId,
++        ),
++        "adoption must reference this attempt's exact committed native-turn event",
++      );
++      keys.push(intent.key);
++    }
++  } else {
++    const turns = projection.providerTurns.filter(
++      (row) =>
++        row.providerThreadId === run.providerThreadId &&
++        attempts.some((attempt) => attempt.id === row.runAttemptId),
++    );
++    NodeAssert.ok(turns.length > 0);
++    for (const turn of turns) {
++      NodeAssert.ok(turn.sandboxResult && turn.nativeTurnRef?.nativeId);
++      NodeAssert.equal(turn.sandboxResult.nativeId, turn.nativeTurnRef.nativeId);
++      NodeAssert.equal(turn.sandboxResult.provider, provider);
++      NodeAssert.ok(!previousKeys.includes(turn.sandboxResult.key));
++      NodeAssert.ok(
++        receiptEvents.some(
++          (event) =>
++            event.turn.id === turn.id &&
++            event.turn.runAttemptId === turn.runAttemptId &&
++            event.turn.sandboxResult?.key === turn.sandboxResult?.key &&
++            event.turn.sandboxResult?.resultHash === turn.sandboxResult?.resultHash &&
++            event.turn.status === "completed",
++        ),
++        "Claude receipt must match a committed event for this attempt",
++      );
++      keys.push(turn.sandboxResult.key);
++    }
++  }
++  yield* Fiber.interrupt(subscription);
++  return { projection, nativeId, providerThreadId: run.providerThreadId, runId: run.id, keys };
++});
++export const expectedMissingProjection = (error: unknown, foreign: ThreadId) => {
++  if (
++    !error ||
++    typeof error !== "object" ||
++    !("_tag" in error) ||
++    error._tag !== "OrchestrationV2GetThreadProjectionError" ||
++    !("threadId" in error) ||
++    error.threadId !== foreign ||
++    !("message" in error) ||
++    error.message !== `Failed to load orchestration V2 thread ${foreign}` ||
++    !("cause" in error)
++  )
++    return false;
++  const cause = error.cause;
++  if (
++    !(cause instanceof Error) ||
++    cause.name !== "OrchestratorProjectionError" ||
++    cause.message !== `Failed to load orchestration projection for thread ${foreign}.`
++  )
++    return false;
++  const missing = cause.cause;
++  return (
++    missing instanceof Error &&
++    missing.name === "ProjectionStoreThreadNotFoundError" &&
++    missing.message === `No orchestration projection exists for thread ${foreign}.` &&
++    missing.cause === undefined
++  );
++};
++const exercise = Effect.gen(function* () {
++  const central = yield* connect(
++    yield* pair(input.origin, input.pairingCredential, input.environmentId),
++  );
++  const config = yield* central.initialConfig;
++  NodeAssert.equal(config.briqSandboxRole, "central");
++  NodeAssert.deepEqual([...(config.briqSandboxProviders ?? [])].sort(), ["claudeAgent", "codex"]);
++  const savedThreads: SavedThread[] = [];
++  const saved: typeof SavedSchema.Type = { version: 2, threads: savedThreads };
++  const sessions: RpcSession[] = [];
++  for (const providerInstanceId of ["codex", "claudeAgent"] as const) {
++    const threadId = ThreadId.make(yield* uuid);
++    const allocation = yield* central.client[RPC.allocateSandboxThread]({
++      threadId,
++      providerInstanceId,
++    });
++    NodeAssert.equal(allocation.threadId, threadId);
++    NodeAssert.equal(allocation.providerInstanceId, providerInstanceId);
++    origin(allocation.connection.url);
++    const access = yield* pair(
++      allocation.connection.url,
++      allocation.connection.credential,
++      allocation.environmentId,
++    );
++    const child = yield* connect(access);
++    sessions.push(child);
++    const childConfig = yield* child.initialConfig;
++    NodeAssert.equal(childConfig.briqSandboxRole, "child");
++    NodeAssert.equal(childConfig.briqSandboxProviderInstanceId, providerInstanceId);
++    const provider = childConfig.providers.find(
++      (row) =>
++        row.instanceId === providerInstanceId &&
++        row.driver === providerInstanceId &&
++        row.enabled &&
++        row.status === "ready",
++    );
++    NodeAssert.ok(provider?.models[0]?.slug, "assigned native bridge must have a model catalog");
++    if (providerInstanceId === "claudeAgent")
++      NodeAssert.equal(provider.auth.status, "authenticated");
++    const modelSelection = {
++      instanceId: ProviderInstanceId.make(providerInstanceId),
++      model: provider.models[0].slug,
++    };
++    yield* child.client[WS_METHODS.projectsMutate]({
++      type: "project.create",
++      commandId: yield* commandId,
++      projectId: allocation.project.id,
++      title: allocation.project.title,
++      workspaceRoot: allocation.project.workspaceRoot,
++    });
++    yield* child.client[RPC.dispatchCommand]({
++      type: "thread.create",
++      commandId: yield* commandId,
++      createdBy: "user",
++      creationSource: "web",
++      threadId,
++      projectId: allocation.project.id,
++      title: "Native acceptance",
++      modelSelection,
++      runtimeMode: "full-access",
++      interactionMode: "default",
++      branch: null,
++      worktreePath: null,
++    });
++    const firstMarker = `NATIVE_ACCEPTANCE_FIRST_${providerInstanceId}_${threadId}`;
++    const nextMarker = `NATIVE_ACCEPTANCE_FOLLOWUP_${providerInstanceId}_${threadId}`;
++    const firstCommand = "cat /work/native-acceptance.txt";
++    const nextCommand = `printf '%s\n' '${nextMarker}'; cat /work/native-acceptance.txt`;
++    const first = yield* turn(
++      child,
++      threadId,
++      providerInstanceId,
++      `ACCEPTANCE_WRITE_READ ${firstMarker}: write ${firstMarker} to /work/native-acceptance.txt with the native file tool, execute exactly ${firstCommand}, then stream the returned marker.`,
++      firstMarker,
++      firstMarker,
++      firstCommand,
++      [],
++    ).pipe(Effect.scoped);
++    const followup = yield* turn(
++      child,
++      threadId,
++      providerInstanceId,
++      `ACCEPTANCE_FOLLOWUP ${nextMarker}: without writing files execute exactly ${nextCommand}, then stream the complete returned output including both markers.`,
++      nextMarker,
++      firstMarker,
++      nextCommand,
++      first.keys,
++    ).pipe(Effect.scoped);
++    NodeAssert.notEqual(followup.runId, first.runId);
++    NodeAssert.equal(followup.providerThreadId, first.providerThreadId);
++    NodeAssert.equal(
++      followup.nativeId,
++      first.nativeId,
++      "followup must use the same active native conversation",
++    );
++    savedThreads.push({
++      allocation,
++      access,
++      nativeIds: nativeIds(followup.projection),
++      intentKeys: intents(followup.projection)
++        .map((row) => row.key)
++        .sort(),
++      receiptBindings: receiptBindings(followup.projection),
++      runIds: followup.projection.runs.map((row) => row.id).sort(),
++    });
++  }
++  const [firstThread, secondThread] = savedThreads;
++  const [firstSession, secondSession] = sessions;
++  NodeAssert.ok(firstThread && secondThread && firstSession && secondSession);
++  NodeAssert.notEqual(firstThread.allocation.allocationId, secondThread.allocation.allocationId);
++  NodeAssert.notEqual(firstThread.access.origin, secondThread.access.origin);
++  for (const { localThread, foreignThread, session } of [
++    { localThread: firstThread, foreignThread: secondThread, session: firstSession },
++    { localThread: secondThread, foreignThread: firstThread, session: secondSession },
++  ]) {
++    const local = localThread.allocation.threadId;
++    const control = yield* session.client[RPC.getThreadProjection]({ threadId: local });
++    NodeAssert.equal(control.thread.id, local);
++    const foreign = foreignThread.allocation.threadId;
++    const denied = yield* session.client[RPC.getThreadProjection]({ threadId: foreign }).pipe(
++      Effect.result,
++    );
++    NodeAssert.ok(
++      denied._tag === "Failure" && expectedMissingProjection(denied.failure, foreign),
++      "only the exact foreign-thread not-found chain qualifies; unavailable or unrecognized errors fail",
++    );
++    yield* session.probe;
++    const after = yield* session.client[RPC.getThreadProjection]({ threadId: local });
++    NodeAssert.equal(after.thread.id, local);
++  }
++  const fs = yield* FileSystem.FileSystem;
++  const serialized = yield* Schema.encodeEffect(savedJson)(saved);
++  yield* fs.writeFileString(input.statePath, serialized, { mode: 0o600, flag: "wx" });
++});
++const recover = Effect.gen(function* () {
++  const fs = yield* FileSystem.FileSystem;
++  const saved = yield* Schema.decodeEffect(savedJson)(yield* fs.readFileString(input.statePath));
++  NodeAssert.equal(saved.version, 2);
++  NodeAssert.equal(saved.threads.length, 2);
++  for (const thread of saved.threads) {
++    const child = yield* connect(thread.access);
++    const projection = yield* child.client[RPC.getThreadProjection]({
++      threadId: thread.allocation.threadId,
++    });
++    NodeAssert.deepEqual(nativeIds(projection), thread.nativeIds);
++    NodeAssert.deepEqual(
++      projection.runs.map((row) => row.id).sort(),
++      thread.runIds,
++      "reconnection must not create a model run",
++    );
++    NodeAssert.deepEqual(
++      intents(projection)
++        .map((row) => row.key)
++        .sort(),
++      thread.intentKeys,
++      "reconnection must not create another native mutation",
++    );
++    NodeAssert.deepEqual(
++      receiptBindings(projection),
++      thread.receiptBindings,
++      "read-only reconnect must preserve exact native receipt bindings",
++    );
++    for (const intent of intents(projection)) NodeAssert.ok(intent.result && intent.adoption);
++  }
++});
++const makeAcceptanceHttpLayer = (edgeCookie?: string) =>
++  Layer.mergeAll(
++    Layer.effect(
++      HttpClient.HttpClient,
++      Effect.gen(function* () {
++        const client = yield* HttpClient.HttpClient;
++        return edgeCookie === undefined
++          ? client
++          : client.pipe(
++              HttpClient.mapRequest((request) =>
++                HttpClientRequest.setHeader(request, "cookie", edgeCookie),
++              ),
++            );
++      }),
++    ).pipe(Layer.provide(FetchHttpClient.layer)),
++    Layer.succeed(FetchHttpClient.RequestInit, { redirect: "error" }),
++    HttpObservability.layer,
++  );
++export const makeAcceptanceSocketLayer = (edgeCookie?: string) =>
++  Layer.effect(
++    Socket.WebSocketConstructor,
++    Effect.gen(function* () {
++      const makeWebSocket = yield* Socket.WebSocketConstructor;
++      const constructor: Socket.WebSocketConstructor["Service"] = (url, options) => {
++        if (edgeCookie === undefined) return makeWebSocket(url, options);
++        const clientOptions: Socket.WebSocketClientOptions =
++          typeof options === "object" && !Array.isArray(options) ? options : { protocols: options };
++        const headers = new Headers(clientOptions?.headers);
++        headers.set("cookie", edgeCookie);
++        return makeWebSocket(url, { ...clientOptions, headers: Object.fromEntries(headers) });
++      };
++      return constructor;
++    }),
++  ).pipe(Layer.provide(NodeSocket.layerWebSocketConstructor));
++async function main() {
++  try {
++    const chunks: Buffer[] = [];
++    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
++    input = decodeInputJson(Buffer.concat(chunks).toString("utf8"));
++    phase = process.argv[2];
++    NodeAssert.ok(phase === "exercise" || phase === "recover");
++    origin(input.origin);
++    await Effect.runPromise(
++      (phase === "exercise" ? exercise : recover).pipe(
++        Effect.scoped,
++        Effect.provide(
++          Layer.mergeAll(
++            makeAcceptanceHttpLayer(input.edgeCookie),
++            makeAcceptanceSocketLayer(input.edgeCookie),
++            NodeCrypto.layer,
++            NodeFileSystem.layer,
++          ),
++        ),
++      ),
++    );
++    process.stdout.write(
++      JSON.stringify({
++        status: "passed",
++        phase,
++        scope:
++          "official T3 client allocation, pairing, native streamed tool roundtrip, followup identity and persisted per-run native results",
++        subscriptionQualified: false,
++        claudeBrokerAdoptionQualified: false,
++        uncertainReceiptQualified: false,
++        childProcessIsolationQualified: false,
++        nativeIsolationQualified: false,
++        noModelReplayQualified: false,
++      }) + "\n",
++    );
++  } catch {
++    process.stderr.write(
++      "Native child acceptance failed; credentials and RPC payloads suppressed.\n",
++    );
++    process.exitCode = 1;
++  }
++}
++if (process.argv[1] && import.meta.url === NodeURL.pathToFileURL(process.argv[1]).href)
++  await main();
 diff --git a/apps/server/src/auth/RpcAuthorization.test.ts b/apps/server/src/auth/RpcAuthorization.test.ts
 index 8044740a..7db6b7f1 100644
 --- a/apps/server/src/auth/RpcAuthorization.test.ts
@@ -84,14 +893,57 @@ index 6049121b..2849920c 100644
      return onAuthorized === undefined
 diff --git a/apps/server/src/briqClaudeQuery.test.ts b/apps/server/src/briqClaudeQuery.test.ts
 new file mode 100644
-index 00000000..60e71f14
+index 00000000..b4398305
 --- /dev/null
 +++ b/apps/server/src/briqClaudeQuery.test.ts
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,174 @@
 +// @effect-diagnostics nodeBuiltinImport:off - hashes the fake provider receipt.
-+import { createHash } from "node:crypto";
++import * as NodeAssert from "node:assert/strict";
++import * as NodeCrypto from "node:crypto";
++import { vi } from "vite-plus/test";
 +import { assert, it } from "@effect/vitest";
-+import { claudeBridgeConfiguration, validateClaudeEventEnvelope } from "./briqClaudeQuery.ts";
++import {
++  Channel,
++  claudeBridgeConfiguration,
++  validateClaudeEventEnvelope,
++  validateClaudeBridgeCapability,
++} from "./briqClaudeQuery.ts";
++const transport = vi.hoisted(() => ({
++  methods: [] as string[],
++  authStatus: "unknown",
++  models: [] as Array<{ slug: string }>,
++}));
++vi.mock("@effect/platform-node/NodeSocket", async () => {
++  const { EventEmitter } = await import("node:events");
++  return {
++    NodeWS: {
++      WebSocket: class extends EventEmitter {
++        constructor() {
++          super();
++          queueMicrotask(() => this.emit("open"));
++        }
++        send(bytes: string, callback: (error?: Error) => void) {
++          const { id, method } = JSON.parse(bytes);
++          transport.methods.push(method);
++          const result =
++            method === "bridge/capabilities"
++              ? {
++                  providerInstanceId: "claudeAgent",
++                  threadId: "allocated",
++                  authStatus: transport.authStatus,
++                  models: transport.models,
++                }
++              : { nativeId: "22222222-2222-4222-8222-222222222222" };
++          this.emit("message", Buffer.from(JSON.stringify({ id, result })));
++          callback();
++        }
++        terminate() {
++          this.emit("close");
++        }
++      },
++    },
++  };
++});
 +const nativeId = "22222222-2222-4222-8222-222222222222";
 +const key = "11111111-1111-4111-8111-111111111111";
 +it("rejects cross-thread, control, delegated and stale turn events", () => {
@@ -113,7 +965,7 @@ index 00000000..60e71f14
 +});
 +it("requires a canonical exact result hash bound to the submitted SDK prompt uuid", () => {
 +  const event = { session_id: nativeId, type: "result", user_message_uuid: key, uuid: key };
-+  const resultHash = createHash("sha256").update(JSON.stringify(event)).digest("hex");
++  const resultHash = NodeCrypto.createHash("sha256").update(JSON.stringify(event)).digest("hex");
 +  const envelope = { nativeId, threadId: "thread-a", key, event, resultHash };
 +  assert.deepEqual(validateClaudeEventEnvelope(envelope, nativeId, "thread-a", key).receipt, {
 +    nativeId,
@@ -145,15 +997,89 @@ index 00000000..60e71f14
 +    }),
 +  );
 +});
++
++it("requires authoritative matching bridge capability and never treats admission as authentication", () => {
++  const capability = {
++    providerInstanceId: "claudeAgent",
++    threadId: "allocated",
++    models: [{ slug: "claude-haiku-4-5-20251001" }],
++    authStatus: "unknown",
++  };
++  assert.equal(validateClaudeBridgeCapability(capability, "allocated").authStatus, "unknown");
++  for (const authStatus of ["unknown", "unauthenticated", "authenticated"] as const)
++    assert.deepEqual(
++      validateClaudeBridgeCapability({ ...capability, authStatus, models: [] }, "allocated"),
++      { authStatus, models: [] },
++    );
++  for (const bad of [
++    { ...capability, providerInstanceId: "codex" },
++    { ...capability, threadId: "other" },
++    { ...capability, authStatus: true },
++    { ...capability, token: "forbidden" },
++  ])
++    assert.throws(() => validateClaudeBridgeCapability(bad, "allocated"));
++});
++
++it("recovers bound lifecycle requests without metadata and gates each new effect against fresh authority", async () => {
++  transport.methods = [];
++  transport.authStatus = "unknown";
++  transport.models = [];
++  const channel = new Channel({
++    T3_CLOUD_ROLE: "child",
++    T3_CLOUD_PROVIDER_INSTANCE_ID: "claudeAgent",
++    T3_CLOUD_THREAD_ID: "allocated",
++    T3_CLOUD_BRIDGE_URL: "wss://cloud.example/_cloud/bridge",
++    T3_CLOUD_BRIDGE_TOKEN: "a".repeat(43),
++    T3_CLOUD_EDGE_TOKEN: "b".repeat(43),
++  });
++  try {
++    for (const method of [
++      "claude/allocate",
++      "claude/pending",
++      "claude/receipt",
++      "claude/adopt",
++      "claude/interrupt",
++      "claude/close",
++    ])
++      await channel.request(method, { nativeId });
++    assert.deepEqual(transport.methods, [
++      "claude/allocate",
++      "claude/pending",
++      "claude/receipt",
++      "claude/adopt",
++      "claude/interrupt",
++      "claude/close",
++    ]);
++    for (const authStatus of ["unknown", "unauthenticated", "authenticated"] as const) {
++      transport.authStatus = authStatus;
++      for (const method of ["claude/open", "claude/model", "claude/offer"])
++        await NodeAssert.rejects(channel.request(method, { model: "claude-sonnet-4-6" }));
++    }
++    transport.authStatus = "authenticated";
++    transport.models = [{ slug: "claude-sonnet-4-6" }];
++    await channel.request("claude/open", { model: "claude-sonnet-4-6" });
++    transport.authStatus = "unauthenticated";
++    await NodeAssert.rejects(channel.request("claude/offer"));
++    transport.authStatus = "authenticated";
++    transport.models = [];
++    await NodeAssert.rejects(channel.request("claude/model", { model: "claude-sonnet-4-6" }));
++    await channel.request("claude/adopt", { nativeId });
++    assert.equal(transport.methods.filter((method) => method === "claude/open").length, 1);
++    assert.equal(transport.methods.includes("claude/offer"), false);
++    assert.equal(transport.methods.includes("claude/model"), false);
++  } finally {
++    channel.close();
++  }
++});
 diff --git a/apps/server/src/briqClaudeQuery.ts b/apps/server/src/briqClaudeQuery.ts
 new file mode 100644
-index 00000000..be790d10
+index 00000000..1bd47484
 --- /dev/null
 +++ b/apps/server/src/briqClaudeQuery.ts
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,426 @@
 +// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - the WebSocket transport owns and clears request deadlines.
-+import { setTimeout, clearTimeout } from "node:timers";
-+import { createHash, randomUUID } from "node:crypto";
++import * as NodeTimers from "node:timers";
++import * as NodeCrypto from "node:crypto";
 +import { NodeWS } from "@effect/platform-node/NodeSocket";
 +import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 +import * as Effect from "effect/Effect";
@@ -173,6 +1099,7 @@ index 00000000..be790d10
 +  const edge = env.T3_CLOUD_EDGE_TOKEN;
 +  if (
 +    env.T3_CLOUD_ROLE !== "child" ||
++    env.T3_CLOUD_PROVIDER_INSTANCE_ID !== "claudeAgent" ||
 +    !/^[a-zA-Z0-9_-]{1,128}$/.test(env.T3_CLOUD_THREAD_ID ?? "") ||
 +    url.protocol !== "wss:" ||
 +    url.pathname !== "/_cloud/bridge" ||
@@ -243,7 +1170,8 @@ index 00000000..be790d10
 +    event.type === "result" &&
 +    (!key ||
 +      !/^[a-f0-9]{64}$/.test(String(envelope.resultHash)) ||
-+      envelope.resultHash !== createHash("sha256").update(canonical(event)).digest("hex") ||
++      envelope.resultHash !==
++        NodeCrypto.createHash("sha256").update(canonical(event)).digest("hex") ||
 +      (event.user_message_uuid !== key &&
 +        !(Array.isArray(event.user_message_uuids) && event.user_message_uuids.includes(key))))
 +  )
@@ -267,6 +1195,7 @@ index 00000000..be790d10
 +  private failed = false;
 +  private nativeId: string | undefined;
 +  private turnKey: string | undefined;
++  private model: string | undefined;
 +  private readonly receipts = new WeakMap<SDKMessage, ClaudeRemoteResultReceipt>();
 +  private readonly threadId: string;
 +  private queue: Array<SDKMessage> = [];
@@ -277,7 +1206,7 @@ index 00000000..be790d10
 +    {
 +      resolve: (value: Record<string, unknown>) => void;
 +      reject: (error: Error) => void;
-+      timer: ReturnType<typeof setTimeout>;
++      timer: ReturnType<typeof NodeTimers.setTimeout>;
 +    }
 +  >();
 +  readonly socket: NodeWS.WebSocket;
@@ -304,7 +1233,7 @@ index 00000000..be790d10
 +          const pending = this.pending.get(value.id);
 +          if (!pending) throw Error();
 +          this.pending.delete(value.id);
-+          clearTimeout(pending.timer);
++          NodeTimers.clearTimeout(pending.timer);
 +          if (value.error) pending.reject(Error("Central Claude request rejected"));
 +          else if (value.result && typeof value.result === "object") pending.resolve(value.result);
 +          else throw Error();
@@ -332,7 +1261,7 @@ index 00000000..be790d10
 +    if (this.failed) return;
 +    this.failed = true;
 +    for (const pending of this.pending.values()) {
-+      clearTimeout(pending.timer);
++      NodeTimers.clearTimeout(pending.timer);
 +      pending.reject(Error("Claude bridge outcome unknown"));
 +    }
 +    this.pending.clear();
@@ -364,14 +1293,27 @@ index 00000000..be790d10
 +  async request(method: string, params: Record<string, unknown> = {}) {
 +    await this.ready;
 +    if (this.failed) throw Error("Claude bridge unavailable");
-+    return new Promise<Record<string, unknown>>((resolve, reject) => {
++    if (["claude/open", "claude/offer", "claude/model"].includes(method)) {
++      const capability = validateClaudeBridgeCapability(
++        await this.request("bridge/capabilities"),
++        this.threadId,
++      );
++      if (capability.authStatus !== "authenticated")
++        throw Error("Central Claude authentication is unavailable");
++      const model = method === "claude/offer" ? this.model : params.model;
++      if (typeof model !== "string" || !capability.models.includes(model))
++        throw Error("Model is not admitted by the central Claude catalog");
++    }
++    const result = await new Promise<Record<string, unknown>>((resolve, reject) => {
 +      const id = ++this.sequence;
-+      const timer = setTimeout(() => this.fail(), 30000);
++      const timer = NodeTimers.setTimeout(() => this.fail(), 30000);
 +      this.pending.set(id, { resolve, reject, timer });
 +      this.socket.send(JSON.stringify({ id, method, params }), (error) => {
 +        if (error) this.fail();
 +      });
 +    });
++    if (method === "claude/open" || method === "claude/model") this.model = String(params.model);
++    return result;
 +  }
 +  messages: AsyncIterable<SDKMessage> = {
 +    [Symbol.asyncIterator]: () => ({
@@ -421,7 +1363,7 @@ index 00000000..be790d10
 +        try {
 +          const result = await channel.request("claude/open", {
 +            nativeId,
-+            key: randomUUID(),
++            key: NodeCrypto.randomUUID(),
 +            model: input.options.model,
 +          });
 +          if (result.nativeId !== nativeId) throw Error("Claude native identity mismatch");
@@ -515,37 +1457,123 @@ index 00000000..be790d10
 +    assertComplete: Effect.void,
 +  };
 +}
++
++export function validateClaudeBridgeCapability(value: Record<string, unknown>, threadId: string) {
++  if (
++    value.providerInstanceId !== "claudeAgent" ||
++    value.threadId !== threadId ||
++    typeof value.authStatus !== "string" ||
++    !["authenticated", "unauthenticated", "unknown"].includes(value.authStatus) ||
++    Object.keys(value).some(
++      (key) => !["providerInstanceId", "threadId", "authStatus", "models"].includes(key),
++    ) ||
++    !Array.isArray(value.models) ||
++    value.models.length > 128 ||
++    new Set(
++      value.models.map((model: unknown) =>
++        model && typeof model === "object" && "slug" in model ? model.slug : undefined,
++      ),
++    ).size !== value.models.length ||
++    !value.models.every(
++      (model: unknown) =>
++        typeof model === "object" &&
++        model !== null &&
++        Object.keys(model).length === 1 &&
++        "slug" in model &&
++        typeof model.slug === "string" &&
++        /^claude-[a-z0-9][a-z0-9-]{0,120}$/.test(model.slug),
++    )
++  )
++    throw Error("Invalid central Claude capability");
++  return {
++    authStatus: value.authStatus as "authenticated" | "unauthenticated" | "unknown",
++    models: [...new Set((value.models as Array<{ slug: string }>).map((model) => model.slug))],
++  };
++}
++
++export async function readClaudeBridgeCapability(env: Environment) {
++  const config = claudeBridgeConfiguration(env);
++  const channel = new Channel(env);
++  try {
++    return validateClaudeBridgeCapability(
++      await channel.request("bridge/capabilities"),
++      config.threadId,
++    );
++  } finally {
++    channel.close();
++  }
++}
 diff --git a/apps/server/src/briqSandbox.test.ts b/apps/server/src/briqSandbox.test.ts
 new file mode 100644
-index 00000000..3a649821
+index 00000000..18b6d29d
 --- /dev/null
 +++ b/apps/server/src/briqSandbox.test.ts
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,136 @@
 +import { describe, expect, it } from "vite-plus/test";
-+import { sandboxCommandRejection, sandboxCreationRejection, sandboxRole } from "./briqSandbox.ts";
++import {
++  sandboxCommandRejection,
++  sandboxCreationRejection,
++  sandboxRole,
++  sandboxSessionRejection,
++  sandboxAdmittedProviders,
++} from "./briqSandbox.ts";
 +
 +const child = { T3_CLOUD_ROLE: "child", T3_CLOUD_THREAD_ID: "allocated" };
-+const created = { type: "thread.created", threadId: "allocated", payload: {
-+  createdBy: "user", modelSelection: { instanceId: "codex" },
-+} };
++const created = {
++  type: "thread.created",
++  threadId: "allocated",
++  payload: {
++    createdBy: "user",
++    modelSelection: { instanceId: "codex" },
++  },
++};
 +
 +describe("sandbox creation authority", () => {
 +  it("denies every home creation source before event append", () => {
 +    for (const createdBy of ["user", "agent", "automation", undefined])
-+      expect(sandboxCreationRejection({ ...created, payload: { ...created.payload, createdBy } },
-+        { T3_CLOUD_ROLE: "central" })).toBeDefined();
-+    for (const type of ["thread.create", "thread.fork", "message.dispatch", "thread.created.record", "subagent.start"])
-+      expect(sandboxCommandRejection({ type, threadId: "allocated" }, { T3_CLOUD_ROLE: "central" })).toBeDefined();
++      expect(
++        sandboxCreationRejection(
++          { ...created, payload: { ...created.payload, createdBy } },
++          { T3_CLOUD_ROLE: "central" },
++        ),
++      ).toBeDefined();
++    for (const type of [
++      "thread.create",
++      "thread.fork",
++      "message.dispatch",
++      "thread.created.record",
++      "subagent.start",
++    ])
++      expect(
++        sandboxCommandRejection({ type, threadId: "allocated" }, { T3_CLOUD_ROLE: "central" }),
++      ).toBeDefined();
 +  });
 +  it("allows only the bound user thread and Codex provider", () => {
 +    expect(sandboxCreationRejection(created, child)).toBeUndefined();
 +    expect(sandboxCreationRejection({ ...created, threadId: "other" }, child)).toBeDefined();
-+    expect(sandboxCreationRejection({ ...created, payload: { ...created.payload, createdBy: "agent" } }, child)).toBeDefined();
-+    expect(sandboxCreationRejection({ ...created, payload: { ...created.payload,
-+      modelSelection: { instanceId: "claude" } } }, child)).toBeDefined();
-+    for (const type of ["thread.fork", "thread.created.record", "subagent.start", "automation.run", "multi-model.start"])
++    expect(
++      sandboxCreationRejection(
++        { ...created, payload: { ...created.payload, createdBy: "agent" } },
++        child,
++      ),
++    ).toBeDefined();
++    expect(
++      sandboxCreationRejection(
++        { ...created, payload: { ...created.payload, modelSelection: { instanceId: "claude" } } },
++        child,
++      ),
++    ).toBeDefined();
++    for (const type of [
++      "thread.fork",
++      "thread.created.record",
++      "subagent.start",
++      "automation.run",
++      "multi-model.start",
++    ])
 +      expect(sandboxCommandRejection({ type, threadId: "allocated" }, child)).toBeDefined();
-+    expect(sandboxCommandRejection({ type: "message.dispatch", threadId: "allocated" }, child)).toBeUndefined();
++    expect(
++      sandboxCommandRejection({ type: "message.dispatch", threadId: "allocated" }, child),
++    ).toBeUndefined();
 +  });
 +  it("fails closed on missing binding or invalid role, preserving standalone", () => {
 +    expect(sandboxRole({ T3_CLOUD_ROLE: "typo" })).toBe("invalid");
@@ -554,12 +1582,75 @@ index 00000000..3a649821
 +    expect(sandboxCreationRejection(created, {})).toBeUndefined();
 +  });
 +});
++
++describe("immutable sandbox provider admission", () => {
++  it("admits only runtime-derived central providers and rejects malformed admission", () => {
++    expect(sandboxAdmittedProviders({ T3_CLOUD_ROLE: "central" })).toEqual(["codex"]);
++    expect(
++      sandboxAdmittedProviders({
++        T3_CLOUD_ROLE: "central",
++        T3_CLOUD_ADMITTED_PROVIDERS: '["codex","claudeAgent"]',
++      }),
++    ).toEqual(["codex", "claudeAgent"]);
++    for (const value of ['["claude"]', '["codex","codex"]', "true", "[]"])
++      expect(
++        sandboxAdmittedProviders({ T3_CLOUD_ROLE: "central", T3_CLOUD_ADMITTED_PROVIDERS: value }),
++      ).toEqual([]);
++    expect(
++      sandboxAdmittedProviders({ ...child, T3_CLOUD_ADMITTED_PROVIDERS: '["claudeAgent"]' }),
++    ).toEqual([]);
++  });
++  it("rejects omitted creation, cross-provider defaults and persisted restart identity", () => {
++    const assigned = { ...child, T3_CLOUD_PROVIDER_INSTANCE_ID: "claudeAgent" };
++    const selection = { instanceId: "claudeAgent" };
++    expect(
++      sandboxCommandRejection(
++        { type: "thread.create", threadId: "allocated", modelSelection: selection },
++        assigned,
++      ),
++    ).toBeUndefined();
++    expect(
++      sandboxCommandRejection({ type: "thread.create", threadId: "allocated" }, assigned),
++    ).toBeDefined();
++    expect(
++      sandboxCommandRejection(
++        { type: "project.update", defaultModelSelection: { instanceId: "codex" } },
++        assigned,
++      ),
++    ).toBeDefined();
++    for (const instanceId of ["codex", "claude", "custom-claude"])
++      expect(
++        sandboxSessionRejection({ threadId: "allocated", instanceId }, assigned),
++      ).toBeDefined();
++    expect(
++      sandboxSessionRejection(
++        { threadId: "allocated", instanceId: "claudeAgent", persistedInstanceId: "codex" },
++        assigned,
++      ),
++    ).toBeDefined();
++    expect(
++      sandboxSessionRejection(
++        { threadId: "allocated", instanceId: "claudeAgent", persistedDriver: "codex" },
++        assigned,
++      ),
++    ).toBeDefined();
++    expect(
++      sandboxSessionRejection(
++        { threadId: "allocated", instanceId: "claudeAgent", persistedDriver: "claudeAgent" },
++        assigned,
++      ),
++    ).toBeUndefined();
++    expect(
++      sandboxSessionRejection({ threadId: "other", instanceId: "claudeAgent" }, assigned),
++    ).toBeDefined();
++  });
++});
 diff --git a/apps/server/src/briqSandbox.ts b/apps/server/src/briqSandbox.ts
 new file mode 100644
-index 00000000..6722d219
+index 00000000..00face8e
 --- /dev/null
 +++ b/apps/server/src/briqSandbox.ts
-@@ -0,0 +1,60 @@
+@@ -0,0 +1,131 @@
 +type SandboxEnvironment = Readonly<Record<string, string | undefined>>;
 +
 +export function sandboxRole(
@@ -570,24 +1661,69 @@ index 00000000..6722d219
 +  return role === "central" || role === "child" ? role : "invalid";
 +}
 +
++export type SandboxProviderInstanceId = "codex" | "claudeAgent";
++
++export function sandboxAssignedProvider(
++  env: SandboxEnvironment = process.env,
++): SandboxProviderInstanceId | undefined {
++  const id = env.T3_CLOUD_PROVIDER_INSTANCE_ID ?? "codex";
++  return id === "codex" || id === "claudeAgent" ? id : undefined;
++}
++
++// Only the supervised central process receives this runtime-derived admission list.
++export function sandboxAdmittedProviders(
++  env: SandboxEnvironment = process.env,
++): ReadonlyArray<SandboxProviderInstanceId> {
++  if (sandboxRole(env) !== "central") return [];
++  if (env.T3_CLOUD_ADMITTED_PROVIDERS === undefined) return ["codex"];
++  try {
++    const ids: unknown = JSON.parse(env.T3_CLOUD_ADMITTED_PROVIDERS);
++    if (
++      Array.isArray(ids) &&
++      ids.length > 0 &&
++      ids.length <= 2 &&
++      ids.every((id) => id === "codex" || id === "claudeAgent") &&
++      new Set(ids).size === ids.length
++    )
++      return ids;
++  } catch {
++    /* Invalid supervised configuration denies allocation. */
++  }
++  return [];
++}
++
 +export function sandboxCommandRejection(
 +  command: {
 +    readonly type: string;
 +    readonly threadId?: string | undefined;
 +    readonly modelSelection?: { readonly instanceId: string } | undefined;
++    readonly defaultModelSelection?: { readonly instanceId: string } | null | undefined;
 +  },
 +  env: SandboxEnvironment = process.env,
 +): string | undefined {
 +  const role = sandboxRole(env);
 +  if (role === "standalone") return;
 +  if (role === "invalid") return "Invalid sandbox role.";
-+  if (command.type.startsWith("project.")) return;
++  if (command.type.startsWith("project.")) {
++    if (
++      role === "child" &&
++      (command.defaultModelSelection ?? command.modelSelection) &&
++      (command.defaultModelSelection ?? command.modelSelection)?.instanceId !==
++        sandboxAssignedProvider(env)
++    )
++      return "Project defaults must match the allocated provider.";
++    return;
++  }
 +  if (role === "central")
 +    return "Create a sandbox through the cloud allocator before running a thread.";
 +  if (!env.T3_CLOUD_THREAD_ID || command.threadId !== env.T3_CLOUD_THREAD_ID)
 +    return "This environment is bound to one allocated thread.";
-+  if (command.modelSelection && command.modelSelection.instanceId !== "codex")
-+    return "Only the central Codex bridge is supported in this sandbox.";
++  const assigned = sandboxAssignedProvider(env);
++  if (!assigned) return "Invalid sandbox provider assignment.";
++  if (command.modelSelection && command.modelSelection.instanceId !== assigned)
++    return "The effective provider must match this sandbox allocation.";
++  if (command.type === "thread.create" && !command.modelSelection)
++    return "Sandbox thread creation requires its assigned provider explicitly.";
 +  if (
 +    /fork|multi-model|automation|delegated|thread.created.record|subagent.start/.test(command.type)
 +  )
@@ -619,6 +1755,32 @@ index 00000000..6722d219
 +      ? "Only the allocated user thread can be created in this sandbox."
 +      : undefined)
 +  );
++}
++
++export function sandboxSessionRejection(
++  input: {
++    readonly threadId: string;
++    readonly instanceId: string;
++    readonly persistedInstanceId?: string;
++    readonly persistedDriver?: string;
++  },
++  env: SandboxEnvironment = process.env,
++): string | undefined {
++  if (sandboxRole(env) === "standalone") return;
++  if (
++    sandboxRole(env) !== "child" ||
++    !env.T3_CLOUD_THREAD_ID ||
++    input.threadId !== env.T3_CLOUD_THREAD_ID
++  )
++    return "Provider execution requires the allocated child thread.";
++  const assigned = sandboxAssignedProvider(env);
++  if (
++    !assigned ||
++    input.instanceId !== assigned ||
++    (input.persistedInstanceId !== undefined && input.persistedInstanceId !== assigned) ||
++    (input.persistedDriver !== undefined && input.persistedDriver !== assigned)
++  )
++    return "Effective and persisted providers must match the sandbox assignment.";
 +}
 diff --git a/apps/server/src/briqSandboxAccess.test.ts b/apps/server/src/briqSandboxAccess.test.ts
 new file mode 100644
@@ -719,10 +1881,10 @@ index 00000000..861e5d85
 +}
 diff --git a/apps/server/src/briqSandboxAllocator.test.ts b/apps/server/src/briqSandboxAllocator.test.ts
 new file mode 100644
-index 00000000..da53e34f
+index 00000000..3166c276
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAllocator.test.ts
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,131 @@
 +import { expect, it } from "@effect/vitest";
 +import { ThreadId } from "@t3tools/contracts";
 +import * as Effect from "effect/Effect";
@@ -735,15 +1897,20 @@ index 00000000..da53e34f
 +afterEach(() => vi.unstubAllEnvs());
 +
 +const allocation =
-+  '{"allocationId":"allocation-a","environmentId":"environment-a","threadId":"thread-a","project":{"id":"project-a","title":"Sandbox","workspaceRoot":"/work"},"connection":{"url":"https://child.example","credential":"test-pairing"}}';
++  '{"allocationId":"allocation-a","providerInstanceId":"codex","environmentId":"environment-a","threadId":"thread-a","project":{"id":"project-a","title":"Sandbox","workspaceRoot":"/work"},"connection":{"url":"https://child.example","credential":"test-pairing"}}';
 +const configure = () => {
 +  vi.stubEnv("T3_CLOUD_ROLE", "central");
 +  vi.stubEnv("T3_CLOUD_ALLOCATOR_URL", "http://127.0.0.1:8080/_cloud/threads");
 +  vi.stubEnv("T3_CLOUD_ALLOCATOR_TOKEN", "test-allocation-capability");
 +};
-+const allocate = (fetch: typeof globalThis.fetch) =>
++const allocate = (fetch: typeof globalThis.fetch, providerInstanceId?: "codex" | "claudeAgent") =>
 +  BriqSandboxAllocator.BriqSandboxAllocator.pipe(
-+    Effect.flatMap((service) => service.allocate({ threadId: ThreadId.make("thread-a") })),
++    Effect.flatMap((service) =>
++      service.allocate({
++        threadId: ThreadId.make("thread-a"),
++        ...(providerInstanceId ? { providerInstanceId } : {}),
++      }),
++    ),
 +    Effect.provide(BriqSandboxAllocator.layer.pipe(Layer.provide(FetchHttpClient.layer))),
 +    Effect.provideService(FetchHttpClient.Fetch, fetch),
 +  );
@@ -814,12 +1981,47 @@ index 00000000..da53e34f
 +    expect(cancelled).toBe(true);
 +  }),
 +);
++
++it.effect("rejects cross-provider allocator responses", () =>
++  Effect.gen(function* () {
++    configure();
++    const result = yield* Effect.exit(
++      allocate(
++        async () =>
++          new Response(
++            allocation.replace(
++              '"providerInstanceId":"codex"',
++              '"providerInstanceId":"claudeAgent"',
++            ),
++          ),
++      ),
++    );
++    expect(Exit.isFailure(result)).toBe(true);
++  }),
++);
++
++it.effect(
++  "rejects Claude before allocation when the supervised home has its legacy admission",
++  () =>
++    Effect.gen(function* () {
++      configure();
++      let requests = 0;
++      const result = yield* Effect.exit(
++        allocate(async () => {
++          requests++;
++          return new Response(allocation);
++        }, "claudeAgent"),
++      );
++      expect(Exit.isFailure(result)).toBe(true);
++      expect(requests).toBe(0);
++    }),
++);
 diff --git a/apps/server/src/briqSandboxAllocator.ts b/apps/server/src/briqSandboxAllocator.ts
 new file mode 100644
-index 00000000..6c89d900
+index 00000000..22c3bb78
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAllocator.ts
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,104 @@
 +import {
 +  BriqSandboxAllocation,
 +  BriqSandboxAllocationError,
@@ -831,7 +2033,7 @@ index 00000000..6c89d900
 +import * as Schema from "effect/Schema";
 +import * as Stream from "effect/Stream";
 +import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
-+import { sandboxRole } from "./briqSandbox.ts";
++import { sandboxRole, sandboxAdmittedProviders } from "./briqSandbox.ts";
 +
 +export class BriqSandboxAllocator extends Context.Service<
 +  BriqSandboxAllocator,
@@ -878,9 +2080,12 @@ index 00000000..6c89d900
 +  const role = sandboxRole();
 +  const destination = allocatorDestination(process.env.T3_CLOUD_ALLOCATOR_URL);
 +  const token = process.env.T3_CLOUD_ALLOCATOR_TOKEN;
++  const admitted = sandboxAdmittedProviders();
 +  return BriqSandboxAllocator.of({
 +    allocate: Effect.fn("BriqSandboxAllocator.allocate")(function* (input) {
 +      if (role !== "central" || !destination || !token) return yield* unavailable();
++      const requested = input.providerInstanceId ?? "codex";
++      if (!admitted.includes(requested)) return yield* unavailable();
 +      const body = yield* encodeInput(input).pipe(Effect.mapError(unavailable));
 +      const request = HttpClientRequest.post(destination.href).pipe(
 +        HttpClientRequest.setHeader("authorization", `Bearer ${token}`),
@@ -913,7 +2118,8 @@ index 00000000..6c89d900
 +        Effect.timeout("60 seconds"),
 +        Effect.mapError(unavailable),
 +      );
-+      if (allocation.threadId !== input.threadId) return yield* unavailable();
++      if (allocation.threadId !== input.threadId || allocation.providerInstanceId !== requested)
++        return yield* unavailable();
 +      return allocation;
 +    }),
 +  });
@@ -1043,8 +2249,416 @@ index 1e3388e4..9c55ed3c 100644
    [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
    [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
    [ORCHESTRATION_V2_WS_METHODS.stopWorkflow]: "orchestration",
+diff --git a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts
+index ffe99dd2..a114eb9a 100644
+--- a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts
++++ b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts
+@@ -94,6 +94,15 @@ import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEve
+ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+ import type * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
+ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
++import { ClaudeDriver } from "../../provider/Drivers/ClaudeDriver.ts";
++import * as BriqClaudeQuery from "../../briqClaudeQuery.ts";
++import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
++import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
++import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
++import * as ResetCreditCoordinator from "../../provider/resetCreditCoordinator.ts";
++import { HttpClient } from "effect/http";
++import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
++import type { ProviderInstance } from "@t3tools/provider-core/server/driver";
+ import * as ClaudeAdapterV2 from "./ClaudeAdapterV2.ts";
+ import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
+ import { ClaudeOrchestratorReplayHarness } from "./ClaudeAdapterV2.testkit.ts";
+@@ -2864,6 +2873,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
+     });
+ 
+   const makeWakeHarnessWithOptions = (options?: {
++    readonly remoteDriver?: boolean;
++    readonly reconcileRemoteResults?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["reconcileRemoteResults"];
+     readonly close?: (sdkMessages: Queue.Queue<SDKMessage>) => Effect.Effect<void>;
+     readonly interrupt?: Effect.Effect<void>;
+     readonly setPermissionMode?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["setPermissionMode"];
+@@ -2934,7 +2945,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
+           Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "provider_thread.updated" }>
+         >();
+       let openedOptions: ClaudeAdapterV2.ClaudeAgentSdkQueryOptions | undefined;
+-      const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
++      const adapterOptions: ClaudeAdapterV2.ClaudeAdapterV2Options = {
+         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+         settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
+         environment: options?.environment ?? {},
+@@ -3031,8 +3042,109 @@ describe("ClaudeAdapterV2 background wake turns", () => {
+           forkSession: options?.forkSession ?? (() => Effect.die("unused forkSession")),
+           subagentLaunchToolUseId: () => Effect.succeed(options?.subagentLaunchToolUseId ?? null),
+           assertComplete: Effect.void,
++          ...(options?.reconcileRemoteResults
++            ? { reconcileRemoteResults: options.reconcileRemoteResults }
++            : {}),
+         },
+-      });
++      };
++      let driverInstance: ProviderInstance | undefined;
++      const deniedLocalCalls: string[] = [];
++      const denyLocal = (operation: string) =>
++        Effect.sync(() => {
++          deniedLocalCalls.push(operation);
++        }).pipe(Effect.andThen(Effect.die(`Remote child local dependency: ${operation}`)));
++      const denyLocalSync = (operation: string): never => {
++        deniedLocalCalls.push(operation);
++        throw new Error(`Remote child local dependency: ${operation}`);
++      };
++      const adapter = options?.remoteDriver
++        ? yield* Effect.gen(function* () {
++            const testConfig = yield* ServerConfig.ServerConfig.pipe(
++              Effect.provide(ServerConfig.layerTest("/workspace", attachmentsDir)),
++            );
++            driverInstance = yield* ClaudeDriver.create({
++              instanceId: adapterOptions.instanceId,
++              displayName: "Claude",
++              accentColor: undefined,
++              environment: [],
++              enabled: true,
++              config: {
++                ...adapterOptions.settings,
++                binaryPath: "/opt/t3-cloud/bin/claude-unavailable",
++                homePath: "/work/.claude-empty",
++              },
++            }).pipe(
++              Effect.provide(
++                Layer.mergeAll(
++                  Layer.mock(ProviderHost.ProviderHost)({
++                    paths: {
++                      cwd: "/workspace",
++                      baseDir: "/unused",
++                      stateDir: "/unused-state",
++                      providerStatusCacheDir: "/unused-cache",
++                      attachmentsDir,
++                    },
++                    settings: {
++                      get: denyLocal("settings"),
++                      withSnapshot: () => denyLocal("settings-snapshot"),
++                      changes: Stream.fromEffect(denyLocal("settings-changes")),
++                      subscribe: denyLocal("settings-subscribe"),
++                    },
++                    resolveAttachmentPath: () => denyLocalSync("attachment-path"),
++                    credentials: () => denyLocal("credentials"),
++                  }),
++                  Layer.mock(ModelCatalog.ModelCatalog)({
++                    bundled: () => denyLocalSync("bundled-catalog"),
++                    current: () => denyLocal("catalog-probe"),
++                    refreshInBackground: denyLocal("catalog-refresh"),
++                  }),
++                  Layer.mock(ProviderLatestVersions.ProviderLatestVersions)({
++                    cached: () => denyLocal("maintenance-version"),
++                  }),
++                  Layer.mock(ResetCreditCoordinator.ResetCreditCoordinator)({
++                    redeem: () => denyLocal("reset-credit"),
++                  }),
++                  Layer.succeed(
++                    HttpClient.HttpClient,
++                    HttpClient.make(() => denyLocal("local-http")),
++                  ),
++                  Layer.succeed(
++                    FileSystem.FileSystem,
++                    FileSystem.makeNoop({
++                      readFileString: () => denyLocal("read-file-string"),
++                      readFile: () => denyLocal("read-file"),
++                      readDirectory: () => denyLocal("scan-directory"),
++                      exists: () => denyLocal("probe-file"),
++                      stat: () => denyLocal("stat-file"),
++                      realPath: (cwd) =>
++                        cwd === "/workspace"
++                          ? Effect.succeed(cwd)
++                          : denyLocal("canonicalize-foreign-path"),
++                    }),
++                  ),
++                  Layer.succeed(
++                    ChildProcessSpawner.ChildProcessSpawner,
++                    ChildProcessSpawner.make(() => denyLocal("spawn-process")),
++                  ),
++                  Layer.succeed(ServerConfig.ServerConfig, {
++                    ...testConfig,
++                    attachmentsDir,
++                    stateDir: "/unused-state",
++                  }),
++                  Layer.succeed(
++                    ProviderEventLoggers.ProviderEventLoggers,
++                    ProviderEventLoggers.NoOpProviderEventLoggers,
++                  ),
++                  Layer.succeed(
++                    ClaudeAdapterV2.ClaudeAgentSdkQueryRunner,
++                    adapterOptions.queryRunner,
++                  ),
++                ),
++              ),
++            );
++            return driverInstance.orchestrationAdapter;
++          })
++        : yield* ClaudeAdapterV2.makeClaudeAdapterV2(adapterOptions);
+       const threadId = ThreadId.make("thread-claude-wake");
+       const runtime = yield* adapter.openSession({
+         threadId,
+@@ -3085,6 +3197,8 @@ describe("ClaudeAdapterV2 background wake turns", () => {
+             event.type === "turn.terminal",
+         );
+       return {
++        driverInstance,
++        deniedLocalCalls,
+         attachmentsDir,
+         runtime,
+         providerThread,
+@@ -4915,6 +5029,249 @@ describe("ClaudeAdapterV2 background wake turns", () => {
+       ),
+   );
+ 
++  it.effect(
++    "constructs and drives the remote Claude driver without local native or credential dependencies",
++    () =>
++      Effect.scoped(
++        Effect.gen(function* () {
++          vi.stubEnv("T3_CLOUD_ROLE", "child");
++          vi.stubEnv("T3_CLOUD_PROVIDER_INSTANCE_ID", "claudeAgent");
++          vi.stubEnv("T3_CLOUD_THREAD_ID", "thread-claude-wake");
++          const capability = vi
++            .spyOn(BriqClaudeQuery, "readClaudeBridgeCapability")
++            .mockResolvedValue({
++              authStatus: "authenticated",
++              models: ["claude-opus-5-5", "claude-sonnet-4-6", "claude-future-unsupported"],
++            });
++          const settingsProbe = vi.mocked(ClaudeSdk.resolveSettings).mockImplementation(() => {
++            throw Error("No child settings probe");
++          });
++          const nativeQuery = vi.spyOn(ClaudeSdk, "query").mockImplementation(() => {
++            throw Error("No child native SDK query");
++          });
++          try {
++            const harness = yield* makeWakeHarnessWithOptions({
++              remoteDriver: true,
++              applyFlagSettings: () =>
++                Effect.die("Remote child must not apply local flag settings"),
++            });
++            const instance = harness.driverInstance!;
++            const snapshot = yield* instance.snapshot.refresh;
++            assert.equal(snapshot.auth.status, "authenticated");
++            assert.isFalse(
++              snapshot.models.some((model) => model.slug === "claude-future-unsupported"),
++            );
++            assert.isNull((yield* instance.snapshot.resolveMaintenance()).update);
++            assert.isUndefined(instance.auth);
++            assert.isUndefined(instance.consumeResetCredit);
++            assert.isUndefined(instance.snapshotForCwd);
++            if (ClaudeDriver.usage?.kind === "transcripts")
++              assert.deepEqual(
++                yield* ClaudeDriver.usage.directories({
++                  instanceId: instance.instanceId,
++                  config: DEFAULT_CLAUDE_SETTINGS,
++                  environment: {},
++                  configured: true,
++                }),
++                [],
++              );
++            const selection = {
++              instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
++              model: "claude-opus-5-5",
++              options: [
++                { id: "effort", value: "high" },
++                { id: "thinking", value: true },
++              ],
++            } satisfies ModelSelection;
++            const common = { cwd: "/workspace", modelSelection: selection };
++            for (const operation of [
++              instance.textGeneration
++                .generateThreadTitle({ ...common, message: "title" })
++                .pipe(Effect.asVoid),
++              instance.textGeneration
++                .generateBranchName({ ...common, message: "branch" })
++                .pipe(Effect.asVoid),
++              instance.textGeneration
++                .generateCommitMessage({
++                  ...common,
++                  branch: null,
++                  stagedSummary: "",
++                  stagedPatch: "",
++                })
++                .pipe(Effect.asVoid),
++              instance.textGeneration
++                .generatePrContent({
++                  ...common,
++                  baseBranch: "main",
++                  headBranch: "feature",
++                  commitSummary: "",
++                  diffSummary: "",
++                  diffPatch: "",
++                })
++                .pipe(Effect.asVoid),
++              instance.textGeneration
++                .generateReviewGuide({
++                  ...common,
++                  number: 1,
++                  title: "review",
++                  description: "",
++                  baseBranch: "main",
++                  baseCommit: "base",
++                  settledReview: "",
++                })
++                .pipe(Effect.asVoid),
++            ])
++              assert.equal((yield* operation.pipe(Effect.result))._tag, "Failure");
++            const now = yield* DateTime.now;
++            const turn = (ordinal: number, modelSelection: ModelSelection) =>
++              makeClaudeTestTurnInput({
++                threadId: harness.threadId,
++                providerThread: harness.providerThread,
++                now,
++                attemptId: RunAttemptId.make(`remote-denial-${ordinal}`),
++                text: "Request",
++                attachments: [],
++                providerTurnOrdinal: ordinal,
++                modelSelection,
++              });
++            for (const model of ["claude-sonnet-4-6-20251117", "sonnet-4.6"]) {
++              const denied = yield* harness.runtime
++                .startTurn(turn(10, { ...selection, model }))
++                .pipe(Effect.result);
++              assert.equal(denied._tag, "Failure");
++              assert.isUndefined(harness.getOpenedOptions());
++              assert.lengthOf(harness.processQueues, 0);
++              assert.deepEqual(harness.liveSelectionChanges, []);
++              assert.lengthOf(harness.offeredMessages, 0);
++            }
++            yield* harness.runtime.startTurn(turn(1, selection));
++            yield* harness.offerAndWait(turnOneResult);
++            yield* Queue.take(harness.terminalReceipts);
++            const openedOptions = harness.getOpenedOptions();
++            for (const model of ["claude-sonnet-4-6-20251117", "sonnet-4.6"]) {
++              const denied = yield* harness.runtime
++                .startTurn(turn(11, { ...selection, model }))
++                .pipe(Effect.result);
++              assert.equal(denied._tag, "Failure");
++              assert.strictEqual(harness.getOpenedOptions(), openedOptions);
++              assert.lengthOf(harness.processQueues, 1);
++              assert.deepEqual(harness.liveSelectionChanges, []);
++              assert.lengthOf(harness.offeredMessages, 1);
++            }
++            yield* harness.runtime.resumeThread({
++              providerThread: harness.providerThread,
++              threadId: harness.threadId,
++              modelSelection: selection,
++              runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
++            });
++            yield* harness.runtime.startTurn(turn(2, { ...selection, model: "claude-sonnet-4-6" }));
++            yield* harness.offerAndWait(turnOneResult);
++            yield* Queue.take(harness.terminalReceipts);
++            assert.deepEqual(harness.liveSelectionChanges, [{ model: "claude-sonnet-4-6" }]);
++            const rejected = yield* harness.runtime
++              .startTurn(
++                turn(3, {
++                  ...selection,
++                  options: [
++                    { id: "effort", value: "low" },
++                    { id: "thinking", value: true },
++                  ],
++                }),
++              )
++              .pipe(Effect.result);
++            assert.equal(rejected._tag, "Failure");
++            assert.deepEqual(harness.liveSelectionChanges, [{ model: "claude-sonnet-4-6" }]);
++            assert.lengthOf(harness.offeredMessages, 2);
++            assert.equal(capability.mock.calls.length, 1);
++            assert.equal(settingsProbe.mock.calls.length, 0);
++            assert.equal(nativeQuery.mock.calls.length, 0);
++            assert.deepEqual(harness.deniedLocalCalls, []);
++          } finally {
++            capability.mockRestore();
++            nativeQuery.mockRestore();
++            vi.unstubAllEnvs();
++          }
++        }).pipe(
++          Effect.provideService(HostProcess.Environment, { T3_CLOUD_ROLE: "child" }),
++          Effect.provideService(ClaudeExecutableFileCheck, () => {
++            throw Error("No child executable probe");
++          }),
++          Effect.provideService(SpawnExecutableResolution, () => {
++            throw Error("No child executable resolution");
++          }),
++          Effect.provide(
++            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
++          ),
++        ),
++      ),
++  );
++
++  it.effect(
++    "keeps the actual remote adapter reachable for receipt recovery after auth and catalog loss",
++    () =>
++      Effect.scoped(
++        Effect.gen(function* () {
++          vi.stubEnv("T3_CLOUD_ROLE", "child");
++          vi.stubEnv("T3_CLOUD_PROVIDER_INSTANCE_ID", "claudeAgent");
++          vi.stubEnv("T3_CLOUD_THREAD_ID", "thread-claude-wake");
++          const capability = vi.spyOn(BriqClaudeQuery, "readClaudeBridgeCapability");
++          try {
++            for (const [authStatus, models] of [
++              ["unknown", []],
++              ["unauthenticated", []],
++              ["authenticated", []],
++              ["authenticated", ["claude-future-unsupported"]],
++            ] as const) {
++              capability.mockResolvedValue({ authStatus, models: [...models] });
++              const recovered: string[] = [];
++              const receipt = {
++                nativeId: WAKE_NATIVE_SESSION,
++                key: "11111111-1111-4111-8111-111111111111",
++                resultHash: "a".repeat(64),
++              };
++              const harness = yield* makeWakeHarnessWithOptions({
++                remoteDriver: true,
++                reconcileRemoteResults: (threadId, readCommitted) =>
++                  Effect.gen(function* () {
++                    assert.equal(threadId, "thread-claude-wake");
++                    recovered.push("pending");
++                    assert.equal(yield* readCommitted(receipt), 17);
++                    recovered.push("adopt");
++                  }),
++              });
++              const snapshot = yield* harness.driverInstance!.snapshot.getSnapshot;
++              assert.equal(snapshot.status, "warning");
++              assert.equal(snapshot.auth.status, authStatus);
++              assert.deepEqual(snapshot.models, []);
++              assert.isUndefined(harness.getOpenedOptions());
++              yield* harness.runtime.resumeThread({
++                providerThread: harness.providerThread,
++                threadId: harness.threadId,
++                modelSelection: CLAUDE_TEST_MODEL_SELECTION,
++                runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
++              });
++              yield* harness.runtime.reconcileSandboxProviderResults!((boundReceipt) => {
++                assert.deepEqual(boundReceipt, { provider: "claudeAgent", ...receipt });
++                return Effect.succeed(17);
++              });
++              assert.deepEqual(recovered, ["pending", "adopt"]);
++              assert.isUndefined(harness.getOpenedOptions());
++              assert.deepEqual(harness.offeredMessages, []);
++              assert.deepEqual(harness.deniedLocalCalls, []);
++            }
++          } finally {
++            capability.mockRestore();
++            vi.unstubAllEnvs();
++          }
++        }).pipe(
++          Effect.provideService(HostProcess.Environment, { T3_CLOUD_ROLE: "child" }),
++          Effect.provide(
++            Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
++          ),
++        ),
++      ),
++  );
++
+   it.effect("re-sends the model on the turn after a live selection change fails", () =>
+     Effect.scoped(
+       Effect.gen(function* () {
 diff --git a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
-index a280bd84..b92fe58e 100644
+index a280bd84..213ee280 100644
 --- a/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
 +++ b/apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts
 @@ -1,3 +1,4 @@
@@ -1095,7 +2709,114 @@ index a280bd84..b92fe58e 100644
      return ClaudeAgentSdkQueryRunner.of({
        allocateSessionId: crypto
          .randomUUIDv4()
-@@ -7487,6 +7509,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+@@ -1750,6 +1772,7 @@ function providerSession(input: {
+   readonly cwd: string | null;
+   readonly model: string;
+   readonly now: DateTime.Utc;
++  readonly capabilities?: OrchestrationV2ProviderSession["capabilities"];
+ }): OrchestrationV2ProviderSession {
+   return {
+     id: input.providerSessionId,
+@@ -1758,7 +1781,7 @@ function providerSession(input: {
+     status: "ready",
+     cwd: input.cwd ?? process.cwd(),
+     model: input.model,
+-    capabilities: ClaudeProviderCapabilitiesV2,
++    capabilities: input.capabilities ?? ClaudeProviderCapabilitiesV2,
+     createdAt: input.now,
+     updatedAt: input.now,
+     lastError: null,
+@@ -4070,6 +4093,7 @@ interface ClaudeLiveQueryContext {
+   readonly query: ClaudeAgentSdkQuerySession;
+   readonly queryPolicyKey: string;
+   selection: CompiledClaudeModelSelection;
++  readonly remoteSelectionOptionsKey: string;
+   readonly closed: Deferred.Deferred<void, never>;
+   lastTurn: ActiveClaudeTurnContext | null;
+   // "early" echoes on the first frame; "acknowledged" confirms uuid acceptance, but resume turns can still precede the prompt.
+@@ -4512,6 +4536,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+   ).pipe(Effect.provideService(Path.Path, path));
+   const hostEnvironment = yield* HostProcess.Environment;
+   const hostPlatform = yield* HostProcess.Platform;
++  const bridged = hostEnvironment.T3_CLOUD_ROLE === "child";
+   const customHome =
+     adapterOptions.settings.homePath.trim().length > 0 ||
+     adapterOptions.environment.CLAUDE_CONFIG_DIR !== hostEnvironment.CLAUDE_CONFIG_DIR;
+@@ -4525,6 +4550,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+     );
+   const resolveBypassAvailability = Effect.fn("ClaudeAdapterV2.resolveBypassAvailability")(
+     function* (cwd: string | null) {
++      if (bridged) return { bypassDisabled: false, autoDisabled: true };
+       // resolveSettings does not initialize remote-cache eligibility in the SDK host.
+       // Keep the payload intact so the SDK also honors managedSourcesBehavior.
+       const remote = yield* readBypassSettings(path.join(homePath, "remote-settings.json"));
+@@ -4557,6 +4583,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+   // Anthropic's default applies.
+   const resolveSubagentPromptCacheTtl = Effect.fn("ClaudeAdapterV2.resolveSubagentPromptCacheTtl")(
+     function* (cwd: string | null) {
++      if (bridged) return undefined;
+       const fromEnvironment = decodeClaudePromptCacheTtl(
+         adapterOptions.environment.CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL,
+       );
+@@ -4626,6 +4653,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+   // from cwd only.
+   const resolveToolSearchOverride = Effect.fn("ClaudeAdapterV2.resolveToolSearchOverride")(
+     function* (cwd: string | null, launchArgSettings: ClaudeSdkSettings | undefined) {
++      if (bridged) return claudeToolSearchOverride(undefined);
+       const launchValue = launchArgSettings?.env?.ENABLE_TOOL_SEARCH;
+       if (typeof launchValue === "string") return claudeToolSearchOverride(launchValue);
+       const localDirectory = cwd === null ? null : yield* localSettingsDirectory(cwd);
+@@ -4648,10 +4676,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+   );
+ 
+   const userInvocableSkills = (cwd: string | null) =>
+-    discoverClaudeSkills(
+-      adapterOptions.settings,
+-      cwd ?? undefined,
+-      adapterOptions.environment,
++    (bridged
++      ? Effect.succeed([])
++      : discoverClaudeSkills(adapterOptions.settings, cwd ?? undefined, adapterOptions.environment)
+     ).pipe(
+       Effect.map(
+         (skills) =>
+@@ -4665,11 +4692,26 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+       Effect.provideService(Path.Path, path),
+     );
+ 
++  const capabilities = bridged
++    ? {
++        ...ClaudeProviderCapabilitiesV2,
++        sessions: {
++          ...ClaudeProviderCapabilitiesV2.sessions,
++          supportsProviderSwitchingViaHandoff: false,
++        },
++        threads: {
++          ...ClaudeProviderCapabilitiesV2.threads,
++          canRollbackThread: false,
++          canForkThread: false,
++          canForkFromTurn: false,
++        },
++      }
++    : ClaudeProviderCapabilitiesV2;
+   return ProviderAdapter.ProviderAdapterV2.of({
+     instanceId: adapterOptions.instanceId,
+     driver: CLAUDE_PROVIDER,
+     getCapabilities: Effect.fn("ClaudeAdapterV2.getCapabilities")(function () {
+-      return Effect.succeed(ClaudeProviderCapabilitiesV2);
++      return Effect.succeed(capabilities);
+     }),
+     planSelectionTransition: Effect.fn("ClaudeAdapterV2.planSelectionTransition")(function () {
+       return Effect.succeed(turnScopedSelectionTransition());
+@@ -4683,6 +4725,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+           providerInstanceId: adapterOptions.instanceId,
+           cwd: input.runtimePolicy.cwd,
+           model: input.modelSelection.model,
++          capabilities,
+           now,
+         });
+         const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
+@@ -7487,6 +7530,10 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
              });
            }
  
@@ -1106,7 +2827,7 @@ index a280bd84..b92fe58e 100644
            const threadDisposition = input.threadDisposition ?? "reusable";
            const terminalEvent: ProviderAdapter.ProviderAdapterV2Event =
              input.status === "failed"
-@@ -7531,6 +7557,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+@@ -7531,6 +7578,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                      status: input.status,
                      completedAt: input.completedAt,
                    }),
@@ -1116,7 +2837,116 @@ index a280bd84..b92fe58e 100644
                    turnTokenUsage: normalizeClaudeTurnTokenUsage(
                      input.result,
                      input.context.subagentsByTaskId.size > 0 ||
-@@ -11020,6 +11049,47 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+@@ -9155,6 +9205,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+               // a subagent's text-only TaskList, needs Claude's persisted list once;
+               // afterward the cache also records an unavailable store.
+               const storedTaskList =
++                !bridged &&
+                 !taskLists.has(liveQuery.nativeThreadId) &&
+                 !(
+                   toolCall.toolName === "TaskList" &&
+@@ -10099,8 +10150,27 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+           });
+           const queryPolicyKey = claudeEffectiveQueryPolicyKey(queryPolicy, mcpOverrides);
+           const compiledSelection = compileClaudeModelSelection(turnInput.modelSelection);
++          if (bridged && turnInput.modelSelection.model !== compiledSelection.apiModelId)
++            return yield* queryRunnerError(
++              "Remote Claude requires the exact requested wire model identity",
++              "selection",
++            );
+           const resumeSessionAt = yield* getNativeConversationHeadId(turnInput.providerThread);
+           const existing = yield* Ref.get(queryContext);
++          const remoteSelectionOptionsKey = encodeClaudeJson(
++            (turnInput.modelSelection.options ?? [])
++              .map(({ id, value }) => [id, value])
++              .sort(([left], [right]) => String(left).localeCompare(String(right))),
++          );
++          if (
++            bridged &&
++            existing !== null &&
++            existing.remoteSelectionOptionsKey !== remoteSelectionOptionsKey
++          )
++            return yield* queryRunnerError(
++              "Remote Claude flag transitions are unavailable",
++              "selection",
++            );
+           // Continuations drain existing output without prompting; retain the live process regardless of selection.
+           if (
+             existing !== null &&
+@@ -10116,7 +10186,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+             existing.queryPolicyKey === queryPolicyKey &&
+             !existing.stopping &&
+             existing.selection.queryIdentity !== compiledSelection.queryIdentity &&
+-            canApplyClaudeSelectionLive(existing.selection, compiledSelection) &&
++            (bridged || canApplyClaudeSelectionLive(existing.selection, compiledSelection)) &&
+             (existing.selection.apiModelId === compiledSelection.apiModelId ||
+               existing.openedPermissionMode === queryPolicy.permissionMode)
+           ) {
+@@ -10129,7 +10199,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+                 : Effect.void
+             ).pipe(
+               Effect.andThen(
+-                live.query.applyFlagSettings(claudeLiveSelectionFlagSettings(compiledSelection)),
++                bridged
++                  ? Effect.void
++                  : live.query.applyFlagSettings(
++                      claudeLiveSelectionFlagSettings(compiledSelection),
++                    ),
+               ),
+               Effect.tapError(() =>
+                 Effect.sync(() => {
+@@ -10178,18 +10252,22 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+           }
+ 
+           // Read before closing the live process so a bad path leaves it running.
+-          const appendSystemPromptFileText = yield* readClaudeAppendSystemPromptFile({
+-            settings: adapterOptions.settings,
+-            cwd: turnInput.runtimePolicy.cwd,
+-            fileSystem,
+-            path,
+-          });
+-          const launchArgSettings = yield* readClaudeLaunchArgSettings({
+-            settings: adapterOptions.settings,
+-            cwd: turnInput.runtimePolicy.cwd,
+-            fileSystem,
+-            path,
+-          });
++          const appendSystemPromptFileText = bridged
++            ? undefined
++            : yield* readClaudeAppendSystemPromptFile({
++                settings: adapterOptions.settings,
++                cwd: turnInput.runtimePolicy.cwd,
++                fileSystem,
++                path,
++              });
++          const launchArgSettings = bridged
++            ? undefined
++            : yield* readClaudeLaunchArgSettings({
++                settings: adapterOptions.settings,
++                cwd: turnInput.runtimePolicy.cwd,
++                fileSystem,
++                path,
++              });
+           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
+           if (existing !== null) {
+             yield* existing.query.close.pipe(Effect.ignore);
+@@ -10290,6 +10368,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+             query: querySession,
+             queryPolicyKey,
+             selection: compiledSelection,
++            remoteSelectionOptionsKey,
+             closed,
+             lastTurn: null,
+             promptEchoMode: "unknown",
+@@ -10978,6 +11057,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
+         // Metadata-only transcripts cannot be resumed or recreated; fail resumeThread to trigger a fresh session and handoff.
+         const hasEmptyClaudeTranscript = Effect.fn("ClaudeAdapterV2.hasEmptyClaudeTranscript")(
+           function* (nativeThreadId: string) {
++            if (bridged) return false;
+             const configuredDir = adapterOptions.environment.CLAUDE_CONFIG_DIR?.trim() ?? "";
+             const projectsDir = path.join(
+               configuredDir.length > 0
+@@ -11020,6 +11100,47 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
            getModelContextWindow: (selection) =>
              resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, selection),
            events: Stream.fromEffectRepeat(Queue.take(events)),
@@ -1164,6 +2994,24 @@ index a280bd84..b92fe58e 100644
            backgroundTasksEndWithProcess: true,
            hasPendingBackgroundWork: Effect.gen(function* () {
              for (const roster of (yield* Ref.get(pendingBackgroundTasksByNativeThread)).values()) {
+@@ -11517,10 +11638,13 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
+     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
+     const path = yield* Path.Path;
+     const crypto = yield* Crypto.Crypto;
+-    const binaryPath = yield* resolveClaudeSdkExecutablePath(
+-      expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
+-      claudeEnvironment,
+-    );
++    const binaryPath =
++      hostEnvironment.T3_CLOUD_ROLE === "child"
++        ? config.binaryPath
++        : yield* resolveClaudeSdkExecutablePath(
++            expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
++            claudeEnvironment,
++          );
+     return yield* makeClaudeAdapterV2({
+       instanceId,
+       settings: { ...config, enabled, binaryPath },
 diff --git a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts b/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
 index 90ee44f3..8aca94a7 100644
 --- a/apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.test.ts
@@ -5165,10 +7013,63 @@ index c3443579..3c27e4e2 100644
      if (!enabled) return;
      const threadIds = yield* projections.getRecoveryThreadIds("runtime");
 diff --git a/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts b/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
-index 5bbb3926..9d9dea24 100644
+index 5bbb3926..2ba368f1 100644
 --- a/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
 +++ b/apps/server/src/orchestration-v2/ProviderSessionManager.test.ts
-@@ -3819,3 +3819,54 @@ it.effect("ProviderSessionManagerV2 gives a delegated child its project's device
+@@ -1,3 +1,4 @@
++import { vi } from "vite-plus/test";
+ import * as NetAddress from "effect/net/NetAddress";
+ import * as NodeServices from "@effect/platform-node/NodeServices";
+ import { assert, it } from "@effect/vitest";
+@@ -337,6 +338,8 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
+     readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
+     readonly backgroundTasksEndWithProcess?: boolean;
+     readonly hangSessionScopeClose?: boolean;
++    readonly beforeEnsure?: Effect.Effect<void>;
++    readonly forkThread?: ProviderAdapter.ProviderAdapterV2SessionRuntime["forkThread"];
+     readonly startTurn?: Effect.Effect<void>;
+     readonly interruptTurn?: Effect.Effect<void>;
+     readonly beforeUnload?: Effect.Effect<void>;
+@@ -426,7 +429,10 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
+             : {
+                 hasPendingBackgroundWorkForThread: () => options.hasPendingBackgroundWorkForThread!,
+               }),
+-          ensureThread: () => unimplemented("ensureThread unused in test"),
++          ensureThread: () =>
++            (options.beforeEnsure ?? Effect.void).pipe(
++              Effect.andThen(unimplemented("ensureThread unused in test")),
++            ),
+           resumeThread: (threadInput) =>
+             Ref.update(state, (current) => ({
+               ...current,
+@@ -454,7 +460,7 @@ const makeProviderAdapter = Effect.fnUntraced(function* (
+           respondToRuntimeRequest: () => Effect.void,
+           readThreadSnapshot: () => unimplemented("readThreadSnapshot unused in test"),
+           rollbackThread: () => unimplemented("rollbackThread unused in test"),
+-          forkThread: () => unimplemented("forkThread unused in test"),
++          forkThread: options.forkThread ?? (() => unimplemented("forkThread unused in test")),
+         } satisfies ProviderAdapter.ProviderAdapterV2SessionRuntime;
+       }),
+   });
+@@ -485,6 +491,8 @@ function layerTest(input: {
+   readonly hasPendingBackgroundWorkForThread?: Effect.Effect<boolean>;
+   readonly backgroundTasksEndWithProcess?: boolean;
+   readonly hangSessionScopeClose?: boolean;
++  readonly beforeEnsure?: Effect.Effect<void>;
++  readonly forkThread?: ProviderAdapter.ProviderAdapterV2SessionRuntime["forkThread"];
+   readonly startTurn?: Effect.Effect<void>;
+   readonly interruptTurn?: Effect.Effect<void>;
+   readonly beforeUnload?: Effect.Effect<void>;
+@@ -521,6 +529,8 @@ function layerTest(input: {
+       ...(input.hangSessionScopeClose === undefined
+         ? {}
+         : { hangSessionScopeClose: input.hangSessionScopeClose }),
++      ...(input.beforeEnsure === undefined ? {} : { beforeEnsure: input.beforeEnsure }),
++      ...(input.forkThread === undefined ? {} : { forkThread: input.forkThread }),
+       ...(input.startTurn === undefined ? {} : { startTurn: input.startTurn }),
+       ...(input.interruptTurn === undefined ? {} : { interruptTurn: input.interruptTurn }),
+       ...(input.beforeUnload === undefined ? {} : { beforeUnload: input.beforeUnload }),
+@@ -3819,3 +3829,285 @@ it.effect("ProviderSessionManagerV2 gives a delegated child its project's device
      assert.isTrue(child?.capabilities?.has("device"));
    }),
  );
@@ -5223,13 +7124,244 @@ index 5bbb3926..9d9dea24 100644
 +    ),
 +  );
 +});
++
++it.effect(
++  "ProviderSessionManagerV2 rejects sandbox attachment before ensure, resume and turn effects",
++  () =>
++    Effect.gen(function* () {
++      const state = yield* Ref.make(emptyState);
++      const ensureCalls = yield* Ref.make(0);
++      const turnCalls = yield* Ref.make(0);
++      const forkCalls = yield* Ref.make(0);
++      const threadId = ThreadId.make("sandbox-attachment-owner");
++      vi.stubEnv("T3_CLOUD_ROLE", "child");
++      vi.stubEnv("T3_CLOUD_PROVIDER_INSTANCE_ID", "codex");
++      vi.stubEnv("T3_CLOUD_THREAD_ID", threadId);
++      yield* Effect.gen(function* () {
++        const eventSink = yield* EventSink.EventSinkV2;
++        const idAllocator = yield* IdAllocator.IdAllocatorV2;
++        const manager = yield* ProviderSessionManager.ProviderSessionManagerV2;
++        const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
++        const now = yield* DateTime.now;
++        const providerSessionId = idAllocator.derive.providerSession({
++          providerInstanceId: modelSelection.instanceId,
++        });
++        yield* eventSink.write({
++          events: [yield* makeThreadCreatedEvent({ idAllocator, threadId, now })],
++        });
++        const runtime = yield* manager.open({
++          threadId,
++          providerSessionId,
++          modelSelection,
++          runtimePolicy,
++        });
++        const providerThread = makeProviderThread({
++          idAllocator,
++          threadId,
++          providerSessionId,
++          now,
++          nativeThreadId: "native-sandbox-attachment",
++        });
++        const appThread = (yield* projectionStore.getThreadProjection(threadId)).thread;
++        const runId = idAllocator.derive.run({ threadId, ordinal: 1 });
++        const message = {
++          createdBy: "user",
++          creationSource: "web",
++          messageId: yield* idAllocator.allocate.message({ threadId, ordinal: 1 }),
++          text: "denied",
++          attachments: [],
++        } as const;
++        for (const denied of [
++          {
++            threadId,
++            modelSelection: {
++              ...modelSelection,
++              instanceId: ProviderInstanceId.make("claudeAgent"),
++            },
++            providerThread,
++          },
++          { threadId: ThreadId.make("other-sandbox-thread"), modelSelection, providerThread },
++          {
++            threadId,
++            modelSelection,
++            providerThread: {
++              ...providerThread,
++              providerInstanceId: ProviderInstanceId.make("claudeAgent"),
++              driver: ProviderDriverKind.make("claudeAgent"),
++            },
++          },
++          {
++            threadId,
++            modelSelection,
++            providerThread: {
++              ...providerThread,
++              appThreadId: ThreadId.make("foreign-persisted-thread"),
++            },
++          },
++          {
++            threadId,
++            modelSelection,
++            providerThread: {
++              ...providerThread,
++              providerInstanceId: ProviderInstanceId.make("codex_registered"),
++            },
++          },
++          {
++            threadId,
++            modelSelection: {
++              ...modelSelection,
++              instanceId: ProviderInstanceId.make("codex_registered"),
++            },
++            providerThread,
++          },
++        ]) {
++          for (const operation of [
++            runtime
++              .ensureThread({
++                threadId: denied.threadId,
++                modelSelection: denied.modelSelection,
++                runtimePolicy,
++                existingProviderThread: denied.providerThread,
++              })
++              .pipe(Effect.asVoid),
++            runtime
++              .resumeThread({
++                threadId: denied.threadId,
++                modelSelection: denied.modelSelection,
++                providerThread: denied.providerThread,
++              })
++              .pipe(Effect.asVoid),
++            runtime.startTurn({
++              appThread,
++              threadId: denied.threadId,
++              runId,
++              runOrdinal: 1,
++              providerTurnOrdinal: 1,
++              attemptId: idAllocator.derive.runAttempt({ runId, attemptOrdinal: 1 }),
++              rootNodeId: idAllocator.derive.rootNode({ runId }),
++              providerThread: denied.providerThread,
++              message,
++              modelSelection: denied.modelSelection,
++              runtimePolicy,
++            }),
++          ]) {
++            const outcome = yield* operation.pipe(Effect.result);
++            assert.equal(outcome._tag, "Failure");
++            if (outcome._tag === "Failure") {
++              assert.instanceOf(outcome.failure, ProviderAdapter.ProviderAdapterProtocolError);
++              if (outcome.failure._tag === "ProviderAdapterProtocolError")
++                assert.equal(outcome.failure.detail, "Sandbox provider session rejected");
++            }
++          }
++        }
++        const nullBound = { ...providerThread, appThreadId: null };
++        const foreignBound = {
++          ...providerThread,
++          appThreadId: ThreadId.make("foreign-persisted-thread"),
++        };
++        const otherProvider = {
++          ...modelSelection,
++          instanceId: ProviderInstanceId.make("claudeAgent"),
++        };
++        const registeredProvider = {
++          ...modelSelection,
++          instanceId: ProviderInstanceId.make("codex_registered"),
++        };
++        for (const assignment of [undefined, "codex"] as const) {
++          vi.stubEnv("T3_CLOUD_PROVIDER_INSTANCE_ID", assignment);
++          for (const selected of [undefined, modelSelection, otherProvider, registeredProvider]) {
++            for (const persisted of [
++              nullBound,
++              { ...nullBound, providerInstanceId: ProviderInstanceId.make("claudeAgent") },
++              { ...nullBound, driver: ProviderDriverKind.make("claudeAgent") },
++              { ...nullBound, driver: ProviderDriverKind.make("codex_registered") },
++              { ...nullBound, providerInstanceId: ProviderInstanceId.make("codex_registered") },
++              foreignBound,
++            ]) {
++              const outcome = yield* runtime
++                .resumeThread({
++                  providerThread: persisted,
++                  ...(selected !== undefined ? { modelSelection: selected } : {}),
++                })
++                .pipe(Effect.result);
++              assert.equal(outcome._tag, "Failure");
++              if (outcome._tag === "Failure") {
++                assert.instanceOf(outcome.failure, ProviderAdapter.ProviderAdapterProtocolError);
++                if (outcome.failure._tag === "ProviderAdapterProtocolError")
++                  assert.equal(outcome.failure.detail, "Sandbox provider session rejected");
++              }
++            }
++            for (const source of [
++              providerThread,
++              nullBound,
++              foreignBound,
++              { ...providerThread, providerInstanceId: ProviderInstanceId.make("claudeAgent") },
++              { ...providerThread, driver: ProviderDriverKind.make("claudeAgent") },
++              { ...providerThread, driver: ProviderDriverKind.make("codex_registered") },
++              {
++                ...providerThread,
++                providerInstanceId: ProviderInstanceId.make("codex_registered"),
++              },
++            ]) {
++              for (const targetThreadId of [threadId, ThreadId.make("foreign-fork-target")]) {
++                const outcome = yield* runtime
++                  .forkThread({
++                    sourceProviderThread: source,
++                    targetThreadId,
++                    ...(selected !== undefined ? { modelSelection: selected } : {}),
++                  })
++                  .pipe(Effect.result);
++                assert.equal(outcome._tag, "Failure");
++                if (outcome._tag === "Failure") {
++                  assert.instanceOf(outcome.failure, ProviderAdapter.ProviderAdapterProtocolError);
++                  if (outcome.failure._tag === "ProviderAdapterProtocolError")
++                    assert.equal(outcome.failure.detail, "Sandbox provider session rejected");
++                }
++              }
++            }
++          }
++        }
++        assert.equal(yield* Ref.get(forkCalls), 0);
++        assert.equal(yield* Ref.get(ensureCalls), 0);
++        assert.equal((yield* Ref.get(state)).resumeCount, 0);
++        assert.equal(yield* Ref.get(turnCalls), 0);
++        assert.equal((yield* Ref.get(state)).openCount, 1);
++        vi.stubEnv("T3_CLOUD_ROLE", "standalone");
++        const unboundResumed = yield* runtime.resumeThread({ providerThread: nullBound });
++        assert.equal(unboundResumed.appThreadId, null);
++        const resumed = yield* runtime.resumeThread({ threadId, providerThread: foreignBound });
++        assert.equal(resumed.appThreadId, foreignBound.appThreadId);
++        const forked = yield* runtime.forkThread({
++          sourceProviderThread: foreignBound,
++          targetThreadId: threadId,
++          modelSelection: registeredProvider,
++        });
++        assert.equal(forked.appThreadId, threadId);
++        assert.equal((yield* Ref.get(state)).resumeCount, 2);
++        assert.equal(yield* Ref.get(forkCalls), 1);
++      }).pipe(
++        Effect.provide(
++          layerTest({
++            state,
++            idleTimeoutMs: 60_000,
++            beforeEnsure: Ref.update(ensureCalls, (n) => n + 1),
++            startTurn: Ref.update(turnCalls, (n) => n + 1),
++            forkThread: (input) =>
++              Ref.update(forkCalls, (n) => n + 1).pipe(
++                Effect.as({ ...input.sourceProviderThread, appThreadId: input.targetThreadId }),
++              ),
++          }),
++        ),
++      );
++    }).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs()))),
++);
 diff --git a/apps/server/src/orchestration-v2/ProviderSessionManager.ts b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
-index 03a72787..49a78b35 100644
+index 03a72787..9395318f 100644
 --- a/apps/server/src/orchestration-v2/ProviderSessionManager.ts
 +++ b/apps/server/src/orchestration-v2/ProviderSessionManager.ts
 @@ -1,12 +1,18 @@
  import { AgentScope } from "@t3tools/shared/AgentScope";
-+import { sandboxRole } from "../briqSandbox.ts";
++import { sandboxRole, sandboxSessionRejection, sandboxCommandRejection } from "../briqSandbox.ts";
 +import { sandboxRootRecovery, sandboxRootRecoveryOwned } from "./SandboxRootRecovery.ts";
  import * as KeyedLock from "@t3tools/shared/KeyedLock";
  import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
@@ -5427,7 +7559,234 @@ index 03a72787..49a78b35 100644
  
        // Retry after removal from the live map; later releases cannot clear stale ready sessions and approvals.
        const retryReleaseRecords = (
-@@ -2151,6 +2274,16 @@ export const layerWithOptions = (
+@@ -1333,6 +1456,8 @@ export const layerWithOptions = (
+         readonly providerSessionId: ProviderSessionId;
+         readonly threadId: ThreadId;
+         readonly providerInstanceId: ProviderInstanceId;
++        readonly persistedInstanceId?: string;
++        readonly persistedDriver?: string;
+       }) =>
+         Effect.suspend(() => {
+           let attachedTo: ProviderAdapter.ProviderAdapterV2SessionRuntime | undefined;
+@@ -1698,6 +1823,45 @@ export const layerWithOptions = (
+       ): ProviderAdapter.ProviderAdapterV2SessionRuntime => {
+         const providerSessionId = runtime.providerSessionId;
+         const subscribeEvents = makeEventSubscription(eventSubscribers);
++        const assertSandboxSession = Effect.fn("ProviderSessionManager.assertSandboxSession")(
++          function* (
++            input: Parameters<typeof sandboxSessionRejection>[0] & {
++              readonly persistedThreadId?: ThreadId | null;
++            },
++          ) {
++            const rejection =
++              sandboxSessionRejection(input) ??
++              (sandboxRole() !== "standalone" &&
++              input.persistedThreadId != null &&
++              input.persistedThreadId !== input.threadId
++                ? "Persisted provider thread must match the sandbox allocation."
++                : undefined);
++            if (rejection)
++              return yield* new ProviderAdapter.ProviderAdapterProtocolError({
++                driver: runtime.driver,
++                detail: "Sandbox provider session rejected",
++                cause: rejection,
++              });
++          },
++        );
++        const observeThreadAttachment = (
++          input: Parameters<typeof ensureThreadAttached>[0] & {
++            readonly persistedThreadId?: ThreadId | null;
++          },
++        ) =>
++          assertSandboxSession({
++            threadId: input.threadId,
++            instanceId: input.providerInstanceId,
++            ...(input.persistedInstanceId !== undefined
++              ? { persistedInstanceId: input.persistedInstanceId }
++              : {}),
++            ...(input.persistedDriver !== undefined
++              ? { persistedDriver: input.persistedDriver }
++              : {}),
++            ...(input.persistedThreadId !== undefined
++              ? { persistedThreadId: input.persistedThreadId }
++              : {}),
++          }).pipe(Effect.andThen(observeActivity(providerSessionId, ensureThreadAttached(input))));
+         const turnMetrics = (operation: string, model?: string) =>
+           withMetrics({
+             counter: providerTurnsTotal,
+@@ -1715,14 +1879,18 @@ export const layerWithOptions = (
+             subscribeEvents.pipe(Effect.map((subscription) => subscription.events)),
+           ),
+           ensureThread: (input) =>
+-            observeActivity(
++            observeThreadAttachment({
+               providerSessionId,
+-              ensureThreadAttached({
+-                providerSessionId,
+-                threadId: input.threadId,
+-                providerInstanceId: runtime.instanceId,
+-              }),
+-            ).pipe(
++              threadId: input.threadId,
++              providerInstanceId: input.modelSelection.instanceId,
++              ...(input.existingProviderThread
++                ? {
++                    persistedInstanceId: input.existingProviderThread.providerInstanceId,
++                    persistedDriver: input.existingProviderThread.driver,
++                    persistedThreadId: input.existingProviderThread.appThreadId,
++                  }
++                : {}),
++            }).pipe(
+               Effect.andThen(runtime.ensureThread(input)),
+               Effect.tap((providerThread) =>
+                 markProviderThreadLoaded({
+@@ -1739,7 +1907,13 @@ export const layerWithOptions = (
+           resumeThread: (input) => {
+             const threadId = input.threadId ?? input.providerThread.appThreadId;
+             if (threadId === null || threadId === undefined) {
+-              return runtime.resumeThread(input);
++              return assertSandboxSession({
++                threadId: "",
++                instanceId: input.modelSelection?.instanceId ?? runtime.instanceId,
++                persistedInstanceId: input.providerThread.providerInstanceId,
++                persistedDriver: input.providerThread.driver,
++                persistedThreadId: input.providerThread.appThreadId,
++              }).pipe(Effect.andThen(runtime.resumeThread(input)));
+             }
+             const providerThreadKey = providerThreadLoadKey({
+               providerThread: input.providerThread,
+@@ -1748,14 +1922,14 @@ export const layerWithOptions = (
+                 : { modelSelection: input.modelSelection }),
+               ...(input.runtimePolicy === undefined ? {} : { runtimePolicy: input.runtimePolicy }),
+             });
+-            return observeActivity(
++            return observeThreadAttachment({
+               providerSessionId,
+-              ensureThreadAttached({
+-                providerSessionId,
+-                threadId,
+-                providerInstanceId: runtime.instanceId,
+-              }),
+-            ).pipe(
++              threadId,
++              providerInstanceId: input.modelSelection?.instanceId ?? runtime.instanceId,
++              persistedInstanceId: input.providerThread.providerInstanceId,
++              persistedDriver: input.providerThread.driver,
++              persistedThreadId: input.providerThread.appThreadId,
++            }).pipe(
+               Effect.andThen(
+                 holdThreadLoaded({
+                   providerSessionId,
+@@ -1787,40 +1961,57 @@ export const layerWithOptions = (
+             );
+           },
+           forkThread: (input) =>
+-            observeActivity(
+-              providerSessionId,
+-              ensureThreadAttached({
++            Effect.suspend(() => {
++              const rejection = sandboxCommandRejection({
++                type: "thread.fork",
++                threadId: input.targetThreadId,
++                ...(input.modelSelection !== undefined
++                  ? { modelSelection: input.modelSelection }
++                  : {}),
++              });
++              if (rejection)
++                return Effect.fail(
++                  new ProviderAdapter.ProviderAdapterProtocolError({
++                    driver: runtime.driver,
++                    detail: "Sandbox provider session rejected",
++                    cause: rejection,
++                  }),
++                );
++              return observeThreadAttachment({
+                 providerSessionId,
+                 threadId: input.targetThreadId,
+                 providerInstanceId: runtime.instanceId,
+-              }),
+-            ).pipe(
+-              Effect.andThen(runtime.forkThread(input)),
+-              Effect.tap((providerThread) =>
+-                markProviderThreadLoaded({
+-                  providerSessionId,
+-                  threadId: input.targetThreadId,
+-                  providerThreadKey: providerThreadLoadKey({
+-                    providerThread,
+-                    ...(input.modelSelection === undefined
+-                      ? {}
+-                      : { modelSelection: input.modelSelection }),
+-                    ...(input.runtimePolicy === undefined
+-                      ? {}
+-                      : { runtimePolicy: input.runtimePolicy }),
++                persistedInstanceId: input.sourceProviderThread.providerInstanceId,
++                persistedDriver: input.sourceProviderThread.driver,
++                persistedThreadId: input.sourceProviderThread.appThreadId,
++              }).pipe(
++                Effect.andThen(runtime.forkThread(input)),
++                Effect.tap((providerThread) =>
++                  markProviderThreadLoaded({
++                    providerSessionId,
++                    threadId: input.targetThreadId,
++                    providerThreadKey: providerThreadLoadKey({
++                      providerThread,
++                      ...(input.modelSelection === undefined
++                        ? {}
++                        : { modelSelection: input.modelSelection }),
++                      ...(input.runtimePolicy === undefined
++                        ? {}
++                        : { runtimePolicy: input.runtimePolicy }),
++                    }),
+                   }),
+-                }),
+-              ),
+-            ),
++                ),
++              );
++            }),
+           startTurn: (input) =>
+-            observeActivity(
++            observeThreadAttachment({
+               providerSessionId,
+-              ensureThreadAttached({
+-                providerSessionId,
+-                threadId: input.threadId,
+-                providerInstanceId: runtime.instanceId,
+-              }),
+-            ).pipe(
++              threadId: input.threadId,
++              providerInstanceId: input.modelSelection.instanceId,
++              persistedInstanceId: input.providerThread.providerInstanceId,
++              persistedDriver: input.providerThread.driver,
++              persistedThreadId: input.providerThread.appThreadId,
++            }).pipe(
+               // Failed or stopped starts may omit turn.terminal; clear their turns so sessions can idle.
+               Effect.andThen(
+                 holdThreadLoaded({
+@@ -2121,6 +2312,22 @@ export const layerWithOptions = (
+           sessionOpen.withLock(
+             input.providerSessionId,
+             Effect.gen(function* () {
++              const rejection = sandboxSessionRejection({
++                threadId: input.threadId,
++                instanceId: input.modelSelection.instanceId,
++                ...(input.resumeFromSession
++                  ? {
++                      persistedInstanceId: input.resumeFromSession.providerInstanceId,
++                      persistedDriver: input.resumeFromSession.driver,
++                    }
++                  : {}),
++              });
++              if (rejection)
++                return yield* new ProviderSessionOpenError({
++                  instanceId: input.modelSelection.instanceId,
++                  providerSessionId: input.providerSessionId,
++                  cause: rejection,
++                });
+               const cwd = input.runtimePolicy.cwd;
+               if (cwd !== null) {
+                 const workspaceIsDirectory = yield* fileSystem.stat(cwd).pipe(
+@@ -2151,6 +2358,16 @@ export const layerWithOptions = (
                    threadId: input.threadId,
                    providerInstanceId: existing.runtime.instanceId,
                  });
@@ -5444,7 +7803,7 @@ index 03a72787..49a78b35 100644
                  yield* touchActivity(input.providerSessionId);
                  return existing.exposedRuntime;
                }
-@@ -2200,6 +2333,7 @@ export const layerWithOptions = (
+@@ -2200,6 +2417,7 @@ export const layerWithOptions = (
                  })
                  .pipe(
                    Effect.provideService(Scope.Scope, sessionScope),
@@ -7254,7 +9613,7 @@ index 402b2eaf..7a39d4c1 100644
          function* (input) {
            // Storage cleanup removes worktrees under the same lease. Only startup
 diff --git a/apps/server/src/orchestration-v2/RunExecutionService.test.ts b/apps/server/src/orchestration-v2/RunExecutionService.test.ts
-index dee24685..825349ee 100644
+index dee24685..84e6b0ae 100644
 --- a/apps/server/src/orchestration-v2/RunExecutionService.test.ts
 +++ b/apps/server/src/orchestration-v2/RunExecutionService.test.ts
 @@ -1,4 +1,6 @@
@@ -7745,8 +10104,9 @@ index dee24685..825349ee 100644
    }),
  );
  
-+for (const commit of [true, false]) {
-+  it.effect(`Claude terminal adoption requires committed matching result (${commit})`, () =>
++it.effect.each([true, false])(
++  "Claude terminal adoption requires committed matching result (%s)",
++  (commit) =>
 +    Effect.gen(function* () {
 +      vi.stubEnv("T3_CLOUD_ROLE", "child");
 +      const now = yield* DateTime.now;
@@ -7807,8 +10167,7 @@ index dee24685..825349ee 100644
 +      });
 +      assert.deepEqual(adoptions, commit ? [17] : []);
 +    }).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs()))),
-+  );
-+}
++);
 +
 +it.effect(
 +  "sandbox keeps one in-flight acknowledgement owned after the consumer closes on terminal",
@@ -9415,6 +11774,290 @@ index afd11a9a..6f0e0c91 100644
      ...(options.continueThreadsAfterServerUpdate === undefined
        ? {}
        : { continueThreadsAfterServerUpdate: options.continueThreadsAfterServerUpdate }),
+diff --git a/apps/server/src/project/ProjectService.test.ts b/apps/server/src/project/ProjectService.test.ts
+index 331332a8..d02ae703 100644
+--- a/apps/server/src/project/ProjectService.test.ts
++++ b/apps/server/src/project/ProjectService.test.ts
+@@ -1,3 +1,4 @@
++import { vi } from "vite-plus/test";
+ import * as Context from "effect/Context";
+ import * as Queue from "effect/Queue";
+ import * as Tracer from "effect/Tracer";
+@@ -142,6 +143,65 @@ const waitForProject = Effect.fn("ProjectServiceTest.waitForProject")(function*
+ });
+ 
+ it.layer(layerTest)("ProjectService", (it) => {
++  it.effect("rejects incompatible child defaults on create, bootstrap and committed updates", () =>
++    Effect.gen(function* () {
++      const service = yield* ProjectService.ProjectService;
++      for (const assigned of ["codex", "claudeAgent"] as const) {
++        vi.stubEnv("T3_CLOUD_ROLE", "child");
++        vi.stubEnv("T3_CLOUD_PROVIDER_INSTANCE_ID", assigned);
++        const id = ProjectId.make(`child-${assigned}`);
++        const input = {
++          commandId: CommandId.make(`create-${assigned}`),
++          projectId: id,
++          title: "Child",
++          workspaceRoot: `/work/${assigned}`,
++          defaultModelSelection: {
++            instanceId: ProviderInstanceId.make(assigned === "codex" ? "claudeAgent" : "codex"),
++            model: "model",
++          },
++        };
++        for (const operation of [
++          service.create(input).pipe(Effect.asVoid),
++          service.bootstrap(input).pipe(Effect.asVoid),
++        ]) {
++          assert.equal((yield* operation.pipe(Effect.result))._tag, "Failure");
++          assert.isTrue(Option.isNone(yield* service.getById(id)));
++        }
++        yield* service.create({ ...input, defaultModelSelection: null });
++        assert.equal(
++          (yield* service
++            .update({ ...input, commandId: CommandId.make(`wrong-${assigned}`) })
++            .pipe(Effect.result))._tag,
++          "Failure",
++        );
++        assert.isNull(Option.getOrThrow(yield* service.getById(id)).defaultModelSelection);
++        yield* service.update({
++          projectId: id,
++          commandId: CommandId.make(`assigned-${assigned}`),
++          defaultModelSelection: { instanceId: ProviderInstanceId.make(assigned), model: "model" },
++        });
++        yield* service.update({
++          projectId: id,
++          commandId: CommandId.make(`omitted-${assigned}`),
++          title: "Renamed",
++        });
++        assert.equal(
++          Option.getOrThrow(yield* service.getById(id)).defaultModelSelection?.instanceId,
++          ProviderInstanceId.make(assigned),
++        );
++        yield* service.update({
++          projectId: id,
++          commandId: CommandId.make(`clear-${assigned}`),
++          defaultModelSelection: null,
++        });
++        yield* service.delete({
++          projectId: id,
++          commandId: CommandId.make(`delete-${assigned}`),
++        });
++      }
++    }).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs()))),
++  );
++
+   it.effect("creates, updates, resolves, snapshots, and soft-deletes projects", () =>
+     Effect.gen(function* () {
+       const service = yield* ProjectService.ProjectService;
+diff --git a/apps/server/src/project/ProjectService.ts b/apps/server/src/project/ProjectService.ts
+index ee7318fb..cea0f69e 100644
+--- a/apps/server/src/project/ProjectService.ts
++++ b/apps/server/src/project/ProjectService.ts
+@@ -1,3 +1,4 @@
++import { sandboxCommandRejection } from "../briqSandbox.ts";
+ import {
+   CommandId,
+   type OrchestrationProjectShell,
+@@ -229,6 +230,8 @@ export const make = Effect.gen(function* () {
+     const dispatchError = (cause: unknown) =>
+       new ProjectOperationError({ operation: "dispatch-project-command", projectId, cause });
+     const workspaceRoot = command.type === "project.delete" ? undefined : command.workspaceRoot;
++    const projectDefaultRejection = sandboxCommandRejection(command);
++    if (projectDefaultRejection) return yield* dispatchError(projectDefaultRejection);
+     const planAndCommit = Effect.gen(function* () {
+       const project = Option.getOrUndefined(yield* readRow(projectId, { includeDeleted: true }));
+       const workspaceOwner =
+@@ -340,6 +343,13 @@ export const make = Effect.gen(function* () {
+ 
+   const create: ProjectService["Service"]["create"] = Effect.fn("ProjectService.create")(
+     function* (input) {
++      const rejection = sandboxCommandRejection({ type: "project.create", ...input });
++      if (rejection)
++        return yield* new ProjectOperationError({
++          operation: "dispatch-project-command",
++          projectId: input.projectId,
++          cause: rejection,
++        });
+       const workspaceRoot = yield* normalizeWorkspaceRoot({
+         projectId: input.projectId,
+         workspaceRoot: input.workspaceRoot,
+@@ -400,6 +410,13 @@ export const make = Effect.gen(function* () {
+ 
+   const bootstrap: ProjectService["Service"]["bootstrap"] = Effect.fn("ProjectService.bootstrap")(
+     function* (input) {
++      const rejection = sandboxCommandRejection({ type: "project.create", ...input });
++      if (rejection)
++        return yield* new ProjectOperationError({
++          operation: "dispatch-project-command",
++          projectId: input.projectId,
++          cause: rejection,
++        });
+       const existing = yield* getByWorkspaceRoot(input.workspaceRoot);
+       if (Option.isSome(existing)) return { project: existing.value, created: false };
+       return { project: yield* create(input), created: true };
+diff --git a/apps/server/src/provider/Drivers/ClaudeDriver.ts b/apps/server/src/provider/Drivers/ClaudeDriver.ts
+index e1fbcd30..3b020c0e 100644
+--- a/apps/server/src/provider/Drivers/ClaudeDriver.ts
++++ b/apps/server/src/provider/Drivers/ClaudeDriver.ts
+@@ -1,4 +1,12 @@
+-import { ClaudeSettings, ProviderDriverKind } from "@t3tools/contracts";
++import { sandboxRole, sandboxAssignedProvider } from "../../briqSandbox.ts";
++import { readClaudeBridgeCapability } from "../../briqClaudeQuery.ts";
++import * as Stream from "effect/Stream";
++import {
++  ClaudeSettings,
++  ProviderDriverKind,
++  ProviderInstanceId,
++  TextGenerationError,
++} from "@t3tools/contracts";
+ import * as Cache from "effect/Cache";
+ import * as Duration from "effect/Duration";
+ import * as Crypto from "effect/Crypto";
+@@ -35,7 +43,11 @@ import {
+ } from "../ClaudeProvider.ts";
+ import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
+ import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
+-import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
++import {
++  BUNDLED_CLAUDE_MODEL_CATALOG,
++  resolveClaudeCatalogApiModelId,
++  resolveClaudeModelCatalog,
++} from "../ClaudeModelCatalog.ts";
+ import {
+   defaultProviderContinuationIdentity,
+   type ProviderDriver,
+@@ -121,6 +133,131 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
+     enabled,
+     config,
+   }) {
++    if (sandboxRole() !== "standalone") {
++      const denied = (operation: string) =>
++        Effect.fail(
++          new TextGenerationError({
++            operation,
++            detail: "Auxiliary generation is unavailable in the remote Claude sandbox.",
++          }),
++        );
++      if (
++        sandboxRole() !== "child" ||
++        sandboxAssignedProvider() !== "claudeAgent" ||
++        instanceId !== "claudeAgent"
++      )
++        return yield* new ProviderDriverError({
++          driver: DRIVER_KIND,
++          instanceId,
++          detail: "Claude requires its immutable sandbox assignment.",
++        });
++      const bridge = yield* Effect.tryPromise({
++        try: () => readClaudeBridgeCapability(process.env),
++        catch: (cause) =>
++          new ProviderDriverError({
++            driver: DRIVER_KIND,
++            instanceId,
++            detail: "Central Claude capability is unavailable.",
++            cause,
++          }),
++      });
++      const draft = yield* makePendingClaudeProvider({ ...config, enabled });
++      const models = draft.models
++        .filter(
++          (model) =>
++            bridge.models.includes(model.slug) &&
++            bridge.models.includes(
++              resolveClaudeCatalogApiModelId(BUNDLED_CLAUDE_MODEL_CATALOG, {
++                instanceId: ProviderInstanceId.make("claudeAgent"),
++                model: model.slug,
++              }),
++            ),
++        )
++        .map((model) => ({
++          ...model,
++          capabilities: {
++            ...model.capabilities,
++            optionDescriptors: model.capabilities?.optionDescriptors?.map((descriptor) =>
++              descriptor.id !== "contextWindow" || descriptor.type !== "select"
++                ? descriptor
++                : {
++                    ...descriptor,
++                    options: descriptor.options.filter((option) =>
++                      bridge.models.includes(
++                        resolveClaudeCatalogApiModelId(BUNDLED_CLAUDE_MODEL_CATALOG, {
++                          instanceId: ProviderInstanceId.make("claudeAgent"),
++                          model: model.slug,
++                          options: [{ id: descriptor.id, value: option.id }],
++                        }),
++                      ),
++                    ),
++                  },
++            ),
++          },
++        }));
++      const stampIdentity = withInstanceIdentity({
++        instanceId,
++        driverKind: DRIVER_KIND,
++        displayName,
++        accentColor,
++        continuationGroupKey: `cloud:${process.env.T3_CLOUD_THREAD_ID}:claudeAgent`,
++      });
++      const current = stampIdentity({
++        ...draft,
++        models,
++        installed: true,
++        status:
++          enabled && bridge.authStatus === "authenticated" && models.length > 0
++            ? "ready"
++            : "warning",
++        auth: { status: bridge.authStatus },
++        slashCommands: [],
++        skills: [],
++        message:
++          "Execution uses the central Claude bridge. Local maintenance, skills, reset credits and auxiliary generation are unavailable.",
++      });
++      const orchestrationAdapter = yield* createClaudeAdapterV2(
++        { instanceId, displayName, accentColor, environment: [], enabled, config },
++        {},
++      ).pipe(
++        Effect.mapError(
++          (cause) =>
++            new ProviderDriverError({
++              driver: DRIVER_KIND,
++              instanceId,
++              detail: "Failed to build remote Claude adapter.",
++              cause,
++            }),
++        ),
++      );
++      return {
++        instanceId,
++        driverKind: DRIVER_KIND,
++        displayName,
++        accentColor,
++        enabled,
++        continuationIdentity: {
++          driverKind: DRIVER_KIND,
++          continuationKey: `cloud:${process.env.T3_CLOUD_THREAD_ID}:claudeAgent`,
++        },
++        snapshot: {
++          resolveMaintenance: () =>
++            Effect.succeed({ provider: DRIVER_KIND, packageName: null, update: null }),
++          getSnapshot: Effect.succeed(current),
++          refresh: Effect.succeed(current),
++          streamChanges: Stream.empty,
++          applyUsageLimits: () => Effect.void,
++        },
++        orchestrationAdapter,
++        textGeneration: {
++          generateCommitMessage: () => denied("generateCommitMessage"),
++          generatePrContent: () => denied("generatePrContent"),
++          generateBranchName: () => denied("generateBranchName"),
++          generateThreadTitle: () => denied("generateThreadTitle"),
++          generateReviewGuide: () => denied("generateReviewGuide"),
++        },
++      } satisfies ProviderInstance;
++    }
+     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+     const fileSystem = yield* FileSystem.FileSystem;
+     const path = yield* Path.Path;
 diff --git a/apps/server/src/provider/Drivers/CodexDriver.ts b/apps/server/src/provider/Drivers/CodexDriver.ts
 index 97ec4954..7614d1a5 100644
 --- a/apps/server/src/provider/Drivers/CodexDriver.ts
@@ -9468,52 +12111,203 @@ index 97ec4954..7614d1a5 100644
        orchestrationAdapter,
        textGeneration,
      } satisfies ProviderInstance;
+diff --git a/apps/server/src/provider/Drivers/claudeUsage.test.ts b/apps/server/src/provider/Drivers/claudeUsage.test.ts
+index 6f457f4f..9c12a9d6 100644
+--- a/apps/server/src/provider/Drivers/claudeUsage.test.ts
++++ b/apps/server/src/provider/Drivers/claudeUsage.test.ts
+@@ -1,6 +1,13 @@
+ import { describe, expect, it } from "@effect/vitest";
+ 
+-import { claudeUsageFormat, parseClaudeLine } from "./claudeUsage.ts";
++import * as Effect from "effect/Effect";
++import * as Path from "effect/Path";
++import { vi } from "vite-plus/test";
++import { ClaudeSettings, ProviderInstanceId } from "@t3tools/contracts";
++import * as Schema from "effect/Schema";
++import { claudeUsageReader, claudeUsageFormat, parseClaudeLine } from "./claudeUsage.ts";
++
++const decodeClaudeSettings = Schema.decodeEffect(ClaudeSettings);
+ 
+ function claudeLine(overrides: {
+   messageId: string;
+@@ -216,3 +223,21 @@ describe("Claude advisor iterations", () => {
+     expect(parse(unusable).map((record) => record.model)).toEqual(["claude-opus-5-5"]);
+   });
+ });
++
++it.effect("does not discover local Claude transcript directories in a sandbox child", () =>
++  Effect.gen(function* () {
++    vi.stubEnv("T3_CLOUD_ROLE", "child");
++    if (claudeUsageReader.kind !== "transcripts")
++      return yield* Effect.die("Claude usage must use transcripts");
++    const config = yield* decodeClaudeSettings({});
++    const directories = yield* claudeUsageReader
++      .directories({
++        instanceId: ProviderInstanceId.make("claudeAgent"),
++        configured: true,
++        config,
++        environment: {},
++      })
++      .pipe(Effect.provide(Path.layer));
++    expect(directories).toEqual([]);
++  }).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs()))),
++);
+diff --git a/apps/server/src/provider/Drivers/claudeUsage.ts b/apps/server/src/provider/Drivers/claudeUsage.ts
+index aca7696d..d1742345 100644
+--- a/apps/server/src/provider/Drivers/claudeUsage.ts
++++ b/apps/server/src/provider/Drivers/claudeUsage.ts
+@@ -1,3 +1,4 @@
++import { sandboxRole } from "../../briqSandbox.ts";
+ import type { ClaudeSettings } from "@t3tools/contracts";
+ import * as Effect from "effect/Effect";
+ import * as Path from "effect/Path";
+@@ -128,7 +129,7 @@ export const claudeUsageReader: ProviderUsageReader<ClaudeSettings, Path.Path> =
+   provider: "claude",
+   format: claudeUsageFormat,
+   directories: Effect.fn("claudeUsageReader.directories")(function* ({ config, environment }) {
+-    if (config === undefined) return [];
++    if (sandboxRole() !== "standalone" || config === undefined) return [];
+     const path = yield* Path.Path;
+     const homeDirectory = yield* HostProcess.HomeDirectory;
+     const configured = config.homePath.trim();
+diff --git a/apps/server/src/provider/ProviderInstanceRegistry.test.ts b/apps/server/src/provider/ProviderInstanceRegistry.test.ts
+index af3359ea..d4d434d0 100644
+--- a/apps/server/src/provider/ProviderInstanceRegistry.test.ts
++++ b/apps/server/src/provider/ProviderInstanceRegistry.test.ts
+@@ -206,6 +206,53 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
+     Layer.provideMerge(layerBase),
+   );
+ 
++  it.effect(
++    "denies central Claude construction and reconciliation before driver or credentials",
++    () =>
++      Effect.gen(function* () {
++        vi.stubEnv("T3_CLOUD_ROLE", "central");
++        let creates = 0;
++        const driver: typeof ClaudeDriver = {
++          ...ClaudeDriver,
++          create: () => {
++            creates++;
++            return Effect.die("Central must never construct Claude");
++          },
++        };
++        const intrinsic = ProviderInstanceId.make("claudeAgent");
++        const custom = ProviderInstanceId.make("central-custom-claude");
++        const entry = { driver: ClaudeDriver.driverKind, enabled: true, config: {} };
++        try {
++          const { registry, mutator } = yield* makeProviderInstanceRegistry({
++            drivers: [driver],
++            configMap: { [intrinsic]: entry, [custom]: { ...entry, enabled: false } },
++          }).pipe(
++            Effect.provideService(SecretResolver.SecretResolver, {
++              read: () => Effect.die("Central must not read provider secrets"),
++              invalidate: () => Effect.die("Central must not invalidate provider secrets"),
++            }),
++          );
++          expect(yield* registry.getInstance(intrinsic)).toBeUndefined();
++          expect(yield* registry.getInstance(custom)).toBeUndefined();
++          yield* mutator.reconcile({ [intrinsic]: { ...entry, enabled: false }, [custom]: entry });
++          expect(yield* registry.getInstance(intrinsic)).toBeUndefined();
++          expect(yield* registry.getInstance(custom)).toBeUndefined();
++          expect(creates).toBe(0);
++          const direct = yield* ClaudeDriver.create({
++            instanceId: intrinsic,
++            displayName: "Claude",
++            accentColor: undefined,
++            environment: [],
++            enabled: true,
++            config: ClaudeDriver.defaultConfig(),
++          }).pipe(Effect.result);
++          expect(direct._tag).toBe("Failure");
++        } finally {
++          vi.unstubAllEnvs();
++        }
++      }).pipe(Effect.provide(layerTest)),
++  );
++
+   it.effect.each(["replacement", "removal", "creation failure"] as const)(
+     "detaches retired provider scopes after repeated %s",
+     (scenario) =>
 diff --git a/apps/server/src/provider/ProviderInstanceRegistry.ts b/apps/server/src/provider/ProviderInstanceRegistry.ts
-index a944f751..14b8fa29 100644
+index a944f751..9d1e26e3 100644
 --- a/apps/server/src/provider/ProviderInstanceRegistry.ts
 +++ b/apps/server/src/provider/ProviderInstanceRegistry.ts
 @@ -1,3 +1,4 @@
-+import { sandboxRole } from "../briqSandbox.ts";
++import { sandboxRole, sandboxAssignedProvider } from "../briqSandbox.ts";
  import {
    providerInstanceConfigEnabledFlag,
    ProviderInstanceId,
-@@ -155,6 +156,13 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+@@ -155,6 +156,24 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
    R | SecretResolver.SecretResolver
  > {
    const { driversById, parentScope, instanceId, rawInstanceId, entry, deferSecrets } = input;
 +  const role = sandboxRole();
-+  if (role !== "standalone" && (role !== "child" || entry.driver !== "codex" || instanceId !== "codex")) {
-+    return { kind: "unavailable" as const, snapshot: yield* buildUnavailableProviderSnapshot({
-+      driverKind: entry.driver, instanceId, displayName: entry.displayName, accentColor: entry.accentColor,
-+      reason: "Provider execution is available only through the allocated sandbox Codex bridge.",
-+    }) };
++  const assigned = sandboxAssignedProvider();
++  if (
++    role !== "standalone" &&
++    (role !== "child" || !assigned || entry.driver !== assigned || instanceId !== assigned)
++  ) {
++    return {
++      kind: "unavailable" as const,
++      snapshot: yield* buildUnavailableProviderSnapshot({
++        driverKind: entry.driver,
++        instanceId,
++        displayName: entry.displayName,
++        accentColor: entry.accentColor,
++        reason:
++          "Provider execution is available only through the allocated sandbox provider bridge.",
++      }),
++    };
 +  }
    const driver = driversById.get(entry.driver);
    if (!driver) {
      return {
-@@ -170,7 +178,11 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+@@ -170,7 +189,23 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
    }
  
    const decoder = Schema.decodeUnknownEffect(driver.configSchema);
 -  const decodeResult = yield* decoder(entry.config ?? driver.defaultConfig()).pipe(Effect.result);
-+  const forcedConfig = role === "child" ? {
-+    setupMode: "existing", binaryPath: "/opt/t3-cloud/bin/codex-remote",
-+    homePath: "/work/.codex-empty", shadowHomePath: "", launchArgs: "",
-+  } : entry.config;
++  const forcedConfig =
++    role === "child"
++      ? entry.driver === "claudeAgent"
++        ? {
++            binaryPath: "/opt/t3-cloud/bin/claude-unavailable",
++            homePath: "/work/.claude-empty",
++            customModels: [],
++          }
++        : {
++            setupMode: "existing",
++            binaryPath: "/opt/t3-cloud/bin/codex-remote",
++            homePath: "/work/.codex-empty",
++            shadowHomePath: "",
++            launchArgs: "",
++          }
++      : entry.config;
 +  const decodeResult = yield* decoder(forcedConfig ?? driver.defaultConfig()).pipe(Effect.result);
    if (decodeResult._tag === "Failure") {
      const issue = decodeResult.failure;
      const detail = issue.message ?? String(issue);
-@@ -205,7 +217,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+@@ -205,12 +240,13 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
        }),
      };
    }
 -  const { secrets, unreadable } = enabled
-+  const { secrets, unreadable } = enabled && role === "standalone"
-     ? yield* readInstanceSecrets(driver, entry)
-     : {
-         secrets: { environment: withoutSecretReferences(entry.environment ?? []), config: {} },
-@@ -233,7 +245,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
+-    ? yield* readInstanceSecrets(driver, entry)
+-    : {
+-        secrets: { environment: withoutSecretReferences(entry.environment ?? []), config: {} },
+-        unreadable: [],
+-      };
++  const { secrets, unreadable } =
++    enabled && role === "standalone"
++      ? yield* readInstanceSecrets(driver, entry)
++      : {
++          secrets: { environment: withoutSecretReferences(entry.environment ?? []), config: {} },
++          unreadable: [],
++        };
+   // Starting with a blank credential would fail later with a less useful error, or fall back to
+   // whatever the server inherited.
+   if (unreadable.length > 0) {
+@@ -233,7 +269,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
        instanceId,
        displayName: entry.displayName,
        accentColor: entry.accentColor,
@@ -9522,6 +12316,14 @@ index a944f751..14b8fa29 100644
        enabled,
        config:
          Object.keys(secrets.config).length === 0
+@@ -445,6 +481,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
+   const reloadSecrets: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape["reloadSecrets"] =
+     Effect.fn("ProviderInstanceRegistry.reloadSecrets")(
+       function* (instanceId) {
++        if (sandboxRole() !== "standalone") return;
+         const configMap = yield* Ref.get(configMapRef);
+         const targets = yield* Effect.filter(Object.entries(configMap), ([rawInstanceId, entry]) =>
+           (instanceId === undefined || rawInstanceId === instanceId) &&
 diff --git a/apps/server/src/server.ts b/apps/server/src/server.ts
 index 452addfb..101bed16 100644
 --- a/apps/server/src/server.ts
@@ -9692,12 +12494,12 @@ index 641845f3..1aaf88d1 100644
    Layer.mock(ServerSecretStore.ServerSecretStore)({}),
    Layer.mock(WorkspacePaths.WorkspacePaths)({}),
 diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
-index 4781fcf7..863d534c 100644
+index 4781fcf7..2a842826 100644
 --- a/apps/server/src/ws.ts
 +++ b/apps/server/src/ws.ts
 @@ -1,3 +1,5 @@
 +import * as BriqSandboxAllocator from "./briqSandboxAllocator.ts";
-+import { sandboxRole } from "./briqSandbox.ts";
++import { sandboxRole, sandboxAdmittedProviders, sandboxAssignedProvider } from "./briqSandbox.ts";
  import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
  import * as Context from "effect/Context";
  import * as Crypto from "effect/Crypto";
@@ -9709,19 +12511,29 @@ index 4781fcf7..863d534c 100644
        const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
        const commandOutputHub = yield* CommandOutputHub.CommandOutputHub;
        const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
-@@ -1753,6 +1756,7 @@ export const layerWsRpc = (
+@@ -1749,10 +1752,16 @@ export const layerWsRpc = (
+           resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
+         );
+ 
++        const assignedSandboxProvider = sandboxAssignedProvider();
+         return {
            environment,
            auth,
            cwd: config.cwd,
 +          briqSandboxRole: sandboxRole(),
++          briqSandboxProviders: sandboxAdmittedProviders(),
++          ...(sandboxRole() === "child" && assignedSandboxProvider !== undefined
++            ? { briqSandboxProviderInstanceId: assignedSandboxProvider }
++            : {}),
            keybindingsConfigPath: config.keybindingsConfigPath,
            keybindings: keybindingsConfig.keybindings,
            issues: keybindingsConfig.issues,
-@@ -2031,6 +2035,7 @@ export const layerWsRpc = (
+@@ -2031,6 +2040,8 @@ export const layerWsRpc = (
                  ),
              ),
            ),
-+        [ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread]: (input) => sandboxAllocator.allocate(input),
++        [ORCHESTRATION_V2_WS_METHODS.allocateSandboxThread]: (input) =>
++          sandboxAllocator.allocate(input),
          [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
            Effect.annotateCurrentSpan({
              "orchestration_v2.command_id": input.commandId,
@@ -9825,60 +12637,197 @@ index c4368b0b..a62e7a42 100644
 +});
 diff --git a/apps/web/src/hooks/openBriqSandboxThread.test.ts b/apps/web/src/hooks/openBriqSandboxThread.test.ts
 new file mode 100644
-index 00000000..d3a91672
+index 00000000..ba2c42ef
 --- /dev/null
 +++ b/apps/web/src/hooks/openBriqSandboxThread.test.ts
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,181 @@
 +import { describe, expect, it, vi } from "vite-plus/test";
 +import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 +import type { AnyRouter } from "@tanstack/react-router";
 +
-+const state = vi.hoisted(() => ({ calls: [] as string[], failAllocation: false }));
++const state = vi.hoisted(() => ({
++  calls: [] as string[],
++  payloads: [] as unknown[],
++  admitted: ["codex", "claudeAgent"],
++  failAllocation: false,
++  provider: "codex" as string | null,
++  returnedProvider: "codex",
++  childProvider: "codex",
++}));
 +vi.mock("@t3tools/client-runtime/state/runtime", () => ({
-+  runAtomCommand: async (_registry: unknown, operation: string) => {
++  runAtomCommand: async (_registry: unknown, operation: string, payload: unknown) => {
 +    state.calls.push(operation);
-+    if (operation === "allocate") return state.failAllocation ? { _tag: "Failure" } : {
-+      _tag: "Success", value: { allocationId: "allocation", environmentId: "child", threadId: "thread",
-+        project: { id: "project", title: "Sandbox", workspaceRoot: "/work" },
-+        connection: { url: "https://child.example/", credential: "synthetic-pairing" } },
-+    };
-+    if (operation === "wait") return { _tag: "Success", value: { briqSandboxRole: "child",
-+      providers: [{ instanceId: "codex", models: [{ slug: "model" }] }] } };
++    state.payloads.push(payload);
++    if (operation === "allocate")
++      return state.failAllocation
++        ? { _tag: "Failure" }
++        : {
++            _tag: "Success",
++            value: {
++              providerInstanceId: state.returnedProvider,
++              allocationId: "allocation",
++              environmentId: "child",
++              threadId: "thread",
++              project: { id: "project", title: "Sandbox", workspaceRoot: "/work" },
++              connection: { url: "https://child.example/", credential: "synthetic-pairing" },
++            },
++          };
++    if (operation === "wait")
++      return {
++        _tag: "Success",
++        value: {
++          briqSandboxRole: "child",
++          briqSandboxProviderInstanceId: state.childProvider,
++          providers: [
++            {
++              instanceId: state.childProvider,
++              driver: state.childProvider,
++              enabled: true,
++              status: "ready",
++              auth: { status: "authenticated" },
++              models: [{ slug: "model" }],
++            },
++          ],
++        },
++      };
 +    return { _tag: "Success", value: undefined };
 +  },
 +}));
-+vi.mock("../rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
++vi.mock("../rpc/atomRegistry", () => ({
++  appAtomRegistry: {
++    get: () =>
++      new Map([["home", { briqSandboxRole: "central", briqSandboxProviders: state.admitted }]]),
++  },
++}));
++vi.mock("../state/server", () => ({ environmentServerConfigsAtom: {} }));
++vi.mock("../localApi", () => ({
++  readLocalApi: () => ({ contextMenu: { show: async () => state.provider } }),
++}));
 +vi.mock("../state/briqSandbox", () => ({ allocateSandboxThread: "allocate" }));
-+vi.mock("../connection/onboarding", () => ({ connectPairing: "pair", waitForSandboxConnection: "wait" }));
++vi.mock("../connection/onboarding", () => ({
++  connectPairing: "pair",
++  waitForSandboxConnection: "wait",
++}));
 +vi.mock("../state/projects", () => ({ projectEnvironment: { create: "child-project" } }));
 +vi.mock("../state/threads", () => ({ threadEnvironment: { create: "child-thread" } }));
++vi.stubGlobal("window", { innerWidth: 1280, innerHeight: 800 });
 +import { openBriqSandboxThread } from "./openBriqSandboxThread";
 +
 +describe("fresh cloud home thread entry", () => {
 +  it("allocates without a home project, pairs the child, then creates only its real native thread", async () => {
-+    state.calls = []; state.failAllocation = false;
++    state.calls = [];
++    state.failAllocation = false;
++    state.provider = state.returnedProvider = state.childProvider = "codex";
 +    const navigate = vi.fn();
-+    await openBriqSandboxThread({ navigate } as unknown as AnyRouter,
-+      EnvironmentId.make("home"), ThreadId.make("thread"));
++    await openBriqSandboxThread(
++      { navigate } as unknown as AnyRouter,
++      EnvironmentId.make("home"),
++      ThreadId.make("thread"),
++    );
 +    expect(state.calls).toEqual(["allocate", "pair", "wait", "child-project", "child-thread"]);
-+    expect(navigate).toHaveBeenCalledWith({ to: "/$environmentId/$threadId",
-+      params: { environmentId: "child", threadId: "thread" } });
++    expect(navigate).toHaveBeenCalledWith({
++      to: "/$environmentId/$threadId",
++      params: { environmentId: "child", threadId: "thread" },
++    });
 +  });
 +  it("never falls back to home creation after an allocator or read-only permission failure", async () => {
-+    state.calls = []; state.failAllocation = true;
++    state.calls = [];
++    state.failAllocation = true;
++    state.provider = state.returnedProvider = state.childProvider = "codex";
 +    const navigate = vi.fn();
-+    await expect(openBriqSandboxThread({ navigate } as unknown as AnyRouter,
-+      EnvironmentId.make("home"), ThreadId.make("thread"))).rejects.toThrow("no local thread");
++    await expect(
++      openBriqSandboxThread(
++        { navigate } as unknown as AnyRouter,
++        EnvironmentId.make("home"),
++        ThreadId.make("thread"),
++      ),
++    ).rejects.toThrow("no local thread");
 +    expect(state.calls).toEqual(["allocate"]);
 +    expect(navigate).not.toHaveBeenCalled();
 +  });
 +});
++
++it("uses the admitted Claude choice and rejects cross-provider allocation or child binding before project creation", async () => {
++  for (const mismatch of ["none", "allocation", "child"]) {
++    state.calls = [];
++    state.failAllocation = false;
++    state.provider = "claudeAgent";
++    state.returnedProvider = mismatch === "allocation" ? "codex" : "claudeAgent";
++    state.childProvider = mismatch === "child" ? "codex" : "claudeAgent";
++    const navigate = vi.fn();
++    const operation = openBriqSandboxThread(
++      { navigate } as unknown as AnyRouter,
++      EnvironmentId.make("home"),
++      ThreadId.make("thread"),
++      "claudeAgent",
++    );
++    if (mismatch === "none") {
++      await operation;
++      expect(navigate).toHaveBeenCalled();
++    } else {
++      await expect(operation).rejects.toThrow();
++      expect(state.calls).not.toContain("child-project");
++    }
++  }
++});
++
++it("uses the sole admitted provider explicitly and never allocates empty admission", async () => {
++  for (const admitted of [["codex"], ["claudeAgent"], []]) {
++    state.admitted = admitted;
++    state.calls = [];
++    state.payloads = [];
++    state.failAllocation = false;
++    state.returnedProvider = state.childProvider = admitted[0] ?? "codex";
++    const navigate = vi.fn();
++    const operation = openBriqSandboxThread(
++      { navigate } as unknown as AnyRouter,
++      EnvironmentId.make("home"),
++      ThreadId.make("thread"),
++    );
++    if (admitted.length === 0) {
++      await expect(operation).rejects.toThrow();
++      expect(state.calls).toEqual([]);
++    } else {
++      await operation;
++      expect(state.payloads[0]).toEqual({
++        environmentId: "home",
++        input: { threadId: "thread", providerInstanceId: admitted[0] },
++      });
++      expect(state.payloads[4]).toMatchObject({
++        environmentId: "child",
++        input: {
++          threadId: "thread",
++          projectId: "project",
++          modelSelection: { instanceId: admitted[0], model: "model" },
++        },
++      });
++    }
++  }
++  state.admitted = ["codex", "claudeAgent"];
++});
++
++it("cancels a multi-provider choice without allocating", async () => {
++  state.admitted = ["codex", "claudeAgent"];
++  state.provider = null;
++  state.calls = [];
++  state.payloads = [];
++  state.failAllocation = false;
++  const navigate = vi.fn();
++  await openBriqSandboxThread(
++    { navigate } as unknown as AnyRouter,
++    EnvironmentId.make("home"),
++    ThreadId.make("thread"),
++  );
++  expect(state.calls).toEqual([]);
++  expect(navigate).not.toHaveBeenCalled();
++  state.provider = "codex";
++});
 diff --git a/apps/web/src/hooks/openBriqSandboxThread.ts b/apps/web/src/hooks/openBriqSandboxThread.ts
 new file mode 100644
-index 00000000..f26b1c5d
+index 00000000..c1f68711
 --- /dev/null
 +++ b/apps/web/src/hooks/openBriqSandboxThread.ts
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,142 @@
 +import type { AnyRouter } from "@tanstack/react-router";
 +import { ProviderInstanceId, type EnvironmentId, type ThreadId } from "@t3tools/contracts";
 +import { runAtomCommand } from "@t3tools/client-runtime/state/runtime";
@@ -9887,58 +12836,169 @@ index 00000000..f26b1c5d
 +import { connectPairing, waitForSandboxConnection } from "../connection/onboarding";
 +import { projectEnvironment } from "../state/projects";
 +import { threadEnvironment } from "../state/threads";
++import { environmentServerConfigsAtom } from "../state/server";
++import { readLocalApi } from "../localApi";
 +
-+export async function openBriqSandboxThread(router: AnyRouter, environmentId: EnvironmentId, threadId: ThreadId) {
++export async function openBriqSandboxThread(
++  router: AnyRouter,
++  environmentId: EnvironmentId,
++  threadId: ThreadId,
++  requestedProvider?: "codex" | "claudeAgent",
++) {
 +  const options = { reportFailure: false, reportDefect: false };
-+  const result = await runAtomCommand(appAtomRegistry, allocateSandboxThread, {
-+    environmentId, input: { threadId },
-+  }, options);
-+  if (result._tag === "Failure") throw new Error("Sandbox allocation failed. Check cloud connections before retrying; no local thread was created.");
++  const home = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
++  if (home?.briqSandboxRole !== "central")
++    throw new Error("Connect the cloud home before allocating a sandbox.");
++  const admitted = home.briqSandboxProviders ?? ["codex"];
++  let providerInstanceId = requestedProvider;
++  if (providerInstanceId === undefined && admitted.length > 1) {
++    const api = readLocalApi();
++    if (!api) throw new Error("Cloud provider selection is unavailable.");
++    const selected = await api.contextMenu.show(
++      admitted.map((id) => ({
++        id,
++        label: id === "codex" ? "Codex" : "Claude",
++      })),
++      { x: window.innerWidth / 2, y: window.innerHeight / 2 },
++    );
++    if (selected === null) return;
++    if (selected !== "codex" && selected !== "claudeAgent")
++      throw new Error("Invalid cloud provider selection.");
++    providerInstanceId = selected;
++  }
++  providerInstanceId ??= admitted.length === 1 ? admitted[0] : "codex";
++  if (!providerInstanceId) throw new Error("No cloud provider is admitted.");
++  if (!admitted.includes(providerInstanceId))
++    throw new Error("This provider is not admitted by the cloud home.");
++  const result = await runAtomCommand(
++    appAtomRegistry,
++    allocateSandboxThread,
++    {
++      environmentId,
++      input: { threadId, providerInstanceId },
++    },
++    options,
++  );
++  if (result._tag === "Failure")
++    throw new Error(
++      "Sandbox allocation failed. Check cloud connections before retrying; no local thread was created.",
++    );
 +  const allocation = result.value;
 +  const destination = new URL(allocation.connection.url);
-+  if (allocation.threadId !== threadId || destination.protocol !== "https:" || destination.username ||
-+      destination.password || destination.search || destination.hash || destination.pathname !== "/")
++  if (
++    allocation.providerInstanceId !== providerInstanceId ||
++    allocation.threadId !== threadId ||
++    destination.protocol !== "https:" ||
++    destination.username ||
++    destination.password ||
++    destination.search ||
++    destination.hash ||
++    destination.pathname !== "/"
++  )
 +    throw new Error("Invalid sandbox allocation destination.");
-+  const connected = await runAtomCommand(appAtomRegistry, connectPairing, {
-+    host: destination.origin, pairingCode: allocation.connection.credential,
-+    expectedEnvironmentId: allocation.environmentId,
-+  }, options);
++  const connected = await runAtomCommand(
++    appAtomRegistry,
++    connectPairing,
++    {
++      host: destination.origin,
++      pairingCode: allocation.connection.credential,
++      expectedEnvironmentId: allocation.environmentId,
++    },
++    options,
++  );
 +  if (connected._tag === "Failure") throw new Error("Could not pair the allocated sandbox.");
-+  const ready = await runAtomCommand(appAtomRegistry, waitForSandboxConnection, allocation.environmentId, options);
-+  if (ready._tag === "Failure" || ready.value.briqSandboxRole !== "child")
++  const ready = await runAtomCommand(
++    appAtomRegistry,
++    waitForSandboxConnection,
++    allocation.environmentId,
++    options,
++  );
++  if (
++    ready._tag === "Failure" ||
++    ready.value.briqSandboxRole !== "child" ||
++    ready.value.briqSandboxProviderInstanceId !== allocation.providerInstanceId
++  )
 +    throw new Error("The allocated sandbox did not establish its native connection.");
-+  const provider = ready.value.providers.find((item) => item.instanceId === "codex");
++  const provider = ready.value.providers.find(
++    (item) =>
++      item.instanceId === allocation.providerInstanceId &&
++      item.driver === allocation.providerInstanceId &&
++      item.enabled &&
++      item.status === "ready" &&
++      (allocation.providerInstanceId !== "claudeAgent" || item.auth.status === "authenticated"),
++  );
 +  const model = provider?.models[0]?.slug;
-+  if (!model) throw new Error("The sandbox Codex bridge has no available model catalog.");
-+  const project = await runAtomCommand(appAtomRegistry, projectEnvironment.create, {
-+    environmentId: allocation.environmentId,
-+    input: { projectId: allocation.project.id, title: allocation.project.title,
-+      workspaceRoot: allocation.project.workspaceRoot },
-+  }, options);
++  if (!model) throw new Error("The assigned sandbox bridge has no authenticated model catalog.");
++  const project = await runAtomCommand(
++    appAtomRegistry,
++    projectEnvironment.create,
++    {
++      environmentId: allocation.environmentId,
++      input: {
++        projectId: allocation.project.id,
++        title: allocation.project.title,
++        workspaceRoot: allocation.project.workspaceRoot,
++      },
++    },
++    options,
++  );
 +  if (project._tag === "Failure") throw new Error("Could not create the sandbox project.");
-+  const thread = await runAtomCommand(appAtomRegistry, threadEnvironment.create, {
-+    environmentId: allocation.environmentId,
-+    input: { threadId, projectId: allocation.project.id, title: "New thread",
-+      modelSelection: { instanceId: ProviderInstanceId.make("codex"), model },
-+      runtimeMode: "approval-required", interactionMode: "default", branch: null, worktreePath: null },
-+  }, options);
++  const thread = await runAtomCommand(
++    appAtomRegistry,
++    threadEnvironment.create,
++    {
++      environmentId: allocation.environmentId,
++      input: {
++        threadId,
++        projectId: allocation.project.id,
++        title: "New thread",
++        modelSelection: {
++          instanceId: ProviderInstanceId.make(allocation.providerInstanceId),
++          model,
++        },
++        runtimeMode: "approval-required",
++        interactionMode: "default",
++        branch: null,
++        worktreePath: null,
++      },
++    },
++    options,
++  );
 +  if (thread._tag === "Failure") throw new Error("Could not create the allocated sandbox thread.");
-+  await router.navigate({ to: "/$environmentId/$threadId", params: { environmentId: allocation.environmentId, threadId } });
++  await router.navigate({
++    to: "/$environmentId/$threadId",
++    params: { environmentId: allocation.environmentId, threadId },
++  });
 +}
 diff --git a/apps/web/src/hooks/useHandleNewThread.ts b/apps/web/src/hooks/useHandleNewThread.ts
-index a4382547..8f5ec76b 100644
+index a4382547..1d02fd56 100644
 --- a/apps/web/src/hooks/useHandleNewThread.ts
 +++ b/apps/web/src/hooks/useHandleNewThread.ts
-@@ -87,6 +87,13 @@ export function createNewThreadHandler(router: AnyRouter) {
+@@ -83,10 +83,28 @@ export function createNewThreadHandler(router: AnyRouter) {
+       envMode?: DraftThreadEnvMode;
+       startFromOrigin?: boolean;
+       replace?: boolean;
++      providerInstanceId?: "codex" | "claudeAgent";
+       /** Composer text for the draft, set before it shows. A draft with user text keeps it. */
        prompt?: string;
      },
    ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
-+    const sandboxRole = appAtomRegistry.get(environmentServerConfigsAtom).get(projectRef.environmentId)?.briqSandboxRole;
++    const sandboxRole = appAtomRegistry
++      .get(environmentServerConfigsAtom)
++      .get(projectRef.environmentId)?.briqSandboxRole;
 +    if (sandboxRole && sandboxRole !== "standalone") {
-+      const central = [...appAtomRegistry.get(environmentServerConfigsAtom)].find(([, config]) => config.briqSandboxRole === "central");
-+      if (!central) return Promise.reject(new Error("Connect the cloud home before creating a sandbox thread."));
-+      return import("./openBriqSandboxThread").then(({ openBriqSandboxThread }) =>
-+        openBriqSandboxThread(router, central[0], newThreadId())).then(() => null);
++      const central = [...appAtomRegistry.get(environmentServerConfigsAtom)].find(
++        ([, config]) => config.briqSandboxRole === "central",
++      );
++      if (!central)
++        return Promise.reject(
++          new Error("Connect the cloud home before creating a sandbox thread."),
++        );
++      return import("./openBriqSandboxThread")
++        .then(({ openBriqSandboxThread }) =>
++          openBriqSandboxThread(router, central[0], newThreadId(), options?.providerInstanceId),
++        )
++        .then(() => null);
 +    }
      const projects = readProjects();
      const projectGroupingSettings = selectProjectGroupingSettings(getClientSettings());
@@ -9959,25 +13019,35 @@ index 00000000..49c2f163
 +});
 diff --git a/packages/contracts/src/briqSandbox.ts b/packages/contracts/src/briqSandbox.ts
 new file mode 100644
-index 00000000..bf7f747b
+index 00000000..18d03f89
 --- /dev/null
 +++ b/packages/contracts/src/briqSandbox.ts
-@@ -0,0 +1,16 @@
+@@ -0,0 +1,26 @@
 +import * as Schema from "effect/Schema";
 +import { EnvironmentId, ProjectId, ThreadId } from "./baseSchemas.ts";
 +import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 +
-+export const BriqSandboxAllocationInput = Schema.Struct({ threadId: ThreadId });
++export const BriqSandboxProviderInstanceId = Schema.Literals(["codex", "claudeAgent"]);
++export const BriqSandboxAllocationInput = Schema.Struct({
++  threadId: ThreadId,
++  providerInstanceId: Schema.optionalKey(BriqSandboxProviderInstanceId),
++});
 +export const BriqSandboxAllocation = Schema.Struct({
 +  allocationId: TrimmedNonEmptyString,
++  providerInstanceId: BriqSandboxProviderInstanceId,
 +  environmentId: EnvironmentId,
 +  threadId: ThreadId,
-+  project: Schema.Struct({ id: ProjectId, title: TrimmedNonEmptyString, workspaceRoot: Schema.Literal("/work") }),
++  project: Schema.Struct({
++    id: ProjectId,
++    title: TrimmedNonEmptyString,
++    workspaceRoot: Schema.Literal("/work"),
++  }),
 +  connection: Schema.Struct({ url: TrimmedNonEmptyString, credential: TrimmedNonEmptyString }),
 +});
 +
 +export class BriqSandboxAllocationError extends Schema.TaggedError<BriqSandboxAllocationError>()(
-+  "BriqSandboxAllocationError", { message: Schema.String },
++  "BriqSandboxAllocationError",
++  { message: Schema.String },
 +) {}
 diff --git a/packages/contracts/src/clientRpcPermissions.ts b/packages/contracts/src/clientRpcPermissions.ts
 index d3139f2e..4642b673 100644
@@ -10131,14 +13201,18 @@ index 37ea5866..7956cc2b 100644
    WsOrchestrationV2SubscribeShellRpc,
    WsOrchestrationV2SubscribeThreadRpc,
 diff --git a/packages/contracts/src/server.ts b/packages/contracts/src/server.ts
-index c36f724b..e0616bd3 100644
+index c36f724b..d5155ba3 100644
 --- a/packages/contracts/src/server.ts
 +++ b/packages/contracts/src/server.ts
-@@ -607,6 +607,7 @@ export const ServerEventLoopStall = Schema.Struct({
+@@ -607,6 +607,11 @@ export const ServerEventLoopStall = Schema.Struct({
  export type ServerEventLoopStall = typeof ServerEventLoopStall.Type;
  
  export const ServerConfig = Schema.Struct({
-+  briqSandboxRole: Schema.optionalKey(Schema.Literals(["central", "child", "standalone", "invalid"])),
++  briqSandboxProviders: Schema.optionalKey(Schema.Array(Schema.Literals(["codex", "claudeAgent"]))),
++  briqSandboxProviderInstanceId: Schema.optionalKey(Schema.Literals(["codex", "claudeAgent"])),
++  briqSandboxRole: Schema.optionalKey(
++    Schema.Literals(["central", "child", "standalone", "invalid"]),
++  ),
    environment: ExecutionEnvironmentDescriptor,
    auth: ServerAuthDescriptor,
    cwd: TrimmedNonEmptyString,

@@ -2,7 +2,7 @@ import { edgeToken, requireEdgeBinding, withoutEdgeEnvironment } from './edge-au
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { digest, identifier } from './allocations.mjs';
+import { digest, identifier, providerInstanceId } from './allocations.mjs';
 import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
 
 export function cli(args, { env = process.env, stdin, timeout = 120000, execResult = false } = {}, spawnProcess = spawn) {
@@ -56,7 +56,11 @@ export class BriqCredentialOwner {
 export class BriqCloud {
   constructor({ directory, run = cli, env = process.env, credentialOwner = new BriqCredentialOwner() }) {
     Object.assign(this, { directory, credentialOwner, env: withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env)) });
-    this.run = (args, options) => credentialOwner.run(() => run(args, options));
+    this.run = (args, options, beforeDispatch) => credentialOwner.run(() => {
+      // The credential owner may queue this operation after its caller admitted it.
+      beforeDispatch?.();
+      return run(args, options);
+    });
   }
   async create(binding, { image, bridgeUrl, edgeCredential }) {
     edgeToken(edgeCredential); requireEdgeBinding(binding, edgeCredential);
@@ -66,7 +70,7 @@ export class BriqCloud {
       ports: [8080], expose: 'public', volume: { mount: '/work', gb: 5 }, sleep: '3h',
       cmd: ['node', '/opt/t3-cloud/child.mjs'], env: {
         T3_CLOUD_PUBLIC_ORIGIN: 'https://{{self:host}}',
-        T3_CLOUD_ROLE: 'child', T3_CLOUD_THREAD_ID: binding.threadId, T3_CLOUD_BINDING_ID: binding.allocationId,
+        T3_CLOUD_ROLE: 'child', T3_CLOUD_PROVIDER_INSTANCE_ID: providerInstanceId(binding.providerInstanceId), T3_CLOUD_THREAD_ID: binding.threadId, T3_CLOUD_BINDING_ID: binding.allocationId,
         T3_CLOUD_BRIDGE_URL: bridgeUrl, T3_CLOUD_BRIDGE_TOKEN: { secret: 'CHILD_BRIDGE_TOKEN' },
         T3_CLOUD_EDGE_TOKEN: { secret: 'CHILD_EDGE_TOKEN' },
         T3_CLOUD_EXEC_TOKEN_SHA256: digest(binding.execToken),
@@ -78,14 +82,16 @@ export class BriqCloud {
     const listed = await this.run(['list', '--stack', binding.stack], { env: this.env });
     const exact = listed.briqs?.filter(row => row.id === root.id || row.name === 'sandbox');
     if (exact?.length !== 1 || exact[0].id !== root.id || exact[0].stackId !== root.stackId || exact[0].name !== 'sandbox' ||
-      exact[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || exact[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId) throw Error('Root namespace requires reconciliation');
+      exact[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || exact[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
+      providerInstanceId(exact[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) throw Error('Root namespace requires reconciliation');
     return root;
   }
   async find(binding) {
     const response = await this.run(['list', '--stack', binding.stack], { env: this.env });
     if (response.briqs?.length !== 1 || response.briqs[0].name !== 'sandbox' ||
       binding.briqId && response.briqs[0].id !== binding.briqId || binding.rootStackId && response.briqs[0].stackId !== binding.rootStackId ||
-      response.briqs[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || response.briqs[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId) return null;
+      response.briqs[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || response.briqs[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
+      providerInstanceId(response.briqs[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) return null;
     return { id: identifier(response.briqs[0].id), stackId: identifier(response.briqs[0].stackId) };
   }
   async endpoints(binding) {
