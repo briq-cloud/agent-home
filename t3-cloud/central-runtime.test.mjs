@@ -4,7 +4,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
-import { createCentralRuntime } from './central-runtime.mjs';
+import { createCentralRuntime, childPairing } from './central-runtime.mjs';
 import { AllocationStore, digest, canonicalJson } from './allocations.mjs';
 
 async function fixture(t) {
@@ -243,4 +243,38 @@ test('cold history restore observes fresh capability without granting a scoped t
  assert.equal(runtime.broker.pendingTurns.size,0);
  assert.equal(f.calls.some(row=>['turn/start','turn/steer','turn/interrupt'].includes(row.method)),false);
  await runtime.restore();assert.equal(f.calls.filter(row=>row.method==='thread/resume').length,1);
+});
+
+async function phoneFixture(t) {
+ const f=await fixture(t), store=new AllocationStore(join(f.directory,'phone'));await store.initialize();
+ const binding={ownerId:'owner',threadId:'t3',allocationId:'allocation',state:'ready',providerInstanceId:'codex',edgeTokenHash:digest(f.env.T3_CLOUD_EDGE_TOKEN),
+  briqId:'root',rootStackId:'stack',environmentId:'child-native',execEnvironmentId:'exec',stack:'exact-stack',t3Url:'https://child.example',nativeThreadId:null};
+ await store.save(binding);const calls=[];
+ const cloud={pair:async(value,options)=>{calls.push(value);await options.validate();return{url:value.t3Url,code:'fresh-test-only',expiresAt:new Date(Date.now()+290000).toISOString()};}};
+ const pairing=childPairing({store,cloud,edgeCredential:f.env.T3_CLOUD_EDGE_TOKEN,admittedProviders:['codex'],ready:()=>true});
+ return{store,binding,calls,cloud,pairing};
+}
+test('phone pairing selects owned ready child and returns fresh metadata without persisting code',async t=>{
+ const f=await phoneFixture(t);assert.deepEqual(await f.pairing.phoneChildren('other'),[]);
+ const rows=await f.pairing.phoneChildren('owner');assert.equal(rows.length,1);assert.equal(JSON.stringify(rows).includes('edgeTokenHash'),false);
+ const result=await f.pairing.pairChild('owner','t3','allocation');assert.equal(result.code,'fresh-test-only');assert.equal(result.environmentId,'child-native');
+ assert.equal(JSON.stringify(await f.store.load('t3')).includes('fresh-test-only'),false);assert.equal(f.calls.length,1);
+});
+for(const patch of [{ownerId:'other'},{state:'revoked'},{state:'created'},{restoreState:'deferred'},{nativeState:'unknown'},{nativeState:'pending'},{turnState:'unknown'},{allocationId:'replacement'}])test('phone pairing rejects changed/notready binding '+JSON.stringify(patch),async t=>{
+ const f=await phoneFixture(t);await f.store.save({...f.binding,...patch});await assert.rejects(f.pairing.pairChild('owner','t3','allocation'));assert.equal(f.calls.length,0);
+});
+test('phone pairing refuses unadopted operations and durable mutation markers',async t=>{
+ const f=await phoneFixture(t);await f.store.saveOperation('t3',{key:'pending',threadId:'t3',allocationId:'allocation',method:'thread/start',state:'completed'});
+ await assert.rejects(f.pairing.pairChild('owner','t3','allocation'));assert.equal(f.calls.length,0);
+ await f.store.saveOperation('t3',{key:'pending',threadId:'t3',allocationId:'allocation',method:'thread/start',state:'adopted'});
+ await f.store.markMutation('t3','marker','turn/start');await assert.rejects(f.pairing.pairChild('owner','t3','allocation'));assert.equal(f.calls.length,0);
+});
+test('phone pairing rechecks binding after queued grant and after mint',async t=>{
+ for(const stage of ['grant','return']){
+  const f=await phoneFixture(t);f.cloud.pair=async(binding,{validate})=>{
+   if(stage==='grant'){await f.store.save({...f.binding,state:'revoked'});await validate();assert.fail('revoked grant admitted');}
+   await validate();await f.store.save({...f.binding,environmentId:'replacement'});return{code:'must-not-return'};
+  };
+  await assert.rejects(f.pairing.pairChild('owner','t3','allocation'));
+ }
 });

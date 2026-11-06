@@ -3,11 +3,57 @@ import { edgeToken, edgeAuthorized, requireEdgeBinding } from './edge-auth.mjs';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import { AllocationStore, ThreadAllocator, providerInstanceId } from './allocations.mjs';
+import { AllocationStore, ThreadAllocator, identifier, providerInstanceId } from './allocations.mjs';
 import { BriqCloud } from './briq-cloud.mjs';
 import { startAppServer, CapabilityBroker } from './broker.mjs';
 import { ScopedBriq } from './scoped-briq.mjs';
 import { ScopedMcpTransport } from './scoped-mcp-transport.mjs';
+
+// Owner management for existing children only; never calls allocation or recovery.
+export function childPairing({ store, cloud, edgeCredential, admittedProviders, ready }) {
+  function summary(binding) {
+    return { threadId: binding.threadId, allocationId: binding.allocationId, environmentId: binding.environmentId,
+      providerInstanceId: providerInstanceId(binding.providerInstanceId), url: binding.t3Url };
+  }
+  async function checked(ownerId, threadId, allocationId, expected) {
+    identifier(ownerId); identifier(threadId); identifier(allocationId);
+    const binding = await store.load(threadId);
+    if (!ready() || !binding || binding.ownerId !== ownerId || binding.allocationId !== allocationId || binding.threadId !== threadId ||
+        binding.state !== 'ready' || binding.restoreState || binding.nativeState !== undefined && binding.nativeState !== 'bound' || binding.turnState !== undefined && binding.turnState !== 'bound' ||
+        binding.nativeCleanup || binding.rootStop || !admittedProviders.includes(providerInstanceId(binding.providerInstanceId))) throw Error('Child pairing unavailable');
+    requireEdgeBinding(binding, edgeCredential);
+    for (const field of ['briqId', 'rootStackId', 'environmentId', 'execEnvironmentId']) identifier(binding[field]);
+    const url = new URL(binding.t3Url);
+    if (url.protocol !== 'https:' || url.origin !== binding.t3Url || url.username || url.password) throw Error('Invalid child endpoint');
+    if (expected && JSON.stringify([binding.briqId, binding.rootStackId, binding.environmentId, binding.execEnvironmentId,
+        binding.t3Url, binding.stack, binding.execUrl, binding.execToken, binding.bridgeToken, binding.nativeThreadId ?? null, binding.claudeNativeSessionId ?? null, providerInstanceId(binding.providerInstanceId)]) !== expected) throw Error('Child binding changed');
+    if ((await store.mutationMarkers(threadId)).length) throw Error('Child has unresolved mutations');
+    for (const op of await store.listOperations(threadId)) {
+      if (op.threadId !== threadId || op.allocationId !== allocationId || (op.method === 'briq/scoped' ? op.state !== 'completed' : op.state !== 'adopted')) throw Error('Child has unresolved operations');
+    }
+    return binding;
+  }
+  return {
+    async phoneChildren(ownerId) {
+      const rows = [];
+      for (const binding of await store.list()) {
+        try { rows.push(summary(await checked(ownerId, binding.threadId, binding.allocationId))); } catch { /* Only ready owned children are selectable. */ }
+      }
+      return rows;
+    },
+    async pairChild(ownerId, threadId, allocationId) {
+      return store.serialized(threadId, async () => {
+        const binding = await checked(ownerId, threadId, allocationId);
+        const expected = JSON.stringify([binding.briqId, binding.rootStackId, binding.environmentId, binding.execEnvironmentId,
+          binding.t3Url, binding.stack, binding.execUrl, binding.execToken, binding.bridgeToken, binding.nativeThreadId ?? null, binding.claudeNativeSessionId ?? null, providerInstanceId(binding.providerInstanceId)]);
+        const validate = () => checked(ownerId, threadId, allocationId, expected);
+        const pairing = await cloud.pair(binding, { phone: true, validate });
+        await validate();
+        return { ...summary(binding), ...pairing };
+      });
+    },
+  };
+}
 
 // A single refresh owner. A stale lock needs explicit operator reconciliation;
 // an uncertain process lifetime never licenses a second app-server.
@@ -112,6 +158,7 @@ export async function createCentralRuntime(env = process.env, dependencies = {})
         const failures = results.filter(result => result.status === 'rejected').map(result => result.reason);
         if (failures.length) throw new AggregateError(failures, 'Allocation cleanup requires reconciliation');
       } });
+    Object.assign(allocator, childPairing({ store, cloud, edgeCredential, admittedProviders, ready: () => ready && !stopped }));
     websocket = new WebSocketServer({ noServer: true, maxPayload: 2097152, perMessageDeflate: false });
     async function bridgeUpgrade(req, socket, head) {
       let session;

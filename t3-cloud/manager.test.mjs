@@ -11,19 +11,22 @@ const origin = 'https://cloud.example';
 const connections = { status: async () => ({claude: { authenticated: false }, briq: { authenticated: null }}), pair: async () => ({pairUrl: 'https://cloud.example/pair#token=short-lived'}) };
 async function fixture(t, revocationIssues, ownerRequest, restorationIssues) {
   const seen = [];
-  const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged','briq_token=forged']); res.end(req.url); });
+  const upstream = createServer((req,res) => { seen.push(req.headers); res.setHeader('content-type','text/plain; charset=utf-8'); res.setHeader('x-content-type-options','nosniff'); res.setHeader('set-cookie',['native=ok','t3_cloud_owner=forged','briq_token=forged']); res.end(req.url); });
   upstream.on('upgrade', (req,socket,head) => { seen.push(req.headers); socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'); if(head.length)socket.write(head); socket.pipe(socket); });
   upstream.listen(0,'127.0.0.1'); await once(upstream,'listening');
-  const allocations = [], rpc=[];
+  const allocations = [], rpc=[], phoneCalls=[];
   const manager = createCloudManager({role:'central',publicOrigin:origin,ownerKey:key,ownerId:'owner-1',allocatorToken:allocationKey,connections,
-    allocator:{revocationIssues,restorationIssues, async allocate(owner,thread,provider){allocations.push([owner,thread,provider]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
+    allocator:{revocationIssues,restorationIssues,
+      async phoneChildren(owner){phoneCalls.push(['list',owner]);return[{threadId:'thread-1',allocationId:'allocation-1',environmentId:'child-native',url:'https://child.example'}];},
+      async pairChild(owner,thread,allocation){phoneCalls.push(['pair',owner,thread,allocation]);return{url:'https://child.example',code:'fresh-test-only',expiresAt:new Date(Date.now()+290000).toISOString()};},
+      async allocate(owner,thread,provider){allocations.push([owner,thread,provider]); return {threadId:thread,connection:{url:'https://child.example',credential:'one-time'}};}},
     broker:{async ownerRequest(method,params){rpc.push([method,params]);if(ownerRequest)return ownerRequest(method,params); return method==='account/login/start'?{type:'chatgptDeviceCode',loginId:'native-login',userCode:'TEST-CODE',verificationUrl:'https://auth.example/device',accessToken:'never-export'}:{account:null};}},
     t3Target:`http://127.0.0.1:${upstream.address().port}`,terminalTarget:`http://127.0.0.1:${upstream.address().port}`});
   manager.listen(0,'127.0.0.1');await once(manager,'listening');
   t.after(()=>{manager.closeAllConnections();manager.close();upstream.closeAllConnections();upstream.close();});
   function send(path,{method='GET',headers={},body}={}){return new Promise((resolve,reject)=>{const req=request({hostname:'127.0.0.1',port:manager.address().port,path,method,headers},res=>{let text='';res.on('data',c=>text+=c);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,text}));});req.on('error',reject);req.end(body===undefined?undefined:JSON.stringify(body));});}
   const post=(path,body={},headers={})=>send(path,{method:'POST',body,headers:{origin,'content-type':'application/json',...headers}});
-  return {seen,allocations,rpc,manager,send,post};
+  return {seen,allocations,rpc,phoneCalls,manager,send,post};
 }
 test('owner bootstrap creates secure opaque cookie; rejects cross-origin mutations',async t=>{
  const f=await fixture(t);let r=await f.send('/_cloud/');assert.equal(r.status,200);assert(!r.text.includes(key));assert.match(r.headers['content-security-policy'],/nonce-/);
@@ -41,7 +44,7 @@ test('allocation-only capability cannot access owner APIs or change owner bindin
 });
 test('native proxy preserves native credentials/path but removes owner credentials and forwarded origin',async t=>{
  const f=await fixture(t);let r=await f.send('/api/native?x=1',{headers:{authorization:`Bearer ${key}`,cookie:'native=yes; briq_token=edge; t3_cloud_owner=secret',host:'evil.example','x-forwarded-host':'evil.example'}});
- assert.equal(r.text,'/api/native?x=1');assert.equal(f.seen[0].authorization,undefined);assert.equal(f.seen[0].cookie,'native=yes');assert.equal(f.seen[0].host,'cloud.example');assert.equal(f.seen[0]['x-forwarded-host'],undefined);assert.deepEqual(r.headers['set-cookie'],['native=ok']);
+ assert.equal(r.text,'/api/native?x=1');assert.equal(r.headers['content-type'],'text/plain; charset=utf-8');assert.equal(r.headers['x-content-type-options'],'nosniff');assert.equal(f.seen[0].authorization,undefined);assert.equal(f.seen[0].cookie,'native=yes');assert.equal(f.seen[0].host,'cloud.example');assert.equal(f.seen[0]['x-forwarded-host'],undefined);assert.deepEqual(r.headers['set-cookie'],['native=ok']);
  await f.send('/api/native',{headers:{authorization:'Bearer native-token'}});assert.equal(f.seen[1].authorization,'Bearer native-token');
 });
 test('terminal requires owner authentication and native WS proxies handshake plus frames',async t=>{
@@ -93,4 +96,21 @@ test('owner status and device sign-in remain available when account metadata fai
  assert.equal(status.status,200);const value=JSON.parse(status.text);assert.deepEqual(value.codex,{unavailable:true});
  assert.deepEqual(value.restorations,[{threadId:'t3',allocationId:'allocation',state:'deferred'}]);assert.equal(status.text.includes('private'),false);
  const login=await f.post('/_cloud/codex/login',{}, {authorization:`Bearer ${key}`});assert.equal(login.status,200);assert.equal(JSON.parse(login.text).loginId,'recover');
+});
+
+test('owner-only existing-child phone action rejects CSRF/allocator capability/extra owner and preserves no-store',async t=>{
+ const f=await fixture(t),auth={authorization:`Bearer ${key}`};
+ assert.equal((await f.send('/_cloud/phone/children')).status,401);
+ assert.equal((await f.post('/_cloud/phone/pair',{threadId:'thread-1',allocationId:'allocation-1'},{authorization:`Bearer ${allocationKey}`})).status,401);
+ assert.equal((await f.post('/_cloud/phone/pair',{threadId:'thread-1',allocationId:'allocation-1'},{...auth,origin:'https://evil.example'})).status,403);
+ assert.equal((await f.post('/_cloud/phone/pair',{threadId:'thread-1',allocationId:'allocation-1',ownerId:'other'},auth)).status,400);
+ assert.equal((await f.send('/_cloud/phone/pair',{headers:auth})).status,404);
+ assert.deepEqual(f.phoneCalls,[]);
+ const list=await f.send('/_cloud/phone/children',{headers:auth});assert.equal(list.status,200);
+ const pair=await f.post('/_cloud/phone/pair',{threadId:'thread-1',allocationId:'allocation-1'},auth);assert.equal(pair.status,200);
+ assert.equal(pair.headers['cache-control'],'no-store');assert.equal(pair.headers['referrer-policy'],'no-referrer');
+ assert.deepEqual(f.phoneCalls,[['list','owner-1'],['pair','owner-1','thread-1','allocation-1']]);assert.deepEqual(f.allocations,[]);
+ assert.equal(JSON.parse(pair.text).code,'fresh-test-only');
+ const page=await f.send('/_cloud/',{headers:auth});assert.match(page.text,/one allocated workspace/);assert.match(page.text,/Create five-minute child pairing/);
+ assert(!page.text.includes('fresh-test-only'));assert(!page.text.includes('localStorage'));assert(!page.text.includes('console.'));
 });

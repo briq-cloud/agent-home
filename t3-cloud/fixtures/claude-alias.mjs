@@ -60,9 +60,10 @@ const server=createServer(async(req,res)=>{
     assert.equal(data.model,'gpt-5.4');assert.equal(data.stream,true);
     const output=[];
     if(kind==='tool'){
-     const name=data.tools.find(value=>value.type==='function'&&value.name.endsWith('briq_catalog'))?.name;
-     assert.equal(typeof name,'string');
-     output.push({type:'function_call',id:'fc_local_catalog',call_id:'call_local_catalog',name,arguments:'{}',status:'completed'});
+     const catalog=data.tools.filter(value=>value.type==='namespace').flatMap(value=>value.tools.filter(tool=>tool.type==='function'&&tool.name==='briq_catalog').map(tool=>({namespace:value.name,name:tool.name})));
+     assert.equal(catalog.length,1);const {namespace,name}=catalog[0];
+     assert.equal(namespace,'mcp__briq');
+     output.push({type:'function_call',id:'fc_local_catalog',call_id:'call_local_catalog',namespace,name,arguments:'{}',status:'completed'});
      codexProvider.next='tool-result';
     }else{
      assert(['text','tool-result'].includes(kind));

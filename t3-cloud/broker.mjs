@@ -61,6 +61,33 @@ const fields = {
 };
 const notifications = new Set(['thread/started', 'thread/closed', 'thread/tokenUsage/updated', 'turn/started', 'turn/completed', 'turn/plan/updated', 'item/started', 'item/completed', 'item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/plan/delta', 'error']);
 const approvalMethods = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
+const questionMethod = 'item/tool/requestUserInput';
+const record = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
+const safeKey = key => key.length > 0 && !['__proto__', 'prototype', 'constructor'].includes(key);
+function questionIds(params) {
+  if (!record(params) || Object.keys(params).some(key => !['threadId', 'turnId', 'itemId', 'questions', 'isBlocking', 'autoResolutionMs'].includes(key)) ||
+      ![params.threadId, params.turnId, params.itemId].every(value => typeof value === 'string' && value.length > 0) ||
+      typeof params.isBlocking !== 'boolean' || params.autoResolutionMs != null && (!Number.isSafeInteger(params.autoResolutionMs) || params.autoResolutionMs < 0) ||
+      !Array.isArray(params.questions) || !params.questions.length || params.questions.length > 64) return null;
+  const ids = [];
+  for (const question of params.questions) {
+    if (!record(question) || Object.keys(question).some(key => !['id', 'header', 'question', 'isOther', 'isSecret', 'options'].includes(key)) ||
+        typeof question.id !== 'string' || !safeKey(question.id) || ids.includes(question.id) ||
+        !['header', 'question'].every(key => typeof question[key] === 'string') ||
+        !['isOther', 'isSecret'].every(key => question[key] === undefined || typeof question[key] === 'boolean') ||
+        question.options != null && (!Array.isArray(question.options) || question.options.some(option => !record(option) ||
+          Object.keys(option).sort().join(',') !== 'description,label' || typeof option.label !== 'string' || typeof option.description !== 'string'))) return null;
+    ids.push(question.id);
+  }
+  return ids;
+}
+function questionAnswer(result, ids) {
+  return record(result) && Object.keys(result).join(',') === 'answers' && record(result.answers) &&
+    Object.keys(result.answers).length === ids.length && Object.keys(result.answers).every(id => safeKey(id) && ids.includes(id)) &&
+    ids.every(id => Object.hasOwn(result.answers, id) && record(result.answers[id]) && Object.keys(result.answers[id]).join(',') === 'answers' &&
+      Array.isArray(result.answers[id].answers) && result.answers[id].answers.length <= 64 &&
+      result.answers[id].answers.every(answer => typeof answer === 'string' && answer.length <= 1048576));
+}
 const mutationMethods = new Set(['thread/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 function error(id, message = 'Operation denied by sandbox binding', pending = false) { return { id, error: { code: pending ? -32010 : -32600, message, ...(pending ? { data: { sandboxOperationState: 'pending' } } : {}) } }; }
 class SandboxOperationPending extends Error {}
@@ -106,7 +133,7 @@ function textInput(input) {
 export class CapabilityBroker {
   constructor({ store, app, claude, briqTransport, admittedProviders = ['codex'] }) {
     this.admittedProviders = new Set(admittedProviders.map(providerInstanceId));
-    Object.assign(this, { store, app, claude, briqTransport }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map(); this.owners = new Map(); this.pendingTurns = new Map();
+    Object.assign(this, { store, app, claude, briqTransport }); this.sessions = new Set(); this.approvals = new Map(); this.sequence = 0; this.registered = new Set(); this.activeTurns = new Map(); this.finishedTurns = new Map(); this.unavailable = false; this.mutations = new Map(); this.owners = new Map(); this.pendingTurns = new Map(); this.questionTurns = new Map(); this.seenQuestions = new Set();
     app.events.on('message', message => { this.deliver(message).catch(() => {}); });
     app.events.on('closed', () => { this.briqTransport?.close(); this.unavailable = true; this.registered.clear(); this.approvals.clear(); for (const session of this.sessions) session.close(); });
   }
@@ -247,15 +274,35 @@ export class CapabilityBroker {
       if (!pending || pending.closed || pending.turnId && pending.turnId !== turn.id || this.finishedTurns.get(threadId) === turn.id) return;
       pending.turnId = turn.id;
       this.activeTurns.set(threadId, turn.id);
-      this.briqTransport?.startTurn?.(threadId, turn.id, pending.lease);
+      this.questionTurns.set(threadId, pending);
+      if (this.briqTransport?.startTurn?.(threadId, turn.id, pending.lease) === false) this.closeQuestionTurn(threadId);
     }
     if (message.method === 'turn/completed') {
       // Close synchronously, before any store read or notification delivery.
       if (pending && (!pending.turnId || pending.turnId === turn.id)) { pending.turnId = turn.id; pending.closed = true; }
       this.finishedTurns.set(threadId, turn.id);
+      if (this.questionTurns.get(threadId)?.turnId === turn.id) this.questionTurns.delete(threadId);
       if (this.activeTurns.get(threadId) === turn.id) this.activeTurns.delete(threadId);
       this.briqTransport?.closeTurn?.(threadId, turn.id);
     }
+  }
+  closeQuestionTurn(threadId) {
+    const scope = this.questionTurns.get(threadId) ?? this.pendingTurns.get(threadId);
+    if (scope) scope.closed = true;
+    this.questionTurns.delete(threadId);
+    this.briqTransport?.closeTurn?.(threadId);
+  }
+  questionTurnLive(threadId, turnId, scope, session, binding) {
+    // The durable turn may still be unknown while start is in flight. Authority
+    // comes from the original live intent and reserved execution lease instead.
+    const mutation = scope?.mutation;
+    return Boolean(scope && this.questionTurns.get(threadId) === scope && !scope.closed && scope.session === session &&
+      scope.turnId === turnId && this.activeTurns.get(threadId) === turnId &&
+      scope.allocationId === binding.allocationId && scope.environmentId === binding.execEnvironmentId &&
+      mutation?.method === 'turn/start' && mutation.session === session && !mutation.quarantined &&
+      this.mutations.get(scope.intent) === mutation && session.mutations.has(mutation) && !session.closed &&
+      this.owners.get(binding.allocationId) === session &&
+      (!this.briqTransport || scope.lease && !scope.lease.closed && this.briqTransport.startTurn?.(threadId, turnId, scope.lease) === true));
   }
   async deliverMutation(mutation, message) {
     const { session } = mutation;
@@ -344,6 +391,16 @@ export class CapabilityBroker {
       if (message.method === 'briq/operation/adopt') return await this.adoptOperation(session, message, binding);
       if (!message.method && id !== undefined) {
         const approval = this.approvals.get(id);
+        if (approval?.method === questionMethod) {
+          if (message.error !== undefined || !questionAnswer(message.result, approval.questionIds)) return session.send(error(id));
+          const current = await this.binding(session);
+          if (approval.session !== session || approval.allocationId !== current.allocationId || approval.providerInstanceId !== session.providerInstanceId ||
+              approval.threadId !== current.nativeThreadId || approval.environmentId !== current.execEnvironmentId ||
+              this.owners.get(current.allocationId) !== session || this.questionTurns.get(approval.threadId) !== approval.scope ||
+              !this.questionTurnLive(approval.threadId, approval.turnId, approval.scope, session, current) || this.approvals.get(id) !== approval)
+            return session.send(error(id));
+          this.approvals.delete(id); this.app.notify({ id: approval.nativeId, result: message.result }); return;
+        }
         if (!approval || approval.session !== session || approval.threadId !== binding.nativeThreadId ||
           approval.environmentId !== binding.execEnvironmentId || this.activeTurns.get(binding.nativeThreadId) !== approval.turnId || !message.result ||
           Object.keys(message.result).some(key => key !== 'decision') || !['accept', 'decline', 'cancel'].includes(message.result.decision))
@@ -383,13 +440,14 @@ export class CapabilityBroker {
         const turnId = params.turnId;
         if (!turnId || this.activeTurns.get(binding.nativeThreadId) !== turnId) return session.send(error(id));
         // Cancellation must remain independent of a pending turn/start or read response.
+        this.questionTurns.delete(binding.nativeThreadId);
         this.briqTransport?.closeTurn?.(binding.nativeThreadId, turnId);
         const pendingTurn = this.pendingTurns.get(binding.nativeThreadId); if (pendingTurn) pendingTurn.closed = true;
         mutation = await this.beginMutation(session, message.method, operation);
         const result = await this.app.request(message.method, params);
         return await this.deliverMutation(mutation, { id, result });
       }
-      if (message.method === 'thread/unsubscribe') this.briqTransport?.closeTurn?.(binding.nativeThreadId);
+      if (message.method === 'thread/unsubscribe') this.closeQuestionTurn(binding.nativeThreadId);
       let response;
       await this.store.serialized(binding.threadId, async () => {
         const current = await this.binding(session);
@@ -426,7 +484,7 @@ export class CapabilityBroker {
             mutation = await this.beginMutation(session, message.method, operation);
             current.turnState = 'unknown'; await this.store.save(current);
             const lease = this.briqTransport?.reserveTurn(current, session, mutation.id);
-            this.pendingTurns.set(current.nativeThreadId, { session, intent: mutation.id, lease, turnId: null, closed: false });
+            this.pendingTurns.set(current.nativeThreadId, { session, intent: mutation.id, mutation, lease, allocationId: current.allocationId, environmentId: current.execEnvironmentId, turnId: null, closed: false });
           }
           if (message.method === 'thread/resume') {
             response = await this.resumeNative(current, { session, params, model });
@@ -453,6 +511,7 @@ export class CapabilityBroker {
       else if (!session.closed) await session.send({ id, result: response });
     } catch (cause) {
       if (mutation?.method === 'turn/start') {
+        for (const [nativeId, scope] of this.questionTurns) if (scope.mutation === mutation) this.closeQuestionTurn(nativeId);
         for (const [nativeId, pendingTurn] of this.pendingTurns) if (pendingTurn.intent === mutation.id) {
           pendingTurn.closed = true; this.briqTransport?.closeTurn?.(nativeId); this.pendingTurns.delete(nativeId);
         }
@@ -490,6 +549,26 @@ export class CapabilityBroker {
       if (binding?.nativeThreadId === threadId) candidates.push({ session, binding });
     }
     if (message.id !== undefined) {
+      if (message.method === questionMethod) {
+        const ids = questionIds(message.params), scope = this.questionTurns.get(threadId);
+        const nativeKey = JSON.stringify([typeof message.id, message.id]);
+        const target = candidates.find(({ session, binding }) => ids && session.initialized && scope?.session === session &&
+          this.questionTurnLive(threadId, message.params.turnId, scope, session, binding));
+        if (!target || !['string', 'number'].includes(typeof message.id) || typeof message.id === 'number' && !Number.isSafeInteger(message.id) || this.seenQuestions.has(nativeKey)) {
+          this.app.notify({ id: message.id, error: { code: -32600, message: 'Unbound server request denied' } }); return;
+        }
+        this.seenQuestions.add(nativeKey);
+        const id = `question-${++this.sequence}`;
+        this.approvals.set(id, { method: questionMethod, session: target.session, nativeId: message.id, threadId, turnId: message.params.turnId,
+          environmentId: target.binding.execEnvironmentId, allocationId: target.binding.allocationId, providerInstanceId: target.session.providerInstanceId, scope, questionIds: ids });
+        try {
+          if (await target.session.send({ ...message, id }) === false) throw Error('Question delivery unknown');
+        } catch {
+          this.approvals.delete(id);
+          this.app.notify({ id: message.id, error: { code: -32600, message: 'User input delivery unavailable' } });
+        }
+        return;
+      }
       const target = candidates.find(({ binding }) =>
         typeof message.params.itemId === 'string' && Number.isSafeInteger(message.params.startedAtMs) &&
         this.activeTurns.get(threadId) === message.params.turnId &&
@@ -516,8 +595,11 @@ export class CapabilityBroker {
     for (const mutation of session.mutations) { mutation.quarantined = true; this.mutations.delete(mutation.id); }
     session.mutations.clear();
     this.sessions.delete(session);
+    for (const [threadId, scope] of this.questionTurns) if (scope.session === session) this.questionTurns.delete(threadId);
     for (const [id, approval] of this.approvals) if (approval.session === session) {
-      this.approvals.delete(id); this.app.notify({ id: approval.nativeId, result: { decision: 'cancel' } });
+      this.approvals.delete(id); this.app.notify(approval.method === questionMethod
+        ? { id: approval.nativeId, error: { code: -32600, message: 'User input owner disconnected' } }
+        : { id: approval.nativeId, result: { decision: 'cancel' } });
     }
   }
   async ownerRequest(method, params) {

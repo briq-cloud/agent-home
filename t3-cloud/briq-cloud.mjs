@@ -56,9 +56,9 @@ export class BriqCredentialOwner {
 export class BriqCloud {
   constructor({ directory, run = cli, env = process.env, credentialOwner = new BriqCredentialOwner() }) {
     Object.assign(this, { directory, credentialOwner, env: withoutExecutingMcpEnvironment(withoutEdgeEnvironment(env)) });
-    this.run = (args, options, beforeDispatch) => credentialOwner.run(() => {
+    this.run = (args, options, beforeDispatch) => credentialOwner.run(async () => {
       // The credential owner may queue this operation after its caller admitted it.
-      beforeDispatch?.();
+      await beforeDispatch?.(run);
       return run(args, options);
     });
   }
@@ -103,13 +103,35 @@ export class BriqCloud {
     if (!response.ok) throw Error('Sandbox environment not ready');
     return response.json();
   }
-  async pair(binding) {
+  async pair(binding, { phone = false, validate = async () => {} } = {}) {
     const response = await this.run(['exec', binding.briqId, '--', '/opt/t3/t3', 'auth', 'pairing', 'create',
-      '--base-dir', '/work/.t3', '--base-url', binding.t3Url, '--ttl', '5m', '--json'], { env: this.env });
+      '--base-dir', '/work/.t3', '--base-url', binding.t3Url, '--ttl', '5m', '--json'], { env: this.env }, phone ? async run => {
+      // These read-only identity/liveness checks share the exec's credential grant.
+      // Native exec may wake idle/provider sleep under platform policy. A user stop
+      // remains authoritative; no explicit start, resume or allocation recovery occurs here.
+      await validate();
+      const listed = await run(['list', '--stack', binding.stack], { env: this.env });
+      const rows = listed.briqs;
+      if (rows?.length !== 1 || rows[0].id !== binding.briqId || rows[0].stackId !== binding.rootStackId || rows[0].name !== 'sandbox' ||
+          rows[0].env?.T3_CLOUD_BINDING_ID !== binding.allocationId || rows[0].env?.T3_CLOUD_THREAD_ID !== binding.threadId ||
+          providerInstanceId(rows[0].env?.T3_CLOUD_PROVIDER_INSTANCE_ID) !== providerInstanceId(binding.providerInstanceId)) throw Error('Child identity unavailable');
+      const status = await run(['status', binding.briqId], { env: this.env });
+      if (status.briq?.id !== binding.briqId || status.briq?.name !== 'sandbox' || !['running', 'sleeping'].includes(status.briq?.state)) throw Error('Child must be running or asleep');
+      await validate();
+    } : undefined);
     if (response.exitCode !== 0) throw Error('Sandbox pairing failed');
     const pairing = JSON.parse(response.stdout);
     if (typeof pairing.credential !== 'string') throw Error('Sandbox pairing returned invalid credential');
-    return pairing.credential;
+    if (!phone) return pairing.credential;
+    await validate();
+    const base = endpoint(binding.t3Url), url = new URL(pairing.pairUrl);
+    const expiry = Date.parse(pairing.expiresAt), remaining = expiry - Date.now();
+    const fragment = new URLSearchParams(url.hash.slice(1));
+    if (!pairing.credential || pairing.credential.length > 4096 || /[\s\x00-\x1f\x7f]/.test(pairing.credential) ||
+        url.origin !== base || url.pathname !== '/pair' || url.search || url.username || url.password ||
+        [...fragment.keys()].join(',') !== 'token' || fragment.get('token') !== pairing.credential ||
+        !Number.isFinite(expiry) || remaining <= 0 || remaining > 300000) throw Error('Invalid child pairing metadata');
+    return { url: base, code: pairing.credential, expiresAt: new Date(expiry).toISOString() };
   }
   async execAsync(briqId, command, timeoutMs) {
     return this.run(['exec', '--async', '--clear-env', '--timeout', String(timeoutMs), briqId,

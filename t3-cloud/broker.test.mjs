@@ -705,3 +705,146 @@ test('active or pending native turn denies rotation and competing bridge owner',
  assert.equal(f.calls.some(row=>['thread/unsubscribe','thread/resume'].includes(row.method)),false);
  assert.equal((await f.store.load('a')).nativeState,undefined);
 });
+
+async function questionFixture(t, { start = true, ...options } = {}) {
+  const f = await fixture(t, options);
+  const binding = await f.store.load('a'); binding.nativeThreadId = 'native-a'; await f.store.save(binding);
+  f.responses.set('thread/read', () => ({ thread: { id: 'native-a', model: 'mock', environments: [{ environmentId: 'exec-a', cwd: '/work' }] } }));
+  f.question = { id: 901, method: 'item/tool/requestUserInput', params: { threadId: 'native-a', turnId: 'turn-a', itemId: 'question-item',
+    isBlocking: true, autoResolutionMs: null, questions: [{ id: 'choice', header: 'Fixture', question: 'Choose a fixture value', isOther: true, isSecret: false,
+      options: [{ label: 'A', description: 'Fixture option' }] }, { id: 'detail', header: 'Detail', question: 'Fixture detail', options: null }] } };
+  f.answer = { answers: { choice: { answers: ['A'] }, detail: { answers: ['fixture detail'] } } };
+  f.start = () => f.session.receive({ id: 50, method: 'turn/start', params: { threadId: 'native-a', input: [{ type: 'text', text: 'question fixture' }] } });
+  if (start) await f.start();
+  return f;
+}
+
+test('native questions forward the exact v2 shape once to their owner without approval-only timestamps', async t => {
+  const f = await questionFixture(t);
+  const peerCount = f.bReceived.length;
+  await f.broker.deliver(f.question);
+  const request = f.received.at(-1); assert.match(request.id, /^question-/);
+  assert.deepEqual(request, { ...f.question, id: request.id }); assert.equal(f.bReceived.length, peerCount);
+  await f.bSession.receive({ id: request.id, result: f.answer }); assert.ok(f.bReceived.at(-1).error); assert.equal(f.wire.length, 0);
+  await f.session.receive({ id: request.id, result: f.answer });
+  assert.deepEqual(f.wire, [{ id: 901, result: f.answer }]);
+  await f.session.receive({ id: request.id, result: f.answer }); assert.ok(f.received.at(-1).error); assert.equal(f.wire.length, 1);
+  const before = f.received.length; await f.broker.deliver(f.question);
+  assert.equal(f.received.length, before); assert.ok(f.wire.at(-1).error);
+});
+
+test('native question answers require exact original IDs and bounded string arrays without extra keys', async t => {
+  const f = await questionFixture(t); await f.broker.deliver(f.question); const id = f.received.at(-1).id;
+  for (const result of [null, [], { decision: 'accept' }, { answers: {} }, { answers: { choice: { answers: ['A'] } } },
+    { ...f.answer, extra: true }, { answers: { ...f.answer.answers, foreign: { answers: ['A'] } } },
+    { answers: { ...f.answer.answers, choice: { answers: [1] } } }, { answers: { ...f.answer.answers, choice: { answers: ['A'], extra: true } } },
+    { answers: { ...f.answer.answers, choice: { answers: ['x'.repeat(1048577)] } } },
+    JSON.parse('{"answers":{"__proto__":{"answers":["A"]},"detail":{"answers":[]}}}')]) {
+    await f.session.receive({ id, result }); assert.ok(f.received.at(-1).error); assert.equal(f.wire.length, 0);
+  }
+  await f.session.receive({ id, result: f.answer, error: { code: 1 } }); assert.equal(f.wire.length, 0);
+  await f.session.receive({ id, result: f.answer }); assert.deepEqual(f.wire, [{ id: 901, result: f.answer }]);
+});
+
+test('native question requests reject malformed, foreign and unknown request families', async t => {
+  const f = await questionFixture(t);
+  for (const changed of [ { threadId: 'native-b' }, { turnId: 'other-turn' }, { itemId: '' }, { isBlocking: undefined },
+    { questions: [] }, { questions: [{ id: 'constructor', header: 'Fixture', question: 'Fixture' }] },
+    { questions: [f.question.params.questions[0], f.question.params.questions[0]] }, { questions: [{ id: 'x', header: 'Fixture', question: 'Fixture', options: [null] }] },
+    { environmentId: 'exec-a' }, { autoResolutionMs: -1 } ]) {
+    const count = f.received.length; await f.broker.deliver({ ...f.question, params: { ...f.question.params, ...changed } });
+    assert.equal(f.received.length, count); assert.ok(f.wire.at(-1).error);
+  }
+  await f.broker.deliver({ ...f.question, method: 'item/tool/unknown' }); assert.ok(f.wire.at(-1).error);
+  await f.broker.deliver(f.question); assert.match(f.received.at(-1).id, /^question-/);
+});
+
+for (const revoke of ['completed', 'interrupt', 'allocation', 'provider', 'environment', 'thread', 'owner', 'generation'])
+  test(`native question reply rejects changed ${revoke} scope`, async t => {
+    const f = await questionFixture(t); await f.broker.deliver(f.question); const id = f.received.at(-1).id;
+    if (revoke === 'completed') await f.broker.deliver({ method: 'turn/completed', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
+    else if (revoke === 'interrupt') await f.session.receive({ id: 51, method: 'turn/interrupt', params: { threadId: 'native-a', turnId: 'turn-a' } });
+    else if (revoke === 'owner') f.broker.owners.delete('allocation-a');
+    else if (revoke === 'generation') f.broker.questionTurns.set('native-a', { ...f.broker.questionTurns.get('native-a') });
+    else { const binding = await f.store.load('a'); Object.assign(binding, {
+      allocation: { allocationId: 'replacement' }, provider: { providerInstanceId: 'claudeAgent' },
+      environment: { execEnvironmentId: 'replacement' }, thread: { nativeThreadId: 'replacement' },
+    }[revoke]); await f.store.save(binding); }
+    await f.session.receive({ id, result: f.answer }); assert.ok(f.received.at(-1).error);
+    assert.equal(f.wire.some(message => message.id === 901 && message.result), false);
+  });
+
+test('native question disconnect uses a protocol error and cannot replay after reconnect', async t => {
+  const f = await questionFixture(t); await f.broker.deliver(f.question); const id = f.received.at(-1).id;
+  f.session.close(); assert.deepEqual(f.wire.at(-1), { id: 901, error: { code: -32600, message: 'User input owner disconnected' } });
+  const next = await reconnect(f); await next.session.receive({ id, result: f.answer }); assert.ok(next.received.at(-1).error);
+  const before = next.received.length; await f.broker.deliver(f.question); assert.equal(next.received.length, before);
+  assert.equal(f.wire.some(message => message.id === 901 && message.result), false);
+});
+
+test('native question unknown send outcome is denied without redelivery or reusable reply', async t => {
+  const f = await questionFixture(t, { send: message => { if (message.method === 'item/tool/requestUserInput') return false; } });
+  await f.broker.deliver(f.question); const id = f.received.at(-1).id; assert.ok(f.wire.at(-1).error);
+  await f.session.receive({ id, result: f.answer }); assert.ok(f.received.at(-1).error);
+  const count = f.received.length; await f.broker.deliver(f.question); assert.equal(f.received.length, count);
+  assert.equal(f.wire.some(message => message.id === 901 && message.result), false);
+});
+
+
+function questionLease() {
+  const lease = { closed: false };
+  return { lease, transport: { reserveTurn: () => lease, startTurn: () => !lease.closed, closeTurn: () => { lease.closed = true; } } };
+}
+
+test('native question uses original pending start intent before the start response or durable turn binding', async t => {
+  const { transport } = questionLease();
+  const f = await questionFixture(t, { start: false, briqTransport: transport });
+  f.responses.set('turn/start', async () => {
+    assert.equal((await f.store.load('a')).turnState, 'unknown');
+    await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
+    await f.broker.deliver(f.question);
+    const id = f.received.at(-1).id; assert.match(id, /^question-/);
+    await f.session.receive({ id, result: f.answer });
+    assert.deepEqual(f.wire, [{ id: 901, result: f.answer }]);
+    return { turn: { id: 'turn-a', status: 'inProgress' } };
+  });
+  await f.start(); assert.equal(f.received.at(-1).error, undefined);
+});
+
+for (const revoke of ['unsubscribe', 'closed-lease', 'quarantined-intent', 'replaced-intent'])
+  test(`native question delivery and answer reject ${revoke} authority`, async t => {
+    const { lease, transport } = questionLease();
+    const f = await questionFixture(t, { briqTransport: transport });
+    await f.broker.deliver(f.question); const id = f.received.at(-1).id;
+    if (revoke === 'unsubscribe') await f.session.receive({ id: 71, method: 'thread/unsubscribe', params: { threadId: 'native-a' } });
+    else if (revoke === 'closed-lease') lease.closed = true;
+    else {
+      const scope = f.broker.questionTurns.get('native-a');
+      if (revoke === 'quarantined-intent') scope.mutation.quarantined = true;
+      else f.broker.mutations.set(scope.intent, { ...scope.mutation });
+    }
+    await f.session.receive({ id, result: f.answer }); assert.ok(f.received.at(-1).error);
+    const before = f.received.length;
+    await f.broker.deliver({ ...f.question, id: 902 }); assert.equal(f.received.length, before);
+    assert.equal(f.wire.some(message => message.result), false);
+  });
+
+for (const failure of ['environment-verification', 'start-reply-delivery'])
+  test(`native question pending answer and new delivery reject ${failure} uncertainty`, async t => {
+    const { lease, transport } = questionLease();
+    const f = await questionFixture(t, { start: false, briqTransport: transport,
+      send: message => failure === 'start-reply-delivery' && message.id === 50 ? false : undefined });
+    let questionId;
+    f.responses.set('turn/start', async () => {
+      await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
+      await f.broker.deliver(f.question); questionId = f.received.at(-1).id; assert.match(questionId, /^question-/);
+      return { turn: { id: 'turn-a', status: 'inProgress' } };
+    });
+    if (failure === 'environment-verification') f.responses.set('thread/read', () => ({ thread: { id: 'native-a', model: 'mock', environments: [{ environmentId: 'WRONG', cwd: '/work' }] } }));
+    await f.start(); assert.ok(f.received.at(-1).error); assert.equal(lease.closed, true);
+    assert.equal(f.broker.questionTurns.has('native-a'), false);
+    await f.session.receive({ id: questionId, result: f.answer }); assert.ok(f.received.at(-1).error);
+    const before = f.received.length;
+    await f.broker.deliver({ ...f.question, id: 902 }); assert.equal(f.received.length, before);
+    assert.equal(f.wire.some(message => message.result), false);
+  });

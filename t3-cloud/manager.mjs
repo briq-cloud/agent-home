@@ -81,6 +81,17 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
         })) : [];
         return json(res, 200, { role, codex, ...(await connections.status()), ...(revocations.length ? { revocations } : {}), ...(restorations.length ? { restorations } : {}) });
       }
+      if (url.pathname === '/_cloud/phone/children' && req.method === 'GET') {
+        if (role !== 'central' || !allocator.phoneChildren) return json(res, 409, { error: 'Child phone pairing unavailable' });
+        return json(res, 200, { children: await allocator.phoneChildren(ownerId) });
+      }
+      if (url.pathname === '/_cloud/phone/pair' && req.method === 'POST') {
+        if (role !== 'central' || !allocator.pairChild) return json(res, 409, { error: 'Child phone pairing unavailable' });
+        const input = await body(req);
+        if (!only(input, ['threadId', 'allocationId']) || !threadId(input.threadId) || !threadId(input.allocationId))
+          return json(res, 400, { error: 'Choose an existing child workspace' });
+        return json(res, 200, await allocator.pairChild(ownerId, input.threadId, input.allocationId));
+      }
       if (url.pathname === '/_cloud/threads' && req.method === 'POST') {
         if (role !== 'central') return json(res, 409, { error: 'Thread sandbox allocation requires a central runtime' });
         const input = await body(req);
