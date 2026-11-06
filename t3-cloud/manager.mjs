@@ -28,7 +28,7 @@ const denySocket = socket => { socket.end('HTTP/1.1 401 Unauthorized\r\nConnecti
 
 /** Central connection management only. Native T3 retains its own authentication and paths. */
 export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allocator, broker,
-  connections, allocatorToken, admittedProviders = ['codex'], t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade, briqMcpRequest, ready = () => true }) {
+  connections, nativeOrigin, invalidateNativeConnections, allocatorToken, admittedProviders = ['codex'], t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade, briqMcpRequest, ready = () => true }) {
   if (!['central', 'standalone'].includes(role)) throw Error('Manager requires central or standalone role');
   if (role === 'central' && (!id(ownerId) || typeof allocator?.allocate !== 'function' || typeof broker?.ownerRequest !== 'function'))
     throw Error('Central sandbox runtime is required');
@@ -158,6 +158,24 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
           threadId: value.threadId, allocationId: value.allocationId, state: 'reconciliation-required',
         })) : [];
         return json(res, 200, { role, codex, ...(await connections.status()), ...(revocations.length ? { revocations } : {}), ...(restorations.length ? { restorations } : {}) });
+      }
+      if (url.pathname === '/_cloud/phone/central/pair' && req.method === 'POST') {
+        if (role !== 'central' || !nativeOrigin) return json(res, 409, { error: 'Central phone pairing unavailable' });
+        if (!only(await body(req), [])) return json(res, 400, { error: 'Invalid pairing operation' });
+        return json(res, 200, await connections.phonePair(nativeOrigin));
+      }
+      if (url.pathname === '/_cloud/phone/central/access' && req.method === 'GET') {
+        if (role !== 'central' || !nativeOrigin) return json(res, 409, { error: 'Central phone pairing unavailable' });
+        return json(res, 200, await connections.phoneAccess());
+      }
+      if (url.pathname === '/_cloud/phone/central/revoke' && req.method === 'POST') {
+        if (role !== 'central' || !nativeOrigin) return json(res, 409, { error: 'Central phone pairing unavailable' });
+        const input = await body(req);
+        if (!only(input, ['kind', 'id']) || !['pairing', 'session'].includes(input.kind) || !id(input.id)) return json(res, 400, { error: 'Invalid native access identity' });
+        if (input.kind === 'session' && typeof invalidateNativeConnections !== 'function') return json(res, 409, { error: 'Native transport invalidation unavailable' });
+        const result = await connections.phoneRevoke(input.kind, input.id);
+        if (input.kind === 'session') await invalidateNativeConnections();
+        return json(res, 200, result);
       }
       if (url.pathname === '/_cloud/phone/children' && req.method === 'GET') {
         if (role !== 'central' || !allocator.phoneChildren) return json(res, 409, { error: 'Child phone pairing unavailable' });

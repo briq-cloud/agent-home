@@ -102,3 +102,14 @@ They use fake adapters and real loopback HTTP/WebSocket services; they do not qu
 a provider login, the image, or cloud allocation.
 
 To connect the official iPhone app to one preallocated workspace, open `/_cloud/`, sign in as the owner, and use “Pair your iPhone with one workspace”. Find an existing workspace, create a fresh five-minute child pairing, then enter the displayed server URL and code in the official app. The ordinary native exec path may wake an idle workspace; it refuses a user-stopped workspace. This pairs one allocated child: creating phone threads does not allocate more workspaces or provide central fleet management. Pairing codes are displayed only in page memory, with no additional manager or browser persistence; native T3 owns the persistent one-time grant and its consumption/expiry state. Five minutes limits the pairing grant, not the resulting client session. Official iPhone acceptance remains required.
+
+
+### Central phone admission
+
+A central runtime can use a separately configured HTTPS origin for the official T3 phone app. The private Connections page creates a native five-minute pairing code and QR for that central environment. New threads continue through T3's managed allocator. Existing child pairing still connects one workspace.
+
+Set `T3_CLOUD_NATIVE_ORIGIN` only to the designated secondary HTTPS origin. The manager opens port 8081 for a strict set of native auth, orchestration, signed attachment and RPC WebSocket routes; native port 3773 stays on loopback. Missing configuration leaves this listener disabled. The primary management and terminal endpoint remains private on 8080. The public origin does not serve the web app or `/pair` HTML; the official app reads the QR fragment locally.
+
+Connections exposes pending-code revocation separately from native-session revocation. Clearing a displayed code removes it from the page; use Revoke pending code to invalidate it. Revoking a session uses the native CLI to update T3 access control, then disconnects all public native connections before reporting success. Other authorized clients can reconnect; the revoked session cannot. Private management, terminal and bridge connections stay connected. Signed attachment links are capabilities and may remain usable until expiry. Pairing codes and QR data stay in page memory and clear on expiry, logout, page exit or replacement.
+
+Source checks and synthetic native conformance do not qualify an installed phone or deployment. Release acceptance still requires the official app to pair to the central identity and create two threads with distinct managed workspaces.
