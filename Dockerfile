@@ -6,7 +6,8 @@
 # the vendors' agent CLIs and a terminal page. Each CLI is the vendor's binary as published, at the
 # version this build resolved (a date tag never moves), with its self-update off: a newer CLI comes
 # with next week's build, never from inside a running home. Pass a version as a build arg to pin it;
-# empty means the vendor's current stable release. What is inside, with versions: REFERENCE.md.
+# empty means the vendor's current stable release, except Codex's explicit compatibility pin.
+# What is inside, with versions: REFERENCE.md.
 #
 # Every download is checked against the checksum its publisher gives (Claude Code's manifest, the
 # GitHub release's asset digest, ttyd's SHA256SUMS, PyPI's, the npm registry's integrity), and
@@ -18,7 +19,7 @@ ARG BASE=ghcr.io/briq-cloud/sandbox:latest
 FROM ${BASE} AS native-clis
 
 ARG CLAUDE_VERSION=
-ARG CODEX_VERSION=
+ARG CODEX_VERSION=0.166.0
 ARG COPILOT_VERSION=
 ARG CURSOR_VERSION=
 ARG GROK_VERSION=
@@ -56,7 +57,7 @@ COPY bin/gh-digest /usr/local/bin/gh-digest
 # Codex: its release package, as published (the binary, the code-mode host that runs its tools,
 # its bwrap and rg), under /opt/codex; the sign-in in a file under CODEX_HOME.
 ARG CODEX_SHA256=
-RUN V="${CODEX_VERSION:-$(curl -fsSL https://api.github.com/repos/openai/codex/releases/latest | jq -r .tag_name | sed 's/^rust-v//')}" \
+RUN V="${CODEX_VERSION:?Codex requires an explicit version}" \
   && A=codex-package-x86_64-unknown-linux-musl.tar.gz \
   && H="${CODEX_SHA256:-$(gh-digest openai/codex "rust-v${V}" "$A")}" \
   && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${V}/$A" -o "/tmp/$A" \
@@ -64,6 +65,8 @@ RUN V="${CODEX_VERSION:-$(curl -fsSL https://api.github.com/repos/openai/codex/r
   && printf 'Codex\t%s\tthe GitHub release digest\n' "$H" >> /etc/agent-home/downloads \
   && mkdir -p /opt/codex && tar -xzf "/tmp/$A" -C /opt/codex && rm "/tmp/$A" \
   && ln -s /opt/codex/bin/codex /usr/local/bin/codex \
+  && test "$(codex --version)" = "codex-cli ${V}" \
+  && printf '%s\n' "$V" > /etc/agent-home/codex-version \
   && mkdir -p /etc/codex \
   && printf 'check_for_update_on_startup = false\ncli_auth_credentials_store = "file"\n' > /etc/codex/config.toml
 
@@ -139,16 +142,59 @@ RUN V="${TTYD_VERSION:-$(curl -fsSL https://api.github.com/repos/tsl0922/ttyd/re
 COPY bin/show-url /usr/local/bin/show-url
 RUN chmod 755 /usr/local/bin/show-url && ln -s /usr/local/bin/show-url /usr/local/bin/xdg-open
 
-FROM native-clis AS t3-cloud
-# T3 Code: official standalone Linux release, fixed version and publisher SHA-256.
-# Native T3 owns provider connections in the standalone T3 Cloud image.
+# Compile the pinned MIT-licensed T3 source, including the native cloud RPC and
+# creation gate. The lock and patch are verified before executing build tools.
+FROM node:26.12.1-bookworm AS t3-source
+WORKDIR /src
+COPY t3-cloud/t3-source /input
+RUN node -e 'const f=require("fs"),c=require("crypto"),m=require("/input/source.json"); if(c.createHash("sha256").update(f.readFileSync("/input/briq-sandbox.patch")).digest("hex")!==m.patchSha256)process.exit(1)'
+RUN git init . && git remote add origin https://github.com/pingdotgg/t3code.git \
+  && git fetch --depth 1 origin 2359643cffa6ba9ee84d6f2694b935de54a8013e \
+  && git checkout --detach FETCH_HEAD \
+  && test "$(git rev-parse HEAD)" = 2359643cffa6ba9ee84d6f2694b935de54a8013e \
+  && echo 'e799bbbc9cd012f14be1a75a6fcdec81956c4386306fdc3a9285191c67290c13  pnpm-lock.yaml' | sha256sum -c - \
+  && git apply --check /input/briq-sandbox.patch && git apply /input/briq-sandbox.patch
+RUN npm install --global pnpm@12.14.0 --ignore-scripts --no-fund --no-audit \
+  && pnpm install --frozen-lockfile --filter t3... --filter @t3tools/web... --filter @t3tools/scripts... --filter @t3tools/monorepo \
+  && pnpm exec vp run --filter t3 build \
+  && pnpm --filter t3 deploy --prod --legacy --config.allow-unused-patches=true /out/t3 \
+  && cp /usr/local/bin/node /out/t3/node \
+  && cp /input/LICENSE /input/source.json /out/t3/ \
+  && printf '#!/bin/sh\nexec /opt/t3/node /opt/t3/dist/bin.mjs "$@"\n' > /out/t3/t3 \
+  && chmod 755 /out/t3/t3
+# Keep the unmodified, checksum-verified native resource monitor sidecar.
 RUN curl -fsSL https://github.com/pingdotgg/t3code/releases/download/v0.1.6/t3-0.1.6-linux-x64.tar.gz -o /tmp/t3.tar.gz \
   && echo '7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6  /tmp/t3.tar.gz' | sha256sum -c - \
-  && printf 'T3 Code\t7cf31da90dee41f524dd5b679ebb6d404637ca5d9dc6fd8bc019511d57bb77e6\tthe publisher SHA256SUMS\n' >> /etc/agent-home/downloads \
-  && mkdir -p /opt/t3 && tar --strip-components=1 -xzf /tmp/t3.tar.gz -C /opt/t3 && rm /tmp/t3.tar.gz \
-  && test -x /opt/t3/t3
+  && mkdir /tmp/t3-release && tar --strip-components=1 -xzf /tmp/t3.tar.gz -C /tmp/t3-release \
+  && cp -a /tmp/t3-release/resource-monitor /out/t3/
+
+FROM native-clis AS t3-cloud
+COPY --from=t3-source /out/t3 /opt/t3
+# T3's SDK/tool protocol has its own compatibility pin. Agent Home keeps the
+# independently resolved native-clis version and its existing managed settings.
+RUN V="$(node -p 'require("/opt/t3/source.json").claude')" \
+  && H="$(node -e 'const m=require("/opt/t3/source.json"),p=require("/opt/t3/node_modules/@anthropic-ai/claude-agent-sdk/package.json"),c=require("/opt/t3/node_modules/@anthropic-ai/claude-agent-sdk/manifest.json"),a=require("node:assert/strict");a.match(m.claude,/^\d+\.\d+\.\d+$/);a.equal(p.version,m.claudeSdk);a.equal(c.version,m.claude);const h=c.platforms["linux-x64"].checksum;a.match(h,/^[a-f0-9]{64}$/);process.stdout.write(h)')" \
+  && if ! echo "$H  /usr/local/bin/claude" | sha256sum -c - > /dev/null 2>&1; then \
+    curl -fsSL "https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude" -o /tmp/t3-claude \
+    && echo "$H  /tmp/t3-claude" | sha256sum -c - \
+    && install -m 755 /tmp/t3-claude /usr/local/bin/claude && rm /tmp/t3-claude; \
+  fi \
+  && test "$(claude --version)" = "$V (Claude Code)" \
+  && printf 'Claude Code T3 compatibility\t%s\tSDK release manifest\n' "$H" >> /etc/agent-home/downloads \
+  && printf '%s\n' '{"disableAllHooks":true,"disableAgentView":true,"disableRemoteControl":true,"env":{"DISABLE_AUTOUPDATER":"1","DISABLE_UPDATES":"1"}}' > /etc/claude-code/managed-settings.json
+RUN test "$(cat /etc/agent-home/codex-version)" = "$(node -p 'require("/opt/t3/source.json").codex')" \
+  && test -x /opt/t3/t3 \
+  && printf 'T3 Code source\t2359643cffa6ba9ee84d6f2694b935de54a8013e\tpinned source, lock and local patch\n' >> /etc/agent-home/downloads
 
 COPY t3-cloud /opt/t3-cloud
+# Use the same pinned Node for the manager, child and scoped transport shim.
+# The runtime imports native TypeScript modules and requires bash for child execution.
+RUN ln -sf /opt/t3/node /usr/local/bin/node \
+  && test "$(node --version)" = "v$(node -p 'require("/opt/t3/source.json").node')" \
+  && test -x /bin/bash \
+  && cd /opt/t3-cloud \
+  && npm ci --omit=dev --ignore-scripts --no-fund --no-audit \
+  && npm cache clean --force
 COPY bin/t3-cloud-start /usr/local/bin/t3-cloud-start
 RUN chmod 755 /usr/local/bin/t3-cloud-start
 EXPOSE 8080
