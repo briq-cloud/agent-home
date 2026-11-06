@@ -1,9 +1,10 @@
-import { providerInstanceId } from './allocations.mjs';
+import { providerInstanceId, digest, canonicalJson, isThreadIdentifier, projectSource, launchProject } from './allocations.mjs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { createOwnerAuth, equalKey } from './cloud-auth.mjs';
 import { cloudProxy } from './cloud-proxy.mjs';
 import { managerPage } from './manager-ui.mjs';
+import { CLAUDE_CLOUD_ENABLED } from './claude-runtime.mjs';
 
 const privateHeaders = {
   'cache-control': 'no-store', 'referrer-policy': 'no-referrer',
@@ -22,19 +23,20 @@ async function body(req) {
   return value;
 }
 const only = (value, keys) => Object.keys(value).every(key => keys.includes(key));
-const threadId = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
+const id = value => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value);
 const denySocket = socket => { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); };
 
 /** Central connection management only. Native T3 retains its own authentication and paths. */
 export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allocator, broker,
-  connections, allocatorToken, t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade, briqMcpRequest, ready = () => true }) {
+  connections, allocatorToken, admittedProviders = ['codex'], t3Target = 'http://127.0.0.1:3773', terminalTarget = 'http://127.0.0.1:7681', bridgeUpgrade, briqMcpRequest, ready = () => true }) {
   if (!['central', 'standalone'].includes(role)) throw Error('Manager requires central or standalone role');
-  if (role === 'central' && (!threadId(ownerId) || typeof allocator?.allocate !== 'function' || typeof broker?.ownerRequest !== 'function'))
+  if (role === 'central' && (!id(ownerId) || typeof allocator?.allocate !== 'function' || typeof broker?.ownerRequest !== 'function'))
     throw Error('Central sandbox runtime is required');
   if (!connections) throw Error('Native connection adapters are required');
   const auth = createOwnerAuth({ key: ownerKey, origin: publicOrigin });
   const native = cloudProxy({ target: t3Target, publicOrigin: auth.origin, ownerBearer: req => auth.ownerBearer(req) });
   const terminal = cloudProxy({ target: terminalTarget, publicOrigin: auth.origin, ownerBearer: req => auth.ownerBearer(req), terminal: true });
+  const ownerGeneration = digest(canonicalJson(['managed-owner-generation', ownerId, ownerKey]));
   let allocating = 0;
   const server = createServer(async (req, res) => {
     try {
@@ -47,6 +49,82 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
       if (!url.pathname.startsWith('/_cloud/') && url.pathname !== '/_cloud') return native.http(req, res);
       // Only a non-secret capability is public; native source uses this to refuse a local fallback.
       if (url.pathname === '/_cloud/capabilities' && req.method === 'GET') return json(res, 200, { role });
+      const privateBridgePath = ['/_cloud/providers/status', '/_cloud/threads/managed', '/_cloud/threads/bridge-session', '/_cloud/threads/bridge-lease', '/_cloud/projects/source', '/_cloud/projects/source-revoke', '/_cloud/projects/preparation-session', '/_cloud/projects/preparation-lease', '/_cloud/projects/preparation-revoke', '/_cloud/threads/preparation-session', '/_cloud/threads/preparation-lease', '/_cloud/threads/preparation-revoke'].includes(url.pathname);
+      if (privateBridgePath) {
+        const admitted = role === 'central' && req.method === 'POST' && req.socket.remoteAddress === '127.0.0.1' &&
+          req.headers.origin === undefined && req.headers.cookie === undefined && !url.search &&
+          typeof allocatorToken === 'string' && allocatorToken.length >= 32 && equalKey(req.headers.authorization, `Bearer ${allocatorToken}`);
+        if (!admitted) return json(res, 401, { error: 'Private managed bridge unavailable' });
+        const input = await body(req);
+        if (url.pathname === '/_cloud/providers/status') {
+          if (!only(input, ['providerInstanceId']) || !['codex', 'claudeAgent'].includes(input.providerInstanceId))
+            return json(res, 400, { error: 'Invalid provider identity' });
+          const provider = input.providerInstanceId;
+          const available = admittedProviders.includes(provider) &&
+            (provider === 'codex' || CLAUDE_CLOUD_ENABLED === true);
+          let authStatus = 'unknown';
+          if (available) {
+            try {
+              if (provider === 'codex') {
+                const account = await broker.ownerRequest('account/read', { refreshToken: false });
+                authStatus = account?.account ? 'authenticated' : account?.requiresOpenaiAuth === true ? 'unauthenticated' : 'unknown';
+              } else {
+                const authenticated = (await connections.status())?.claude?.authenticated;
+                authStatus = authenticated === true ? 'authenticated' : authenticated === false ? 'unauthenticated' : 'unknown';
+              }
+            } catch { /* Credential lifetime and unreachable status remain unknown. */ }
+          }
+          return json(res, 200, { providerInstanceId: provider, available, ready: available && authStatus === 'authenticated', authStatus });
+        }
+        if (url.pathname === '/_cloud/projects/source-revoke') {
+          if (!only(input, ['sourceId', 'allocationId']) || !id(input.sourceId) || !id(input.allocationId)) return json(res, 400, { error: 'Invalid source identity' });
+          await allocator.revokeSource(ownerId, input.sourceId, input.allocationId, ownerGeneration);
+          return json(res, 200, { revoked: true });
+        }
+        if (url.pathname === '/_cloud/projects/source') {
+          if (!only(input, ['projectSource'])) return json(res, 400, { error: 'Invalid source allocation' });
+          const source = projectSource(input.projectSource);
+          if (allocating >= 8) return json(res, 429, { error: 'Sandbox allocation is busy' });
+          allocating++;
+          try { return json(res, 200, await allocator.allocateSource(ownerId, source, ownerGeneration)); } finally { allocating--; }
+        }
+        if (url.pathname.includes('/preparation-')) {
+          const purpose = url.pathname.startsWith('/_cloud/projects/') ? 'project-source' : 'thread';
+          const key = purpose === 'project-source' ? 'sourceId' : 'threadId';
+          if (!only(input, [key, 'allocationId', 'sourceDigest', 'projectId', 'workspaceRoot']) || !(purpose === 'project-source' ? id(input[key]) : isThreadIdentifier(input[key])) || !id(input.allocationId) || !id(input.projectId) || typeof input.sourceDigest !== 'string' || typeof input.workspaceRoot !== 'string') return json(res, 400, { error: 'Invalid preparation identity' });
+          const identity = { sourceDigest: input.sourceDigest, projectId: input.projectId, workspaceRoot: input.workspaceRoot };
+          if (url.pathname.endsWith('/preparation-session')) return json(res, 200, await allocator.managedPreparationSession(ownerId, input[key], input.allocationId, ownerGeneration, purpose, identity));
+          if (url.pathname.endsWith('/preparation-revoke')) {
+            await allocator.revokePreparationSession(ownerId, input[key], input.allocationId, ownerGeneration, purpose, identity);
+            return json(res, 200, { revoked: true });
+          }
+          const unregister = await allocator.openPreparationLease(ownerId, input[key], input.allocationId, ownerGeneration, purpose, identity, () => res.destroy());
+          res.once('close', unregister);
+          res.writeHead(200, { ...privateHeaders, 'content-type': 'text/event-stream', 'x-accel-buffering': 'no' });
+          res.write('event: ready\ndata: {}\n\n');
+          return;
+        }
+        if (url.pathname === '/_cloud/threads/managed') {
+          if (!only(input, ['threadId', 'providerInstanceId', 'project']) || !isThreadIdentifier(input.threadId) ||
+              !['codex', 'claudeAgent'].includes(input.providerInstanceId)) return json(res, 400, { error: 'Invalid managed identity' });
+          if (allocating >= 8) return json(res, 429, { error: 'Sandbox allocation is busy' });
+          allocating++;
+          try { return json(res, 200, await allocator.allocate(ownerId, input.threadId, input.providerInstanceId, { ownerGeneration }, ...(input.project === undefined ? [] : [launchProject(input.project)]))); }
+          finally { allocating--; }
+        }
+        if (!only(input, ['threadId', 'allocationId']) || !isThreadIdentifier(input.threadId) || !id(input.allocationId))
+          return json(res, 400, { error: 'Invalid managed identity' });
+        if (url.pathname === '/_cloud/threads/bridge-session') {
+          if (!allocator.managedBridgeSession) return json(res, 409, { error: 'Managed bridge unavailable' });
+          return json(res, 200, await allocator.managedBridgeSession(ownerId, input.threadId, input.allocationId, ownerGeneration));
+        }
+        if (!allocator.openBridgeLease) return json(res, 409, { error: 'Managed bridge unavailable' });
+        const unregister = await allocator.openBridgeLease(ownerId, input.threadId, input.allocationId, ownerGeneration, () => res.destroy());
+        res.once('close', unregister);
+        res.writeHead(200, { ...privateHeaders, 'content-type': 'text/event-stream', 'x-accel-buffering': 'no' });
+        res.write('event: ready\ndata: {}\n\n');
+        return;
+      }
       const localAllocator = role === 'central' && url.pathname === '/_cloud/threads' && req.method === 'POST' &&
         req.socket.remoteAddress === '127.0.0.1' && typeof allocatorToken === 'string' && allocatorToken.length >= 32 &&
         equalKey(req.headers.authorization, `Bearer ${allocatorToken}`);
@@ -88,14 +166,14 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
       if (url.pathname === '/_cloud/phone/pair' && req.method === 'POST') {
         if (role !== 'central' || !allocator.pairChild) return json(res, 409, { error: 'Child phone pairing unavailable' });
         const input = await body(req);
-        if (!only(input, ['threadId', 'allocationId']) || !threadId(input.threadId) || !threadId(input.allocationId))
+        if (!only(input, ['threadId', 'allocationId']) || !isThreadIdentifier(input.threadId) || !id(input.allocationId))
           return json(res, 400, { error: 'Choose an existing child workspace' });
         return json(res, 200, await allocator.pairChild(ownerId, input.threadId, input.allocationId));
       }
       if (url.pathname === '/_cloud/threads' && req.method === 'POST') {
         if (role !== 'central') return json(res, 409, { error: 'Thread sandbox allocation requires a central runtime' });
         const input = await body(req);
-        if (!only(input, ['threadId', 'providerInstanceId']) || !threadId(input.threadId) ||
+        if (!only(input, ['threadId', 'providerInstanceId']) || !isThreadIdentifier(input.threadId) ||
           input.providerInstanceId !== undefined && !['codex', 'claudeAgent'].includes(input.providerInstanceId)) return json(res, 400, { error: 'Invalid thread identity' });
         if (allocating >= 8) return json(res, 429, { error: 'Sandbox allocation is busy' });
         allocating++;

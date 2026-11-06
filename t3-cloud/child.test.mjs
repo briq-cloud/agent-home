@@ -111,3 +111,34 @@ test('root reconciliation binds exact provider and treats missing legacy provide
  provider=undefined;assert.equal(await cloud.find(binding),null);
  assert.deepEqual(await cloud.find({...binding,providerInstanceId:undefined}),{id:'root',stackId:'stack-a'});
 });
+
+test('project-source child starts only pristine native server with providers and executor disabled', async t => {
+  const root = await mkdtemp(join(tmpdir(), 't3-source-child-')); t.after(() => rm(root, { recursive: true, force: true }));
+  const calls = [];
+  const runtime = await startChild({ T3_CLOUD_ROLE: 'child', T3_CLOUD_PURPOSE: 'project-source', T3_CLOUD_BINDING_ID: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    T3_CLOUD_SOURCE_ID: 'source-one-1234567890', T3_CLOUD_SOURCE_DIGEST: 'a'.repeat(64), T3_CLOUD_PROJECT_ID: 'project-native', T3_CLOUD_PROJECT_ROOT: '/work/projects/source-one-1234567890', T3_CLOUD_OWNER_GENERATION: 'generation',
+    T3_CLOUD_PUBLIC_ORIGIN: 'https://child.example', T3_CLOUD_BRIDGE_TOKEN: 'must-not-forward', T3_CLOUD_EDGE_TOKEN: 'must-not-forward', T3_CLOUD_MANAGER_TOKEN: 'must-not-forward',
+    OPENAI_API_KEY: 'must-not-forward', ANTHROPIC_API_KEY: 'must-not-forward', HOME: '/vendor-home' }, {
+    root, listen: {port: 0, host: '127.0.0.1'}, checkVersion: () => { throw Error('No model executable check for source role'); },
+    spawnProcess: (command,args,options) => { calls.push({command,args,options}); const child = new EventEmitter(); child.kill=()=>{}; return child; },
+  }); t.after(() => runtime.close());
+  assert.equal(calls.length,1); assert.equal(calls[0].command,'/opt/t3/t3');
+  const env=calls[0].options.env;
+  for (const name of ['T3_CLOUD_THREAD_ID','T3_CLOUD_PROVIDER_INSTANCE_ID','T3_CLOUD_BRIDGE_TOKEN','T3_CLOUD_EDGE_TOKEN','T3_CLOUD_MANAGER_TOKEN','OPENAI_API_KEY','ANTHROPIC_API_KEY']) assert.equal(env[name],undefined);
+  assert.equal(env.HOME, `${root}/.t3/home`); assert.equal(env.GIT_ALLOW_PROTOCOL,'https'); assert.equal(env.GIT_CONFIG_VALUE_0,'false');
+  const settings=JSON.parse(await readFile(join(root,'.t3/userdata/settings.json'),'utf8'));
+  assert.equal(settings.providerInstances.codex.enabled,false); assert.equal(settings.providerInstances.claudeAgent.enabled,false);
+});
+
+test('project-source cloud spec has short autosleep and no provider/executor/bridge secret identity', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 't3-source-spec-')); t.after(() => rm(directory, {recursive:true,force:true}));
+  const sourceId='source-one-1234567890';
+  const binding={purpose:'project-source',allocationId:'allocation-source',projectId:'native-project',workspaceRoot:`/work/projects/${sourceId}`,projectSource:{sourceId,sourceDigest:'a'.repeat(64)},managedBridge:{ownerGeneration:'generation'},stack:'source-stack',edgeTokenHash:digest('e'.repeat(32))};
+  const env={T3_CLOUD_BINDING_ID:binding.allocationId,T3_CLOUD_PURPOSE:'project-source',T3_CLOUD_SOURCE_ID:sourceId,T3_CLOUD_SOURCE_DIGEST:'a'.repeat(64),T3_CLOUD_PROJECT_ID:binding.projectId,T3_CLOUD_PROJECT_ROOT:binding.workspaceRoot,T3_CLOUD_OWNER_GENERATION:'generation'};
+  const calls=[]; const cloud=new BriqCloud({directory,env:{},run:async(args,options)=>{calls.push({args,options}); return args[0]==='up' ? {stack:'source-stack',briqs:[{id:'root',stackId:'stack',name:'sandbox'}]} : {briqs:[{id:'root',stackId:'stack',name:'sandbox',env}]};}});
+  await cloud.create(binding,{image:`image@sha256:${'a'.repeat(64)}`,edgeCredential:'e'.repeat(32),bridgeUrl:'wss://central.example/_cloud/bridge'});
+  const spec=JSON.parse(await readFile(join(directory,'allocation-source.json'),'utf8')).services.sandbox;
+  assert.equal(spec.sleep,'5m'); assert.equal(spec.size,'small'); assert.equal(calls[0].args.includes('--secret'),false);
+  for (const key of ['T3_CLOUD_THREAD_ID','T3_CLOUD_PROVIDER_INSTANCE_ID','T3_CLOUD_BRIDGE_URL','T3_CLOUD_BRIDGE_TOKEN','T3_CLOUD_EDGE_TOKEN','T3_CLOUD_EXEC_TOKEN_SHA256']) assert.equal(spec.env[key],undefined);
+  env.T3_CLOUD_THREAD_ID='foreign'; assert.equal(await cloud.find(binding),null);
+});

@@ -1,12 +1,12 @@
 {
   "repository": "https://github.com/pingdotgg/t3code.git",
   "commit": "2359643cffa6ba9ee84d6f2694b935de54a8013e",
-  "patchSha256": "57a195f085c105058d2b77277076d4123bbb6618f84bb106c4dbb0b0b32c5004",
+  "patchSha256": "0915e76db9734d68bac69507de12ad75cfac1b1e0f551ddbc8754356fb3c1c13",
   "lockSha256": "e799bbbc9cd012f14be1a75a6fcdec81956c4386306fdc3a9285191c67290c13",
   "node": "26.12.1",
   "pnpm": "12.14.0",
   "codex": "0.166.0",
   "claude": "2.1.276",
   "claudeSdk": "0.3.276",
-  "patchSourceTree": "3164408affbde87125ebdb89d40ea4049e531f14"
+  "patchSourceTree": "548dc4bdaa85ffabbf5156127a4efa7a81fdd967"
 }
