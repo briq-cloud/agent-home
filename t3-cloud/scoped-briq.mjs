@@ -14,7 +14,7 @@ export const scopedBriqTools = [
   ...['result', 'stop'].map(name => [`briq_exec_${name}`, required({ id, execId: id }, ['id', 'execId'])]),
   ['briq_files_put', required({ id, path: string, content: string }, ['id', 'path', 'content'])],
   ['briq_files_get', required({ id, path: string }, ['id', 'path'])],
-].map(([name, inputSchema]) => ({ name, inputSchema, description: `${name}: allocation-owned resources only. Workspace files and shell use the workspace tool.` }));
+].map(([name, inputSchema]) => ({ name, inputSchema, ...(name === 'briq_catalog' ? { annotations: { readOnlyHint: true } } : {}), description: `${name}: allocation-owned resources only. Workspace files and shell use the workspace tool.` }));
 const schemas = new Map(scopedBriqTools.map(tool => [tool.name, tool.inputSchema]));
 const mutations = new Set(['briq_run', 'briq_exec', 'briq_exec_stop', 'briq_files_put', 'briq_start', 'briq_stop', 'briq_destroy']);
 const terminalExec = new Set(['exited', 'timed_out', 'stopped']);

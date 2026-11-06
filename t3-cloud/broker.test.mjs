@@ -848,3 +848,89 @@ for (const failure of ['environment-verification', 'start-reply-delivery'])
     await f.broker.deliver({ ...f.question, id: 902 }); assert.equal(f.received.length, before);
     assert.equal(f.wire.some(message => message.result), false);
   });
+
+
+function nativeToolApproval(id = 950) {
+  return { id, method: 'mcpServer/elicitation/request', params: {
+    threadId: 'native-a', turnId: 'turn-a', serverName: 'briq', mode: 'form',
+    message: 'Allow the briq MCP server to run tool "briq_exec"?',
+    requestedSchema: { type: 'object', properties: {} },
+    _meta: { persist: ['session', 'always'], tool_params: { id: 'resource-a', command: 'echo fixture', app_name: 'spoofed' },
+      tool_params_display: [{ name: 'command', value: 'misleading display', display_name: 'Command' }] },
+  } };
+}
+
+test('native briq tool approval exposes canonical arguments and permits only one owner call', async t => {
+  const f = await questionFixture(t); const native = nativeToolApproval();
+  const peers = f.bReceived.length; await f.broker.deliver(native); const sent = f.received.at(-1);
+  assert.match(sent.id, /^elicitation-/); assert.equal(f.bReceived.length, peers);
+  assert.deepEqual(sent.params._meta, {}); assert.deepEqual(sent.params.requestedSchema, { type: 'object', properties: {} });
+  assert.equal(sent.params.message, native.params.message + '\n\nArguments: {"app_name":"spoofed","command":"echo fixture","id":"resource-a"}');
+  assert.deepEqual(f.broker.approvals.get(sent.id).original, native.params);
+  native.params._meta.tool_params.command = 'changed after dispatch';
+  assert.equal(f.broker.approvals.get(sent.id).original._meta.tool_params.command, 'echo fixture');
+  await f.bSession.receive({ id: sent.id, result: { action: 'accept' } }); assert.equal(f.wire.length, 0);
+  await f.session.receive({ id: sent.id, result: { action: 'accept', content: null, _meta: null } });
+  assert.deepEqual(f.wire, [{ id: 950, result: { action: 'accept', content: {} } }]);
+  await f.session.receive({ id: sent.id, result: { action: 'accept' } }); assert.equal(f.wire.length, 1);
+  const count = f.received.length; await f.broker.deliver(native); assert.equal(f.received.length, count); assert.ok(f.wire.at(-1).error);
+});
+
+test('native briq approval rejects persistence and arbitrary content without consuming the original request', async t => {
+  const f = await questionFixture(t); await f.broker.deliver(nativeToolApproval()); const id = f.received.at(-1).id;
+  for (const result of [null, [], { decision: 'accept' }, { action: 'acceptForSession' }, { action: 'accept', _meta: { persist: 'session' } },
+    { action: 'accept', _meta: {} }, { action: 'accept', content: { decision: 'always' } }, { action: 'accept', content: [] },
+    { action: 'accept', extra: true }]) {
+    await f.session.receive({ id, result }); assert.ok(f.received.at(-1).error); assert.equal(f.wire.length, 0);
+  }
+  await f.session.receive({ id, result: { action: 'accept' }, error: { code: 1 } }); assert.equal(f.wire.length, 0);
+  await f.session.receive({ id, result: { action: 'decline' } }); assert.deepEqual(f.wire, [{ id: 950, result: { action: 'decline' } }]);
+});
+
+test('native briq approval rejects foreign servers, tools, modes and nonempty forms', async t => {
+  const f = await questionFixture(t);
+  for (const patch of [{ serverName: 'other' }, { mode: 'url' }, { turnId: 'foreign' }, { threadId: 'native-b' },
+    { message: 'Allow the briq MCP server to run tool "foreign_tool"?' }, { message: 'Allow ChatGPT to use briq?' },
+    { requestedSchema: { type: 'object', properties: { persist: { type: 'boolean' } } } }, { _meta: {} }, { extra: true }]) {
+    const native = nativeToolApproval(); const count = f.received.length;
+    await f.broker.deliver({ ...native, params: { ...native.params, ...patch } });
+    assert.equal(f.received.length, count); assert.ok(f.wire.at(-1).error);
+  }
+});
+
+for (const revoke of ['completed', 'closed-lease', 'quarantined-intent', 'replaced-intent', 'environment', 'native-thread', 'provider', 'owner', 'authentication'])
+  test(`native briq approval response rejects revoked ${revoke}`, async t => {
+    const { lease, transport } = questionLease(); const f = await questionFixture(t, { briqTransport: transport });
+    await f.broker.deliver(nativeToolApproval()); const id = f.received.at(-1).id;
+    if (revoke === 'completed') await f.broker.deliver({ method: 'turn/completed', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
+    else if (revoke === 'closed-lease') lease.closed = true;
+    else if (revoke === 'quarantined-intent') f.broker.questionTurns.get('native-a').mutation.quarantined = true;
+    else if (revoke === 'replaced-intent') { const scope = f.broker.questionTurns.get('native-a'); f.broker.mutations.set(scope.intent, { ...scope.mutation }); }
+    else if (revoke === 'owner') f.broker.owners.set('allocation-a', f.bSession);
+    else if (revoke === 'authentication') f.responses.set('account/read', () => ({ account: null }));
+    else { const binding = await f.store.load('a'); binding[revoke === 'environment' ? 'execEnvironmentId' : revoke === 'provider' ? 'providerInstanceId' : 'nativeThreadId'] = revoke === 'provider' ? 'claudeAgent' : 'foreign'; await f.store.save(binding); }
+    await f.session.receive({ id, result: { action: 'accept', content: {} } }); assert.ok(f.received.at(-1).error);
+    assert.equal(f.wire.some(message => message.result?.action === 'accept'), false);
+  });
+
+test('native briq approval preserves the pending turn intent before its native start reply', async t => {
+  const { transport } = questionLease(); const f = await questionFixture(t, { start: false, briqTransport: transport });
+  f.responses.set('turn/start', async () => {
+    await f.broker.deliver({ method: 'turn/started', params: { threadId: 'native-a', turn: { id: 'turn-a' } } });
+    await f.broker.deliver(nativeToolApproval()); const id = f.received.at(-1).id; assert.match(id, /^elicitation-/);
+    await f.session.receive({ id, result: { action: 'accept', content: {} } });
+    assert.deepEqual(f.wire, [{ id: 950, result: { action: 'accept', content: {} } }]);
+    return { turn: { id: 'turn-a', status: 'inProgress' } };
+  });
+  await f.start(); assert.equal(f.received.at(-1).error, undefined);
+});
+
+test('native briq approvals correlate concurrent calls and cancel on owner disconnect or failed delivery', async t => {
+  const f = await questionFixture(t); await f.broker.deliver(nativeToolApproval(950)); const first = f.received.at(-1).id;
+  await f.broker.deliver(nativeToolApproval(951)); const second = f.received.at(-1).id; assert.notEqual(first, second);
+  await f.session.receive({ id: second, result: { action: 'cancel' } }); assert.deepEqual(f.wire, [{ id: 951, result: { action: 'cancel' } }]);
+  f.session.close(); assert.deepEqual(f.wire.at(-1), { id: 950, result: { action: 'cancel' } });
+  const failed = await questionFixture(t, { send: message => message.method === 'mcpServer/elicitation/request' ? false : undefined });
+  await failed.broker.deliver(nativeToolApproval()); assert.deepEqual(failed.wire, [{ id: 950, result: { action: 'cancel' } }]);
+  assert.equal(failed.broker.approvals.size, 0);
+});

@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { equalSecret, canonicalJson, digest, identifier, providerInstanceId, providerMetadata } from './allocations.mjs';
 import { prepareExecutingCodex } from './codex-config.mjs';
 import { withoutExecutingMcpEnvironment } from './briq-native.mjs';
+import { scopedBriqTools } from './scoped-briq.mjs';
 
 const VERSION = 'codex-cli 0.166.0';
 export async function startAppServer({ binary = 'codex', home, path = '/usr/local/bin:/usr/bin:/bin', briqCapability, briqEndpoint },
@@ -62,6 +63,8 @@ const fields = {
 const notifications = new Set(['thread/started', 'thread/closed', 'thread/tokenUsage/updated', 'turn/started', 'turn/completed', 'turn/plan/updated', 'item/started', 'item/completed', 'item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/plan/delta', 'error']);
 const approvalMethods = new Set(['item/commandExecution/requestApproval', 'item/fileChange/requestApproval']);
 const questionMethod = 'item/tool/requestUserInput';
+const elicitationMethod = 'mcpServer/elicitation/request';
+const scopedToolNames = new Set(scopedBriqTools.map(tool => tool.name));
 const record = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const safeKey = key => key.length > 0 && !['__proto__', 'prototype', 'constructor'].includes(key);
 function questionIds(params) {
@@ -87,6 +90,27 @@ function questionAnswer(result, ids) {
     ids.every(id => Object.hasOwn(result.answers, id) && record(result.answers[id]) && Object.keys(result.answers[id]).join(',') === 'answers' &&
       Array.isArray(result.answers[id].answers) && result.answers[id].answers.length <= 64 &&
       result.answers[id].answers.every(answer => typeof answer === 'string' && answer.length <= 1048576));
+}
+// Only the pinned native custom-server tool approval form is supported. The
+// owner sees canonical arguments; display metadata never supplies authority or
+// persistent choices. Keep the original request snapshot with its live intent.
+function toolElicitation(params) {
+  if (!record(params) || Object.keys(params).some(key => !['threadId', 'turnId', 'serverName', 'mode', '_meta', 'message', 'requestedSchema'].includes(key)) ||
+      ![params.threadId, params.turnId].every(value => typeof value === 'string' && value.length > 0 && value.length <= 4096) ||
+      params.serverName !== 'briq' || params.mode !== 'form' || !record(params._meta) || !record(params._meta.tool_params) ||
+      canonicalJson(params.requestedSchema) !== canonicalJson({ type: 'object', properties: {} }) || typeof params.message !== 'string') return null;
+  const tool = /^Allow the briq MCP server to run tool "([a-z_]+)"\?$/.exec(params.message)?.[1];
+  if (!scopedToolNames.has(tool)) return null;
+  const snapshot = canonicalJson(params);
+  if (Buffer.byteLength(snapshot) > 4194304) return null;
+  const original = JSON.parse(snapshot);
+  return { original, params: { ...original, _meta: {}, message: `${params.message}\n\nArguments: ${canonicalJson(original._meta.tool_params)}` } };
+}
+function elicitationAnswer(result) {
+  if (!record(result) || Object.keys(result).some(key => !['action', 'content', '_meta'].includes(key)) ||
+      !['accept', 'decline', 'cancel'].includes(result.action) || result._meta != null ||
+      result.content != null && (!record(result.content) || Object.keys(result.content).length)) return null;
+  return result.action === 'accept' ? { action: 'accept', content: {} } : { action: result.action };
 }
 const mutationMethods = new Set(['thread/start', 'turn/start', 'turn/steer', 'turn/interrupt']);
 function error(id, message = 'Operation denied by sandbox binding', pending = false) { return { id, error: { code: pending ? -32010 : -32600, message, ...(pending ? { data: { sandboxOperationState: 'pending' } } : {}) } }; }
@@ -391,6 +415,17 @@ export class CapabilityBroker {
       if (message.method === 'briq/operation/adopt') return await this.adoptOperation(session, message, binding);
       if (!message.method && id !== undefined) {
         const approval = this.approvals.get(id);
+        if (approval?.method === elicitationMethod) {
+          const result = elicitationAnswer(message.result);
+          if (message.error !== undefined || !result || approval.session !== session) return session.send(error(id));
+          if (result.action === 'accept' && (await this.capabilities(session)).authStatus !== 'authenticated') return session.send(error(id));
+          const current = await this.binding(session);
+          if (approval.allocationId !== current.allocationId || approval.providerInstanceId !== session.providerInstanceId ||
+              approval.threadId !== current.nativeThreadId || approval.environmentId !== current.execEnvironmentId ||
+              !this.questionTurnLive(approval.threadId, approval.turnId, approval.scope, session, current) || this.approvals.get(id) !== approval)
+            return session.send(error(id));
+          this.approvals.delete(id); this.app.notify({ id: approval.nativeId, result }); return;
+        }
         if (approval?.method === questionMethod) {
           if (message.error !== undefined || !questionAnswer(message.result, approval.questionIds)) return session.send(error(id));
           const current = await this.binding(session);
@@ -549,6 +584,26 @@ export class CapabilityBroker {
       if (binding?.nativeThreadId === threadId) candidates.push({ session, binding });
     }
     if (message.id !== undefined) {
+      if (message.method === elicitationMethod) {
+        const form = toolElicitation(message.params), scope = this.questionTurns.get(threadId);
+        const nativeKey = JSON.stringify([typeof message.id, message.id]);
+        const target = candidates.find(({ session, binding }) => form && session.initialized && scope?.session === session &&
+          this.questionTurnLive(threadId, message.params.turnId, scope, session, binding));
+        if (!target || !['string', 'number'].includes(typeof message.id) || typeof message.id === 'number' && !Number.isSafeInteger(message.id) || this.seenQuestions.has(nativeKey)) {
+          this.app.notify({ id: message.id, error: { code: -32600, message: 'Unbound server request denied' } }); return;
+        }
+        this.seenQuestions.add(nativeKey);
+        const id = `elicitation-${++this.sequence}`;
+        this.approvals.set(id, { method: elicitationMethod, session: target.session, nativeId: message.id, threadId, turnId: message.params.turnId,
+          environmentId: target.binding.execEnvironmentId, allocationId: target.binding.allocationId, providerInstanceId: target.session.providerInstanceId,
+          scope, original: form.original });
+        try {
+          if (await target.session.send({ ...message, id, params: form.params }) === false) throw Error('Approval delivery unknown');
+        } catch {
+          this.approvals.delete(id); this.app.notify({ id: message.id, result: { action: 'cancel' } });
+        }
+        return;
+      }
       if (message.method === questionMethod) {
         const ids = questionIds(message.params), scope = this.questionTurns.get(threadId);
         const nativeKey = JSON.stringify([typeof message.id, message.id]);
@@ -599,7 +654,7 @@ export class CapabilityBroker {
     for (const [id, approval] of this.approvals) if (approval.session === session) {
       this.approvals.delete(id); this.app.notify(approval.method === questionMethod
         ? { id: approval.nativeId, error: { code: -32600, message: 'User input owner disconnected' } }
-        : { id: approval.nativeId, result: { decision: 'cancel' } });
+        : { id: approval.nativeId, result: approval.method === elicitationMethod ? { action: 'cancel' } : { decision: 'cancel' } });
     }
   }
   async ownerRequest(method, params) {

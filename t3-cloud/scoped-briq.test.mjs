@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AllocationStore, ThreadAllocator } from './allocations.mjs';
 import { BriqCloud, BriqCredentialOwner } from './briq-cloud.mjs';
-import { ScopedBriq } from './scoped-briq.mjs';
+import { ScopedBriq, scopedBriqTools } from './scoped-briq.mjs';
 
 async function fixture(t, override) {
   const directory = await mkdtemp(join(tmpdir(), 'scoped-briq-')); t.after(() => rm(directory, { recursive: true, force: true }));
@@ -463,4 +463,10 @@ for (const closure of ['turn completion', 'owner revocation']) test(`${closure} 
  const restarted = new ScopedBriq({ store: new AllocationStore(f.directory), cloud: f.cloud });
  await assert.rejects(restarted.call(f.identity, 'queued-cloud-dispatch', 'briq_exec', { id, command: 'must not execute' }), /unknown/);
  assert.deepEqual(f.calls.slice(before).map(row => row.args), [['status', id]]);
+});
+
+
+test('only the metadata catalog advertises native read-only approval semantics', () => {
+  assert.deepEqual(scopedBriqTools.find(tool => tool.name === 'briq_catalog').annotations, { readOnlyHint: true });
+  assert.ok(scopedBriqTools.filter(tool => tool.name !== 'briq_catalog').every(tool => tool.annotations === undefined));
 });
