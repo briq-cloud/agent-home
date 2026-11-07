@@ -46,7 +46,7 @@ test('native admission matches exact routes and canonical request targets',()=>{
  for(const url of denied) for(const method of ['GET','POST','OPTIONS','HEAD','DELETE']) assert.equal(nativeRequestAllowed(req(method,url),origin),false,`${method} ${url}`);
  for(const [method,url] of allowed) for(const wrong of ['OPTIONS','HEAD','DELETE',method==='GET'?'POST':'GET']) assert.equal(nativeRequestAllowed(req(wrong,url),origin),false,`${wrong} ${url}`);
  for(const foreign of ['null','https://evil.example','https://native.example/']) assert.equal(nativeRequestAllowed(req('GET','/api/projects',{origin:foreign}),origin),false);
- assert.equal(nativeRequestAllowed(req('GET','/api/projects',{host:'evil.example'}),origin),false);
+ assert.equal(nativeRequestAllowed(req('GET','/api/projects',{host:'delivery.example:19191'}),origin),true);
  for(const bad of ['https://private.example','http://native.example','https://native.example/path','https://native.example/','https://user@native.example']) assert.throws(()=>nativeOrigin(bad,'https://private.example'));
 });
 test('secondary forwards admitted bytes and native proofs, strips credentials and response cookies',async t=>{
@@ -56,12 +56,44 @@ test('secondary forwards admitted bytes and native proofs, strips credentials an
  await f.send('GET','/api/auth/session',{authorization:'Bearer owner'});assert.equal(f.seen.at(-1).headers.authorization,undefined);
  const before=f.seen.length;
  for(const path of denied)assert.equal((await f.send('GET',path)).status,404,path);
- assert.equal((await f.send('GET','/api/projects',{host:'evil.example'})).status,404);
+ assert.equal((await f.send('GET','/api/projects',{host:'malformed:port'})).status,404);
  assert.equal((await f.send('GET','/api/projects',{origin:'null'})).status,404);
  assert.equal((await f.send('POST','/oauth/token',{},'x'.repeat(16385))).status,413);
  assert.equal(f.seen.length,before);
  f.unready();assert.equal((await f.send('GET','/api/projects')).status,503);assert.equal(f.seen.length,before);
 });
+test('HTTP delivery Host preserves configured native authority and ignores forwarding identity',async t=>{
+ const f=await fixture(t);
+ for(const path of ['/.well-known/t3/environment','/api/auth/session']) {
+  const result=await f.send('GET',path,{host:'127.0.0.1:19191',authorization:'DPoP native',dpop:'native-proof',cookie:'native=secret; t3_cloud_owner=owner',forwarded:'host=evil.example;proto=http','x-forwarded-host':'evil.example','x-forwarded-proto':'http'});
+  assert.equal(result.status,200);
+  const {headers}=f.seen.at(-1);
+  assert.equal(headers.host,'native.example');assert.equal(headers['x-forwarded-proto'],'https');
+  assert.equal(headers.authorization,'DPoP native');assert.equal(headers.dpop,'native-proof');
+  for(const key of ['cookie','forwarded','x-forwarded-host'])assert.equal(headers[key],undefined);
+ }
+});
+
+test('HTTP and WebSocket admission reject missing, duplicate, or malformed authority and Origin',async t=>{
+ const f=await fixture(t);
+ const raw=(path,headers,upgrade)=>new Promise((resolve,reject)=>{
+  const socket=connect(f.server.address().port,'127.0.0.1');let text='';
+  socket.on('error',reject);socket.on('data',chunk=>{text+=chunk;if(text.includes('\r\n\r\n')){socket.destroy();resolve(text);}});
+  socket.once('connect',()=>socket.write(`GET ${path} HTTP/1.1\r\n${upgrade?'Connection: Upgrade\r\nUpgrade: websocket\r\n':'Connection: close\r\n'}${headers}\r\n`));
+ });
+ for(const upgrade of [false,true]) {
+  const path=upgrade?'/ws?wsTicket=opaque':'/.well-known/t3/environment';
+  for(const headers of ['', 'Host: native.example\r\nHost: native.example\r\n', 'Host: malformed:port\r\n',
+   'Host: 127.0.0.1:19191\r\nOrigin: https://evil.example\r\n', 'Host: 127.0.0.1:19191\r\nOrigin: null\r\n',
+   'Host: 127.0.0.1:19191\r\nOrigin: https://native.example\r\nOrigin: https://native.example\r\n']) {
+   // The HTTP parser may reject malformed headers before the admission predicate.
+   assert.match(await raw(path,headers,upgrade),/^HTTP\/1\.1 (?:400|404) /);
+  }
+  assert.equal(nativeRequestAllowed({...req('GET',path),rawHeaders:['Host','native.example','Origin',origin,'Origin',origin]},origin,upgrade),false);
+ }
+ assert.equal(f.seen.length,0);assert.equal(f.upgrades.length,0);
+});
+
 test('only RPC websocket upgrade reaches fixed native authority through actual edge Host rewrite',async t=>{
  const f=await fixture(t);
  for(const [,path] of allowed)assert.match(await f.upgrade(path),/404/);
