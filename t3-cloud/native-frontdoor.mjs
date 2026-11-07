@@ -40,10 +40,10 @@ export function nativeRequestAllowed(req, origin, upgrade = false) {
     }
   } catch { return false; }
   if (req.rawHeaders && req.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === 'host').length !== 1) return false;
-  const external = new URL(origin);
-  // Briq preserves Host on HTTP, but its WS edge rewrites it to the delivery address.
-  // Neither the upgrade Host nor caller forwarding headers choose an authority.
-  if ((!upgrade && req.headers.host !== external.host) || !validAuthority(req.headers.host) || req.headers.origin !== undefined && req.headers.origin !== origin) return false;
+  if (req.rawHeaders && req.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === 'origin').length > 1) return false;
+  // The edge rewrites HTTP and WebSocket Host to its delivery address.
+  // Only configuration chooses the native authority; forwarding headers never do.
+  if (!validAuthority(req.headers.host) || req.headers.origin !== undefined && req.headers.origin !== origin) return false;
   const thread = /^\/api\/orchestration\/threads\/[^/]+(?:\/(transcript|bounded|history))?$/.exec(path);
   let keys;
   if (upgrade) {
