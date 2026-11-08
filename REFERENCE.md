@@ -1,6 +1,6 @@
 # What is in the agent home
 
-`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-07. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
+`x86_64`, Ubuntu 24.04.5 LTS, built 2026-11-08. Printed by `agent-home-versions` inside the image. Everything in the [briq sandbox](https://github.com/briq-cloud/sandbox/blob/main/REFERENCE.md) is here too.
 
 ## Agent CLIs
 
@@ -48,4 +48,4 @@ Each one checked against its publisher's checksum at build, or recorded where no
 
 ## Image
 
-`ghcr.io/briq-cloud/agent-home:2026-11-07`, 1609 MB compressed, digest `sha256:9d57427a8b52b8ff1094444a199c920875156ca126ddc3f8173b783bb7bc3369`, on `ghcr.io/briq-cloud/sandbox@sha256:1791ed759c6ecdc18546b76541194b60a4c25b2bf8e205de28476c0bf54c3e6d`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-07 --repo briq-cloud/agent-home`.
+`ghcr.io/briq-cloud/agent-home:2026-11-08`, 1609 MB compressed, digest `sha256:07d57f10a53db3504ad65b428ccb4b2bac5a4e8b7d6f0365fef468f6c1780426`, on `ghcr.io/briq-cloud/sandbox@sha256:1791ed759c6ecdc18546b76541194b60a4c25b2bf8e205de28476c0bf54c3e6d`. The Dockerfile: [Dockerfile](Dockerfile). Its provenance: `gh attestation verify oci://ghcr.io/briq-cloud/agent-home:2026-11-08 --repo briq-cloud/agent-home`.
