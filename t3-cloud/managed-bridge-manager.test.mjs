@@ -96,18 +96,23 @@ test('source and preparation routes keep browser credentials out and bind native
 
 test('provider status uses only sanitized centralized account metadata and fails unknown', async t => {
   const calls = [];
+  let reportedVersion = '0.166.0';
   let account = { account: { type: 'chatgpt', email: 'never-return@example.test', token: 'never-return' } };
-  const f = await fixture(t, { broker: { ownerRequest: async (...args) => {
+  const f = await fixture(t, { broker: { providerVersion: () => reportedVersion, ownerRequest: async (...args) => {
     calls.push(args); if (account instanceof Error) throw account; return account;
   } } });
   const status = () => f.send('/_cloud/providers/status', { providerInstanceId: 'codex' });
-  assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: true, authStatus: 'authenticated' });
+  assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: true, authStatus: 'authenticated', version: '0.166.0' });
   assert.deepEqual(calls, [['account/read', { refreshToken: false }]]);
   account = { account: null, requiresOpenaiAuth: true };
-  assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: false, authStatus: 'unauthenticated' });
+  assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: false, authStatus: 'unauthenticated', version: '0.166.0' });
   for (const unknown of [{ account: null }, new Error('private failure')]) {
     account = unknown;
-    assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: false, authStatus: 'unknown' });
+    assert.deepEqual((await status()).body, { providerInstanceId: 'codex', available: true, ready: false, authStatus: 'unknown', version: '0.166.0' });
+  }
+  for (const invalid of [undefined, 'private garbage', '0.166.0\n', '0.166.0\nprivate']) {
+    reportedVersion = invalid;
+    assert.equal((await status()).body.version, null);
   }
 });
 
@@ -122,9 +127,9 @@ test('provider status preserves private guard, admission and disabled Claude gat
   assert.equal((await f.send(`${path}?extra=1`, input)).status, 401);
   for (const invalid of [{}, { providerInstanceId: 'custom' }, { ...input, ownerId: 'foreign' }])
     assert.equal((await f.send(path, invalid)).status, 400);
-  assert.deepEqual((await f.send(path, input)).body, { providerInstanceId: 'claudeAgent', available: false, ready: false, authStatus: 'unknown' });
+  assert.deepEqual((await f.send(path, input)).body, { providerInstanceId: 'claudeAgent', available: false, ready: false, authStatus: 'unknown', version: null });
   const unavailable = await fixture(t, { admittedProviders: [], broker: { ownerRequest: unexpected } });
-  assert.deepEqual((await unavailable.send(path, { providerInstanceId: 'codex' })).body, { providerInstanceId: 'codex', available: false, ready: false, authStatus: 'unknown' });
+  assert.deepEqual((await unavailable.send(path, { providerInstanceId: 'codex' })).body, { providerInstanceId: 'codex', available: false, ready: false, authStatus: 'unknown', version: null });
   const restoring = await fixture(t, { ready: () => false, broker: { ownerRequest: unexpected } });
   assert.equal((await restoring.send(path, { providerInstanceId: 'codex' })).status, 503);
   assert.equal(probes, 0);

@@ -49,7 +49,7 @@ export async function startAppServer({ binary = 'codex', home, path = '/usr/loca
   let initialized;
   try { initialized = await request('initialize', { clientInfo: { name: 'briq_t3_cloud', version: '0.1.0' }, capabilities: { experimentalApi: true } }); } catch (error) { fail(); await close(); throw error; }
   notify({ method: 'initialized' });
-  return { request, notify, events, initialized, pid: child.pid, close, briqMcp: briq.status };
+  return { request, notify, events, initialized, version: version.stdout.trim().slice('codex-cli '.length), pid: child.pid, close, briqMcp: briq.status };
 }
 const fields = {
   'thread/start': ['model', 'cwd', 'approvalPolicy', 'sandbox'],
@@ -657,6 +657,7 @@ export class CapabilityBroker {
         : { id: approval.nativeId, result: approval.method === elicitationMethod ? { action: 'cancel' } : { decision: 'cancel' } });
     }
   }
+  providerVersion(provider) { return provider === 'codex' ? this.app.version ?? null : null; }
   async ownerRequest(method, params) {
     if (!['account/read', 'account/login/start', 'account/login/cancel', 'account/logout'].includes(method)) throw Error('Unsupported connection operation');
     if (method === 'account/login/start' && (params?.type !== 'chatgptDeviceCode' || Object.keys(params).some(key => !['type'].includes(key)))) throw Error('Only native ChatGPT sign-in supported');
