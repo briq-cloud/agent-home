@@ -63,6 +63,7 @@ test('actual app-server launch retains only the explicit MCP fake marker and fix
   });
   try {
     assert.equal(app.briqMcp, 'allocation-scoped');
+    assert.equal(app.version, '0.166.0');
     assert.deepEqual(launches.map(value => value.args), [['--version'], ['app-server']]);
     const baseEnv = { HOME: f.home, CODEX_HOME: f.home, PATH: '/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', TMPDIR: '/tmp' };
     assert.deepEqual(launches[0].options.env, baseEnv);

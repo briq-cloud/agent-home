@@ -2243,10 +2243,10 @@ index 0000000000000000000000000000000000000000..8900ed354926eec0cc726cd996616af8
 +}
 diff --git a/apps/server/src/briqSandboxAccess.test.ts b/apps/server/src/briqSandboxAccess.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..dc94e54fe0a1137cac955a5163d74a000e37aa49
+index 0000000000000000000000000000000000000000..b0acc700f9c9fde7aab35296d84157b2c0e355ea
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAccess.test.ts
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,212 @@
 +import { describe, expect, it } from "vite-plus/test";
 +import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
 +import {
@@ -2276,6 +2276,7 @@ index 0000000000000000000000000000000000000000..dc94e54fe0a1137cac955a5163d74a00
 +      WS_METHODS.attachmentsDelete,
 +      WS_METHODS.serverProbe,
 +      WS_METHODS.serverGetConfig,
++      WS_METHODS.serverRefreshProviders,
 +      WS_METHODS.subscribeServerConfig,
 +      WS_METHODS.subscribeServerLifecycle,
 +      WS_METHODS.subscribeAuthAccess,
@@ -2396,14 +2397,76 @@ index 0000000000000000000000000000000000000000..dc94e54fe0a1137cac955a5163d74a00
 +  expect(sandboxHttpAllowed("POST", "/api/attachments/upload/*", source)).toBe(false);
 +  expect(sandboxHttpAllowed("GET", "/.well-known/t3/environment", source)).toBe(true);
 +});
++
++it("limits cloud-home provider refresh to admitted metadata, including the native mobile request", () => {
++  for (const input of [
++    {},
++    { reloadSecrets: true },
++    { reloadSecrets: true, workspaceSnapshotsOnDemand: true, usageLimitsCommand: true },
++    { reloadSecrets: false },
++    { instanceId: "codex" },
++    {
++      instanceId: "codex",
++      reloadSecrets: true,
++      refreshModels: false,
++      fresh: false,
++      usageLimitsCommand: false,
++      workspaceSnapshotsOnDemand: false,
++    },
++  ]) {
++    expect(sandboxRpcAllowed(WS_METHODS.serverRefreshProviders, home)).toBe(true);
++    expect(sandboxRpcPayloadAllowed(WS_METHODS.serverRefreshProviders, input, home)).toBe(true);
++  }
++  for (const input of [
++    null,
++    { cwd: "" },
++    { cwd: "/work" },
++    { cwd: undefined },
++    { refreshModels: true },
++    { fresh: true },
++
++    { instanceId: "codex_work" },
++    { instanceId: "claudeAgent" },
++  ]) {
++    expect(sandboxRpcPayloadAllowed(WS_METHODS.serverRefreshProviders, input, home)).toBe(false);
++  }
++  expect(
++    sandboxRpcPayloadAllowed(
++      WS_METHODS.serverRefreshProviders,
++      { instanceId: "claudeAgent", reloadSecrets: true },
++      { ...home, T3_CLOUD_ADMITTED_PROVIDERS: '["codex","claudeAgent"]' },
++    ),
++  ).toBe(true);
++  expect(
++    sandboxRpcPayloadAllowed(
++      WS_METHODS.serverRefreshProviders,
++      { instanceId: "codex" },
++      { ...home, T3_CLOUD_ADMITTED_PROVIDERS: "invalid" },
++    ),
++  ).toBe(false);
++  const source = { T3_CLOUD_ROLE: "child", T3_CLOUD_PURPOSE: "project-source" };
++  expect(sandboxRpcAllowed(WS_METHODS.serverRefreshProviders, source)).toBe(false);
++  for (const role of ["standalone", "child"]) {
++    expect(sandboxRpcAllowed(WS_METHODS.serverRefreshProviders, { T3_CLOUD_ROLE: role })).toBe(
++      true,
++    );
++    expect(
++      sandboxRpcPayloadAllowed(
++        WS_METHODS.serverRefreshProviders,
++        { instanceId: "codex_work", cwd: "/work", refreshModels: true, reloadSecrets: true },
++        { T3_CLOUD_ROLE: role },
++      ),
++    ).toBe(true);
++  }
++});
 diff --git a/apps/server/src/briqSandboxAccess.ts b/apps/server/src/briqSandboxAccess.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9cfa6360719482f4d3725f8a582ca3f804a4c83a
+index 0000000000000000000000000000000000000000..8ed35cc012c077c593220f6679e11232faa49723
 --- /dev/null
 +++ b/apps/server/src/briqSandboxAccess.ts
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,147 @@
 +import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
-+import { sandboxRole } from "./briqSandbox.ts";
++import { sandboxAdmittedProviders, sandboxRole } from "./briqSandbox.ts";
 +
 +type Environment = Readonly<Record<string, string | undefined>>;
 +const HOME_RPCS: ReadonlySet<string> = new Set([
@@ -2424,6 +2487,7 @@ index 0000000000000000000000000000000000000000..9cfa6360719482f4d3725f8a582ca3f8
 +  WS_METHODS.attachmentsDelete,
 +  WS_METHODS.serverProbe,
 +  WS_METHODS.serverGetConfig,
++  WS_METHODS.serverRefreshProviders,
 +  WS_METHODS.subscribeServerConfig,
 +  WS_METHODS.subscribeServerLifecycle,
 +  WS_METHODS.subscribeAuthAccess,
@@ -2484,6 +2548,17 @@ index 0000000000000000000000000000000000000000..9cfa6360719482f4d3725f8a582ca3f8
 +      payload.cwd === env.T3_CLOUD_PROJECT_ROOT
 +    );
 +  if (sandboxRole(env) !== "central") return sandboxRole(env) !== "invalid";
++  if (method === WS_METHODS.serverRefreshProviders) {
++    if (typeof payload !== "object" || payload === null) return false;
++    const input = payload as Readonly<Record<string, unknown>>;
++    return (
++      !("cwd" in input) &&
++      input.refreshModels !== true &&
++      input.fresh !== true &&
++      (input.instanceId === undefined ||
++        sandboxAdmittedProviders(env).some((id) => id === input.instanceId))
++    );
++  }
 +  if (method !== WS_METHODS.assetsCreateUrl && method !== WS_METHODS.attachmentsCreateUploadUrl)
 +    return true;
 +  if (typeof payload !== "object" || payload === null) return false;
@@ -14784,10 +14859,10 @@ index c8f2fb9b33e05640cf989708069b61ec75e5bc19..f05e236135672ac2b286cf9312fe7fd1
        Layer.provide(ProviderHostLive.layer),
 diff --git a/apps/server/src/provider/managedBridgeProvider.ts b/apps/server/src/provider/managedBridgeProvider.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..648d675ce4fc436c68ac114dcb14f369cb74d42c
+index 0000000000000000000000000000000000000000..fff99e9e7f1d756c7a4cccc3519af532c8c5cff9
 --- /dev/null
 +++ b/apps/server/src/provider/managedBridgeProvider.ts
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,203 @@
 +import * as NodeServices from "@effect/platform-node/NodeServices";
 +import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 +import * as Option from "effect/Option";
@@ -14896,15 +14971,14 @@ index 0000000000000000000000000000000000000000..648d675ce4fc436c68ac114dcb14f369
 +  );
 +  const models = catalog.bundled(driver);
 +  const readSnapshot = Effect.fn("ManagedBridgeProvider.readSnapshot")(function* () {
-+    const metadata = yield* bindings.manager
-+      .providerStatus(instanceId)
-+      .pipe(
-+        Effect.orElseSucceed(() => ({
-+          available: false,
-+          ready: false,
-+          authStatus: "unknown" as const,
-+        })),
-+      );
++    const metadata = yield* bindings.manager.providerStatus(instanceId).pipe(
++      Effect.orElseSucceed(() => ({
++        available: false,
++        ready: false,
++        authStatus: "unknown" as const,
++        version: null,
++      })),
++    );
 +    return {
 +      ...buildServerProvider({
 +        presentation: {
@@ -14917,7 +14991,7 @@ index 0000000000000000000000000000000000000000..648d675ce4fc436c68ac114dcb14f369
 +        skills: [],
 +        probe: {
 +          installed: metadata.available,
-+          version: null,
++          version: metadata.version,
 +          status: metadata.ready ? "ready" : "warning",
 +          auth: { status: metadata.authStatus },
 +        },
@@ -20569,10 +20643,10 @@ index 0000000000000000000000000000000000000000..5b3f6037db0d43b27cf8c44caccc8dd5
 +);
 diff --git a/apps/server/src/sandbox/managedBridgeManager.ts b/apps/server/src/sandbox/managedBridgeManager.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..d55fde4ae60fe3361c8348616b73730c7655835d
+index 0000000000000000000000000000000000000000..610bbcc58eaeb219bf898462c566b033d4390689
 --- /dev/null
 +++ b/apps/server/src/sandbox/managedBridgeManager.ts
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,347 @@
 +import {
 +  BriqSandboxProviderInstanceId,
 +  EnvironmentId,
@@ -20615,6 +20689,8 @@ index 0000000000000000000000000000000000000000..d55fde4ae60fe3361c8348616b73730c
 +  providerInstanceId: BriqSandboxProviderInstanceId,
 +  project: Schema.Struct({ id: ProjectId, title: Schema.String, workspaceRoot: Schema.String }),
 +});
++const isProviderInstanceId = Schema.is(BriqSandboxProviderInstanceId);
++const isWorkspaceStrategy = Schema.is(OrchestrationV2ThreadLaunchWorkspaceStrategy);
 +const fail = () =>
 +  new ManagedBridgeError({
 +    message:
@@ -20696,6 +20772,7 @@ index 0000000000000000000000000000000000000000..d55fde4ae60fe3361c8348616b73730c
 +  const providerStatusSchema = Schema.Struct({
 +    providerInstanceId: BriqSandboxProviderInstanceId,
 +    available: Schema.Boolean,
++    version: Schema.NullOr(Schema.String),
 +    ready: Schema.Boolean,
 +    authStatus: Schema.Literals(["authenticated", "unauthenticated", "unknown"]),
 +  });
@@ -20725,12 +20802,15 @@ index 0000000000000000000000000000000000000000..d55fde4ae60fe3361c8348616b73730c
 +    providerStatus: Effect.fn("ManagedBridgeManager.providerStatus")(function* (
 +      providerInstanceId: string,
 +    ) {
-+      if (!Schema.is(BriqSandboxProviderInstanceId)(providerInstanceId)) return yield* fail();
++      if (!isProviderInstanceId(providerInstanceId)) return yield* fail();
 +      const result = yield* post("providers/status", { providerInstanceId }).pipe(
 +        Effect.flatMap((response) => read(response, providerStatusSchema, true)),
 +      );
 +      if (
 +        result.providerInstanceId !== providerInstanceId ||
++        (result.version !== null &&
++          (result.version.trim() !== result.version || !/^\d+\.\d+\.\d+$/.test(result.version))) ||
++        (!result.available && result.version !== null) ||
 +        result.ready !== (result.available && result.authStatus === "authenticated") ||
 +        (!result.available && result.authStatus !== "unknown")
 +      )
@@ -20772,9 +20852,7 @@ index 0000000000000000000000000000000000000000..d55fde4ae60fe3361c8348616b73730c
 +          catch: fail,
 +        });
 +        if (
-+          !Schema.is(OrchestrationV2ThreadLaunchWorkspaceStrategy)(
-+            input.project.workspaceStrategy,
-+          ) ||
++          !isWorkspaceStrategy(input.project.workspaceStrategy) ||
 +          input.project.workspaceStrategy.type === "existing_worktree"
 +        )
 +          return yield* fail();
@@ -20963,10 +21041,10 @@ index 0000000000000000000000000000000000000000..b9136350db24dd61c5fa005dc9d5ed55
 +};
 diff --git a/apps/server/src/sandbox/managedBridgeProviderStatus.test.ts b/apps/server/src/sandbox/managedBridgeProviderStatus.test.ts
 new file mode 100644
-index 0000000000000000000000000000000000000000..9713d9eba3743e6040431f35b17aea4b4c577349
+index 0000000000000000000000000000000000000000..04819b5fade6c87cd88c0ea29db2eda1fbdc3558
 --- /dev/null
 +++ b/apps/server/src/sandbox/managedBridgeProviderStatus.test.ts
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,56 @@
 +import { expect, it } from "@effect/vitest";
 +import * as Effect from "effect/Effect";
 +import * as Exit from "effect/Exit";
@@ -20984,6 +21062,7 @@ index 0000000000000000000000000000000000000000..9713d9eba3743e6040431f35b17aea4b
 +    const metadata = {
 +      providerInstanceId: "codex",
 +      available: true,
++      version: "0.166.0",
 +      ready: true,
 +      authStatus: "authenticated",
 +    };
@@ -20997,6 +21076,10 @@ index 0000000000000000000000000000000000000000..9713d9eba3743e6040431f35b17aea4b
 +        { ...metadata, authStatus: "unknown" },
 +        { ...metadata, available: false },
 +        { ...metadata, authStatus: "installed" },
++        { ...metadata, version: "private garbage" },
++        { ...metadata, version: "0.166.0\n" },
++        { ...metadata, version: 166 },
++        { ...metadata, ready: false, available: false, authStatus: "unknown" },
 +      ]) {
 +        response = invalid;
 +        expect(Exit.isFailure(yield* manager.providerStatus("codex").pipe(Effect.exit))).toBe(true);
@@ -21926,10 +22009,27 @@ index e17fa4c4c00e7575e8557c17c5ed31510b0cb887..21e368d427c4696f86b491fc7a687177
      const schemaJson = yield* encodeJsonForOperation(
        operation,
 diff --git a/apps/server/src/ws.test.ts b/apps/server/src/ws.test.ts
-index 641845f322ea6d0d413b011f747c462fb31d4d96..1aaf88d146025ee6a9b9c3a5546fa702db12a0c1 100644
+index 641845f322ea6d0d413b011f747c462fb31d4d96..0d0a46b268f5605aa4ce0e71581b509ff10cc25a 100644
 --- a/apps/server/src/ws.test.ts
 +++ b/apps/server/src/ws.test.ts
-@@ -39,6 +39,7 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
+@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
+ import { assert, it } from "@effect/vitest";
+ import {
+   AuthSessionId,
++  RpcScopeAuthorization,
++  AuthOrchestrationReadScope,
+   EnvironmentId,
+   ProjectId,
+   ThreadId,
+@@ -24,6 +26,7 @@ import * as Effect from "effect/Effect";
+ import * as Layer from "effect/Layer";
+ import * as PubSub from "effect/PubSub";
+ import * as Queue from "effect/Queue";
++import * as Schema from "effect/Schema";
+ import * as Stream from "effect/Stream";
+ import * as TestClock from "effect/testing/TestClock";
+ import { Headers } from "effect/http";
+@@ -39,16 +42,19 @@ import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
  import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
  import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
  import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
@@ -21937,7 +22037,19 @@ index 641845f322ea6d0d413b011f747c462fb31d4d96..1aaf88d146025ee6a9b9c3a5546fa702
  import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
  import * as CommandOutputHub from "./orchestration-v2/CommandOutputHub.ts";
  import * as CodexInstallation from "./provider/CodexInstallation.ts";
-@@ -479,6 +480,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on
+ import * as DeviceService from "./device/DeviceService.ts";
+ import * as DocumentText from "./provider/DocumentText.ts";
+ import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
++import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
+ import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+ import * as EnvironmentTheme from "./environmentTheme.ts";
+ import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+ import * as HostResources from "./resourceTelemetry/HostResources.ts";
++import * as ManagedProjectSource from "./sandbox/ManagedProjectSource.ts";
+ import * as ManagedProjectFolders from "./project/ManagedProjectFolders.ts";
+ import * as ScratchThreadPromotion from "./project/ScratchThreadPromotion.ts";
+ import * as McpAppRequests from "./mcpApps/McpAppRequests.ts";
+@@ -479,6 +485,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on
  
  // Build the production RPC layer; unrelated capabilities fail if this test calls them.
  const layerUnusedConfigRpcServices = Layer.mergeAll(
@@ -21945,8 +22057,168 @@ index 641845f322ea6d0d413b011f747c462fb31d4d96..1aaf88d146025ee6a9b9c3a5546fa702
    Layer.mock(DocumentText.DocumentText)({}),
    Layer.mock(ServerSecretStore.ServerSecretStore)({}),
    Layer.mock(WorkspacePaths.WorkspacePaths)({}),
+@@ -889,6 +896,159 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
+   ),
+ );
+ 
++const decodeProviderRefresh = Schema.decodeUnknownSync(WsServerRefreshProvidersRpc.payloadSchema);
++
++it.effect(
++  "cloud-home mobile refresh authorizes metadata only and removes workspace snapshots",
++  () =>
++    Effect.gen(function* () {
++      yield* Effect.acquireRelease(
++        Effect.sync(() => {
++          const previous = process.env.T3_CLOUD_ROLE;
++          process.env.T3_CLOUD_ROLE = "central";
++          return previous;
++        }),
++        (previous) =>
++          Effect.sync(() => {
++            if (previous === undefined) delete process.env.T3_CLOUD_ROLE;
++            else process.env.T3_CLOUD_ROLE = previous;
++          }),
++      );
++      const provider: ServerProvider = {
++        instanceId: ProviderInstanceId.make("codex"),
++        driver: ProviderDriverKind.make("codex"),
++        enabled: true,
++        installed: true,
++        version: "0.166.0",
++        status: "ready",
++        auth: { status: "authenticated" },
++        checkedAt: "2026-11-08T00:00:00.000Z",
++        models: [],
++        slashCommands: [],
++        skills: [],
++        workspaceSnapshots: [
++          {
++            cwd: "/private-workspace",
++            checkedAt: "2026-11-08T00:00:00.000Z",
++            slashCommands: [],
++            skills: [],
++          },
++        ],
++      };
++      const { workspaceSnapshots: _workspaceSnapshots, ...metadata } = provider;
++      const calls: string[] = [];
++      const responses = yield* Queue.unbounded<{
++        readonly _tag: string;
++        readonly value?: unknown;
++      }>();
++      const services = Layer.mergeAll(
++        layerUnusedConfigRpcServices,
++        Layer.mock(ManagedProjectSource.ManagedProjectSourceService)({}),
++        Layer.mock(ExternalLauncher.ExternalLauncher)({}),
++        Layer.mock(ProviderRegistry.ProviderRegistry)({
++          refresh: () =>
++            Effect.sync(() => {
++              calls.push("all");
++              return [provider];
++            }),
++          refreshInstance: (instanceId) =>
++            Effect.sync(() => {
++              calls.push(instanceId);
++              return [provider];
++            }),
++        }),
++        Layer.mock(UsageLimitSources.UsageLimitSources)({}),
++        Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
++        Layer.mock(DirectEndpoints.DirectEndpoints)({}),
++        Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
++        Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
++        Layer.mock(ServerEnvironment.ServerEnvironment)({}),
++        Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
++      );
++      const server = yield* RpcServer.makeNoSerialization(
++        RpcGroup.make(WsServerRefreshProvidersRpc).middleware(RpcScopeAuthorization),
++        {
++          ...WS_RPC_SERVER_OPTIONS,
++          onFromServer: (response) =>
++            response._tag === "Exit" ? Queue.offer(responses, response.exit) : Effect.void,
++        },
++      ).pipe(
++        Effect.provide(
++          Layer.merge(
++            layerWsRpc(
++              {
++                sessionId: AuthSessionId.make("refresh-test"),
++                subject: "refresh-test",
++                method: "browser-session-cookie",
++                scopes: [AuthOrchestrationReadScope],
++              },
++              {},
++              yield* ServerBrowser.ServerBrowser,
++              () => Effect.void,
++            ).pipe(Layer.provide(services)),
++            RpcAuthorization.layer([AuthOrchestrationReadScope], undefined, {
++              T3_CLOUD_ROLE: "central",
++              T3_CLOUD_ADMITTED_PROVIDERS: '["codex","claudeAgent"]',
++            }),
++          ),
++        ),
++      );
++      let request = 0;
++      const send = (payload: object) =>
++        server
++          .write(0, {
++            _tag: "Request",
++            id: RpcMessage.RequestId(`refresh-${request++}`),
++            tag: WS_METHODS.serverRefreshProviders,
++            payload,
++            headers: Headers.empty,
++          })
++          .pipe(Effect.andThen(Queue.take(responses)));
++      for (const payload of [
++        { reloadSecrets: true, workspaceSnapshotsOnDemand: true, usageLimitsCommand: true },
++        {},
++        { reloadSecrets: false },
++        {
++          reloadSecrets: true,
++          refreshModels: false,
++          fresh: false,
++          usageLimitsCommand: false,
++          workspaceSnapshotsOnDemand: false,
++        },
++        { instanceId: "codex", reloadSecrets: true },
++        { instanceId: "claudeAgent" },
++      ]) {
++        const response = yield* send(decodeProviderRefresh(payload));
++        assert.equal(response._tag, "Success");
++        const result = response.value as { readonly providers: ReadonlyArray<ServerProvider> };
++        assert.deepEqual(result.providers, [metadata]);
++      }
++      assert.deepEqual(calls, ["all", "all", "all", "all", "codex", "claudeAgent"]);
++      for (const payload of [
++        { cwd: "" },
++        { cwd: "/work" },
++        { cwd: undefined },
++        { refreshModels: true },
++        { fresh: true },
++
++        { instanceId: "codex_work" },
++      ]) {
++        const response = yield* send(payload);
++        assert.equal(response._tag, "Failure");
++      }
++      assert.deepEqual(calls, ["all", "all", "all", "all", "codex", "claudeAgent"]);
++    }).pipe(
++      Effect.provide(
++        Layer.mergeAll(
++          Layer.fresh(layerConfigSources),
++          Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
++          Layer.mock(ServerBrowser.ServerBrowser)({}),
++        ),
++      ),
++      Effect.scoped,
++    ),
++);
++
+ // Compaction keeps the oldest and newest event per message, so a cursor older
+ // than the deleted rows still replays each message where the client would
+ // first have seen it (reducers append on first sight) and reaches the same
 diff --git a/apps/server/src/ws.ts b/apps/server/src/ws.ts
-index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee34523be4c589 100644
+index 4781fcf78dde6db3edfba0ebc052be40ce858054..f41278fd4cbea03c460a27e6dd92e2a8e36caa1a 100644
 --- a/apps/server/src/ws.ts
 +++ b/apps/server/src/ws.ts
 @@ -1,3 +1,14 @@
@@ -22207,7 +22479,22 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [ORCHESTRATION_V2_WS_METHODS.launchThread]: (input) =>
            Effect.annotateCurrentSpan({
              "orchestration_v2.command_id": input.commandId,
-@@ -2526,7 +2671,10 @@ export const layerWsRpc = (
+@@ -2282,6 +2427,14 @@ export const layerWsRpc = (
+         [WS_METHODS.serverRefreshProviders]:
+           /* Request instrumentation already owns the span; keep this helper in that context. */
+           Effect.fnUntraced(function* (input) {
++            if (sandboxRole() === "central") {
++              // Managed auth belongs to the broker. The native mobile refresh requests
++              // reloadSecrets, but a home refresh must only read provider metadata.
++              const providers = yield* input.instanceId === undefined
++                ? providerRegistry.refresh()
++                : providerRegistry.refreshInstance(input.instanceId);
++              return { providers: withoutWorkspaceSnapshots(providers) };
++            }
+             if (input.refreshModels) {
+               yield* modelManifest.forceRefresh;
+               const instances = yield* providerInstances.listInstances;
+@@ -2526,7 +2679,10 @@ export const layerWsRpc = (
                : serverSettings.updateProviderInstance(providerInstanceMutation, nextPatch);
              return ServerSettings.redactServerSettingsForClient(settings);
            }),
@@ -22219,7 +22506,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.serverGetTraceDiagnostics]: (_input) =>
            TraceDiagnostics.readTraceDiagnostics({
              traceFilePath: config.serverTracePath,
-@@ -2683,42 +2831,69 @@ export const layerWsRpc = (
+@@ -2683,42 +2839,69 @@ export const layerWsRpc = (
          [WS_METHODS.sourceControlAppAccess]: (input) => sourceControlSignIn.access(input),
          [WS_METHODS.sourceControlStarred]: (input) => sourceControlSignIn.starred(input),
          [WS_METHODS.projectCloneStart]: (input) =>
@@ -22323,7 +22610,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.projectsEnsureScratch]: () =>
            managedFolders.ensureScratchProject.pipe(
              Effect.mapError(
-@@ -2742,10 +2917,55 @@ export const layerWsRpc = (
+@@ -2742,10 +2925,55 @@ export const layerWsRpc = (
                ),
              ),
          [WS_METHODS.projectCloneCancel]: (input) =>
@@ -22382,7 +22669,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.sourceControlPublishRepository]: (input) =>
            sourceControlRepositories.publishRepository(input).pipe(
              Effect.tap(() => repositoryIdentityResolver.resolve(input.cwd, { refresh: true })),
-@@ -2831,24 +3051,68 @@ export const layerWsRpc = (
+@@ -2831,24 +3059,68 @@ export const layerWsRpc = (
                    message:
                      cause._tag === "ProjectNotEmptyError"
                        ? cause.message
@@ -22462,7 +22749,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.attachmentsCreateUploadUrl]: (input) => issueAttachmentUploadUrl(input),
          [WS_METHODS.attachmentsDelete]: (input) => deletePendingAttachment(input.attachmentId),
          [WS_METHODS.agentSessionsScan]: () => agentSessionScanner.scan,
-@@ -2937,14 +3201,48 @@ export const layerWsRpc = (
+@@ -2937,14 +3209,48 @@ export const layerWsRpc = (
            }),
          [WS_METHODS.assetsPersistChatAttachments]: (input) =>
            persistChatAttachments(input).pipe(Effect.map((attachments) => ({ attachments }))),
@@ -22513,7 +22800,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.vcsPull]: (input) =>
            gitWorkflow.pullCurrentBranch(input.cwd).pipe(
              Effect.matchCauseEffect({
-@@ -2998,7 +3296,21 @@ export const layerWsRpc = (
+@@ -2998,7 +3304,21 @@ export const layerWsRpc = (
            gitWorkflow
              .preparePullRequestThread(input)
              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
@@ -22536,7 +22823,7 @@ index 4781fcf78dde6db3edfba0ebc052be40ce858054..1de85a57607bf19981e4d09673ee3452
          [WS_METHODS.vcsCreateWorktree]: (input) =>
            gitWorkflow.createWorktree(input).pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
          [WS_METHODS.vcsRemoveWorktree]: (input) =>
-@@ -3321,21 +3633,26 @@ export const layer = Layer.unwrap(
+@@ -3321,21 +3641,26 @@ export const layer = Layer.unwrap(
              Effect.provideService(RpcServer.Protocol, withTerminalOutputWindow(protocol)),
              Effect.provide(
                Layer.merge(

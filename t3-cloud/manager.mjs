@@ -74,7 +74,9 @@ export function createCloudManager({ role, publicOrigin, ownerKey, ownerId, allo
               }
             } catch { /* Credential lifetime and unreachable status remain unknown. */ }
           }
-          return json(res, 200, { providerInstanceId: provider, available, ready: available && authStatus === 'authenticated', authStatus });
+          const reportedVersion = available && provider === 'codex' ? broker.providerVersion?.(provider) : null;
+          const version = typeof reportedVersion === 'string' && reportedVersion.trim() === reportedVersion && /^\d+\.\d+\.\d+$/.test(reportedVersion) ? reportedVersion : null;
+          return json(res, 200, { providerInstanceId: provider, available, ready: available && authStatus === 'authenticated', authStatus, version });
         }
         if (url.pathname === '/_cloud/projects/source-revoke') {
           if (!only(input, ['sourceId', 'allocationId']) || !id(input.sourceId) || !id(input.allocationId)) return json(res, 400, { error: 'Invalid source identity' });
