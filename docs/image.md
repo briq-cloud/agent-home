@@ -77,4 +77,4 @@ MIT licensed. The briq service is operated by Uplab SAS under its
 
 ## T3 Cloud
 
-[T3 Cloud](t3-cloud.md) has a separate build target and image repository. Agent Home does not install T3 Code.
+T3 Cloud has its own [repository](https://github.com/briq-cloud/t3-cloud) and image. Agent Home does not install T3 Code.

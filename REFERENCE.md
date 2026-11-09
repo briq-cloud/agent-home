@@ -24,7 +24,7 @@ DSH preview 0.2.1-rc.5 is installed at `/opt/dsh/node_modules/.bin/dsh`, disable
 
 ## Coding workspace
 
-T3 Code is available separately in the t3-cloud image.
+T3 Cloud is maintained in its own repository: https://github.com/briq-cloud/t3-cloud.
 Briq CLI 0.1.3 is installed with a complete integrity-checked npm lockfile. Its native sign-in uses `BRIQ_CONFIG_DIR` (default `RUNNER_LOGINS/config/briq`).
 
 ## Runner
