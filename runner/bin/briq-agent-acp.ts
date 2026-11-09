@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-/** Local T3 agent. Pass only bridge inputs, never T3's ambient credentials, to the ACP process. */
+/** Local Briq Agent bridge. Pass only bridge inputs to the ACP process. */
 const tokenFile = process.env.AGENT_HOME_TOKEN_FILE;
 if (!tokenFile) { process.stderr.write('Briq Agent is not configured\n'); process.exit(1); }
 let token: string;

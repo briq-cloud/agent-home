@@ -13,7 +13,7 @@ const $ = (tag, attrs = {}, ...kids) => {
 };
 const byId = (id) => document.getElementById(id);
 // Panels stay mounted: changing tabs never resets a form or an ACP session.
-const homeTabs = ['chat', 'fleet', 'auto-agent', 'connections', 'tools', 't3', 'terminal', 'briq'];
+const homeTabs = ['chat', 'fleet', 'auto-agent', 'connections', 'tools', 'terminal', 'briq'];
 const tabFromHash = () =>
   location.hash === '#keys-section' ? 'connections' : homeTabs.find((name) => location.hash === '#' + name);
 function showTab(name, navigate = true) {
@@ -115,11 +115,7 @@ const call = async (method, path, body, signal) => {
   });
   return { ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) };
 };
-createHomeServices({ call, byId, onCapabilitiesChanged: () => {
-  const requested = tabFromHash() || 'chat';
-  const selected = showTab(requested, false);
-  if (selected !== requested) history.replaceState(null, '', '#' + selected);
-} });
+createHomeServices({ call, byId });
 let refreshNotice = '';
 function report(error) {
   refreshNotice = '';
@@ -759,7 +755,7 @@ function render() {
   renderCards(byId('keys'), Object.values(providers), 'data-provider', keyCard);
   renderCards(byId('auto-accounts'), connectedAgents.filter((agent) => agent.subscriptionAccount), 'data-agent', autoAccountCard);
   renderCards(byId('auto-models'), Object.values(providers), 'data-provider', autoProviderCard);
-  byId('auto-status').textContent = features.orchestrator ? 'Briq Agent is available in Chat and T3.' : 'Briq Agent orchestration is disabled; Chat can still select an eligible subscription automatically.';
+  byId('auto-status').textContent = features.orchestrator ? 'Briq Agent is available in Chat.' : 'Briq Agent orchestration is disabled; Chat can still select an eligible subscription automatically.';
   byId('connection-count').textContent =
     connectedAgents.filter((c) => c.signedIn === true && (c.statusSource !== 'sign-in' || signIns[c.name]?.state === 'done'))
       .length + ' ready';

@@ -20,7 +20,7 @@ export class Projects {
       this.projects = saved.flatMap((p) => {
         try { return [this.validate(p)]; }
         catch (error) {
-          // T3 worktrees are ephemeral. A removed one must not discard unrelated projects.
+          // Local worktrees can be ephemeral. A removed one must not discard unrelated projects.
           // Its old tasks cannot resolve a root; recreation receives the same canonical ID.
           if (/^cwd-[a-f0-9]{48}$/.test(p.id) && (error as NodeJS.ErrnoException).code === 'ENOENT') return [];
           throw error;

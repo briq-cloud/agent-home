@@ -43,7 +43,7 @@ const port = config.port;
 const base = clis(env);
 const childEnv = cliEnv(env);
 const stateDir = config.stateDir;
-const homeServices = new HomeServices({ env, stateDir, cwd: config.cwd, token, runnerPort: port });
+const homeServices = new HomeServices({ env });
 const logins = env.RUNNER_LOGINS ?? '/work/.logins';
 const accounts = new Accounts({ stateDir, logins });
 const keys = new Keys({
@@ -363,26 +363,9 @@ const server = createServer(async (req, res) => {
   }
   if (!authorized(req)) return json(res, 401, { error: 'unauthorized' });
   try {
-    if (url.pathname === '/api/services/t3/open' && req.method === 'GET') {
-      res.setHeader('cache-control', 'no-store');
-      res.setHeader('referrer-policy', 'no-referrer');
-      if (url.search) return json(res, 400, { error: 'T3 navigation does not accept query parameters' });
-      res.writeHead(302, { location: homeServices.openUrl() });
-      res.end();
-      return;
-    }
     if (parts[0] === 'home-services') {
       res.setHeader('cache-control', 'no-store');
       if (parts.length === 1 && req.method === 'GET') return json(res, 200, homeServices.status());
-      if (parts.length === 2 && parts[1] === 't3' && req.method === 'POST') return json(res, 200, await homeServices.start());
-      if (parts.length === 3 && parts[1] === 't3' && parts[2] === 'pair' && req.method === 'POST')
-        return json(res, 200, await homeServices.pair());
-      if (parts.length === 3 && parts[1] === 't3' && parts[2] === 'routing' && req.method === 'PUT') {
-        const input = await body(req);
-        if (Object.keys(input).length !== 1 || typeof input.optinOpenRouter !== 'boolean')
-          return json(res, 400, { error: 'Expected optinOpenRouter boolean' });
-        return json(res, 200, homeServices.setOpenRouter(input.optinOpenRouter));
-      }
       if (parts.length === 2 && parts[1] === 'briq' && req.method === 'GET') return json(res, 200, await homeServices.briqStatus());
       if (parts.length === 3 && parts[1] === 'briq' && parts[2] === 'login' && req.method === 'POST')
         return json(res, 200, await homeServices.briqLogin());

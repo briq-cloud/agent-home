@@ -33,7 +33,6 @@ test('local and workflow builds retain the packaged Codex compatibility pin', as
   assert.equal(dockerPin, '0.166.0');
   assert.equal(workflowPin, dockerPin);
   assert.ok(!dockerfile.includes('repos/openai/codex/releases/latest'));
-  assert.ok(!workflow.includes('t3-cloud/t3-source/source.json'));
   assert.ok(workflow.includes('codex-package-x86_64-unknown-linux-musl.tar.gz "$codex_version"'));
 });
 test('rejects missing, duplicate, malformed or unrelated asset metadata', async () => {
