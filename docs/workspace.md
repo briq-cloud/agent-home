@@ -1,8 +1,7 @@
 # Coding workspaces
 
 Agent Home provides the Briq Agent orchestration runner and its native CLI connections.
-[T3 Cloud](t3-cloud.md) is the separate image for unmodified T3 Code and native T3 provider
-connections. Their state and provider sign-ins belong to their respective environments.
+[T3 Cloud](https://github.com/briq-cloud/t3-cloud) is maintained in its own repository.
 
 ## Terminal and Briq
 

@@ -34,7 +34,7 @@ echo "\`ttyd\` $(ver ttyd --version) serves it. A link a CLI opens (\`BROWSER\`,
 echo
 echo "## Coding workspace"
 echo
-echo "T3 Code is available separately in the t3-cloud image."
+echo "T3 Cloud is maintained in its own repository: https://github.com/briq-cloud/t3-cloud."
 echo "Briq CLI $(ver briq --version) is installed with a complete integrity-checked npm lockfile. Its native sign-in uses \`BRIQ_CONFIG_DIR\` (default \`RUNNER_LOGINS/config/briq\`)."
 echo
 echo "## Runner"

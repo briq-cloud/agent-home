@@ -1,3 +1,0 @@
-# Unified diffs encode an empty context line as one literal space.
-# Source whitespace is checked in the pinned upstream worktree before packaging.
-t3-cloud/t3-source/briq-sandbox.patch whitespace=-blank-at-eol

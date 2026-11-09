@@ -3,10 +3,6 @@
 *.md
 # Bundled skills are runtime instructions.
 !runner/skills/**
-!t3-cloud/skills/**
 runner/node_modules
-t3-cloud/node_modules
 
 benchmarks
-
-!t3-cloud/t3-source/README.md
