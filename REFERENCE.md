@@ -22,9 +22,8 @@ DSH preview 0.2.1-rc.5 is installed at `/opt/dsh/node_modules/.bin/dsh`, disable
 
 `ttyd` 1.7.7 serves it. A link a CLI opens (`BROWSER`, `xdg-open`) shows as plain text in a window of its own: `show-url`.
 
-## Coding workspace
+## Briq CLI
 
-T3 Cloud is maintained in its own repository: https://github.com/briq-cloud/t3-cloud.
 Briq CLI 0.1.3 is installed with a complete integrity-checked npm lockfile. Its native sign-in uses `BRIQ_CONFIG_DIR` (default `RUNNER_LOGINS/config/briq`).
 
 ## Runner

@@ -154,7 +154,7 @@ jobs:
             sleep 1
           done
           docker exec agent-home-smoke node -e "fetch('http://127.0.0.1:8090/terminal/',{headers:{authorization:'Bearer ci-smoke'}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-          docker exec agent-home-smoke sh -c 'test ! -e /opt/t3 && test -e /opt/agent-home-runner'
+          docker exec agent-home-smoke sh -c 'test -e /opt/agent-home-runner'
           docker exec agent-home-smoke sh -c 'test "$(codex --version)" = "codex-cli $(cat /etc/agent-home/codex-version)"'
 
       - name: Publish the checked image

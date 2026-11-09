@@ -26,9 +26,6 @@ const ENDS = Date.now() + 3 * 86_400_000;
 before(async () => {
   const dir = mkdtempSync(join(tmpdir(), 'runner-'));
   home = dir;
-  const fakeT3 = join(dir, 'fake-t3');
-  writeFileSync(fakeT3, `#!${process.execPath}\nsetInterval(()=>{},1000);\n`, { mode: 0o700 });
-  writeFileSync(join(dir, 't3-gateway'), 'https://t3.runner.test/?briq_token=fake-gateway-capability', { mode: 0o600 });
   writeFileSync(
     join(dir, 'auth.json'),
     JSON.stringify({ tokens: { refresh_token: 'secret' }, last_refresh: REFRESHED }),
@@ -59,10 +56,6 @@ before(async () => {
       RUNNER_HOST: '127.0.0.1',
       RUNNER_CWD: dir,
       RUNNER_STATE: join(dir, 'state'),
-      RUNNER_T3_BINARY: fakeT3,
-      RUNNER_BRIQ_AGENT_BINARY: fakeT3,
-      RUNNER_T3_PUBLIC_URL: 'https://t3.runner.test',
-      RUNNER_T3_GATEWAY_URL_FILE: join(dir, 't3-gateway'),
       RUNNER_LOGINS: join(dir, 'logins'),
       RUNNER_MAX_TURNS: '1',
       RUNNER_TERMINAL: `http://127.0.0.1:${TERMINAL_PORT}`,
@@ -129,21 +122,17 @@ after(() => {
   stopTerminal();
 });
 
-test('T3 open redirects require runner authentication and never cache private navigation', async () => {
+test('native home service state requires authentication and rejects unknown actions', async () => {
   const root = `http://127.0.0.1:${PORT}`;
   const headers = { authorization: `Bearer ${TOKEN}` };
-  assert.equal((await fetch(root + '/api/services/t3/open', { redirect: 'manual' })).status, 401);
-  assert.equal((await fetch(root + '/home-services/t3', { method: 'POST', headers })).status, 200);
-  const opened = await fetch(root + '/api/services/t3/open', { headers, redirect: 'manual' });
-  assert.equal(opened.status, 302);
-  assert.equal(opened.headers.get('location'), 'https://t3.runner.test/?briq_token=fake-gateway-capability');
-  assert.equal(opened.headers.get('cache-control'), 'no-store');
-  assert.equal(opened.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal((await fetch(root + '/home-services')).status, 401);
   const status = await fetch(root + '/home-services', { headers });
-  assert.equal((await status.text()).includes('fake-gateway-capability'), false);
-  const arbitrary = await fetch(root + '/api/services/t3/open?url=https://other.test', { headers, redirect: 'manual' });
-  assert.equal(arbitrary.status, 400);
-  assert.equal(arbitrary.headers.get('location'), null);
+  assert.equal(status.status, 200);
+  assert.equal(status.headers.get('cache-control'), 'no-store');
+  const state = await status.json();
+  assert.deepEqual(Object.keys(state).sort(), ['briq', 'dsh']);
+  assert.deepEqual(state.briq.login, { state: 'idle' });
+  assert.equal((await fetch(root + '/home-services/unknown', { method: 'POST', headers })).status, 404);
 });
 
 type Msg = { jsonrpc: '2.0'; id?: string | number; method?: string; params?: any; result?: any; error?: any };
@@ -438,19 +427,13 @@ test('actual local handoff button and direct navigation establish a first-party 
   const browser = await chromium.launch({ headless: true, executablePath: chrome });
   t.after(() => browser.close());
   const base = `http://localhost:${PORT}`;
-  for (const kind of ['direct', 'file-popup', 'fragment-network-path', 'no-t3']) {
+  for (const kind of ['direct', 'file-popup', 'fragment-network-path', 'unknown-tab']) {
     const context = await browser.newContext();
     try {
-      const hash = kind === 'fragment-network-path' ? '#//other.invalid/path' : '#t3';
+      const hash = kind === 'fragment-network-path' ? '#//other.invalid/path' : kind === 'unknown-tab' ? '#unknown' : '#briq';
       const link = `${base}/?token=${TOKEN}&extra=private-test-query${hash}`;
-      if (kind === 'no-t3') await context.route('**/home-services', async (route) => {
-        const response = await route.fetch();
-        const state = await response.json();
-        state.t3.installed = false;
-        await route.fulfill({ response, json: state });
-      });
       let page;
-      if (kind === 'direct' || kind === 'no-t3') {
+      if (kind === 'direct' || kind === 'unknown-tab') {
         page = await context.newPage();
         await page.goto(link);
       } else {
@@ -462,8 +445,8 @@ test('actual local handoff button and direct navigation establish a first-party 
         await source.getByRole('link', { name: 'Open home' }).click();
         page = await popup;
       }
-      // The initial fragment is resolved again when image capabilities arrive.
-      const expectedHash = kind === 'fragment-network-path' || kind === 'no-t3' ? '#chat' : hash;
+      // Unknown tabs and unsafe fragments fall back to Chat.
+      const expectedHash = kind === 'fragment-network-path' || kind === 'unknown-tab' ? '#chat' : hash;
       await page.waitForURL((url) => url.origin === base && url.pathname === '/' &&
         url.search === '' && url.hash === expectedHash);
       await page.locator(`#tab-${expectedHash.slice(1)}[aria-selected="true"]`).waitFor();
@@ -472,7 +455,6 @@ test('actual local handoff button and direct navigation establish a first-party 
       assert.equal(final.pathname, '/');
       assert.equal(final.search, '');
       assert.equal(final.hash, expectedHash);
-      if (kind === 'no-t3') assert.equal(await page.locator('#tab-t3').isHidden(), true);
       const cookies = await context.cookies(base);
       const cookie = cookies.find((value) => value.name === 'agent_home_runner');
       assert.equal(cookie?.sameSite, 'Strict');

@@ -74,7 +74,3 @@ MIT licensed. The briq service is operated by Uplab SAS under its
 ## Benchmarks
 
 [Small ACP benchmarks](../benchmarks/README.md): free mock checks and explicit, budgeted provider-key experiments.
-
-## T3 Cloud
-
-T3 Cloud has its own [repository](https://github.com/briq-cloud/t3-cloud) and image. Agent Home does not install T3 Code.

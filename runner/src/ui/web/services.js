@@ -1,58 +1,14 @@
-export function createHomeServices({ call, byId, onCapabilitiesChanged = () => {} }) {
-  let pairingExpiry;
+export function createHomeServices({ call, byId }) {
   async function request(method, path, body) {
     const result = await call(method, '/home-services' + path, body);
     if (!result.ok) throw Error(result.body.error || 'Service request failed');
     return result.body;
   }
   function render(state) {
-    const t3 = state.t3;
-    if (byId('tab-t3')) byId('tab-t3').hidden = !t3.installed;
-    if (byId('auto-t3-section')) byId('auto-t3-section').hidden = !t3.installed;
-    onCapabilitiesChanged();
-    byId('t3-openrouter').checked = t3.optinOpenRouter === true;
-    byId('t3-status').textContent = !t3.installed ? 'T3 Code is not installed in this image.' :
-      t3.state === 'running' ? 'T3 Code process is running. Pair your browser to connect.' :
-      t3.state === 'failed' ? 'T3 Code stopped unexpectedly. Start it again to retry.' : 'T3 Code is stopped.';
-    byId('t3-start').disabled = !t3.installed || t3.state === 'running';
-    byId('t3-pair').disabled = t3.state !== 'running' || !t3.publicUrl;
-    byId('t3-open').hidden = t3.state !== 'running' || !t3.publicUrl;
-    byId('t3-open').href = '/api/services/t3/open';
-    if (!t3.publicUrl) byId('t3-notice').textContent = 'Browser access needs a dedicated T3 origin configured by this home’s operator.';
     if (state.dsh) byId('dsh-service').textContent = state.dsh.enabled ?
       'DSH is available as an explicitly selected experimental ACP agent.' :
       state.dsh.installed ? 'DSH is installed. Its experimental ACP route needs explicit operator configuration.' : 'DSH is not installed in this image.';
   }
-  const failure = (error) => { byId('t3-notice').textContent = error.message; };
-  const refresh = () => request('GET', '').then(render).catch(failure);
-  byId('services-refresh').onclick = refresh;
-  byId('t3-openrouter').onchange = async () => {
-    const choice = byId('t3-openrouter');
-    choice.disabled = true;
-    const notice = byId('auto-t3-notice') || byId('t3-notice');
-    try {
-      render(await request('PUT', '/t3/routing', { optinOpenRouter: choice.checked }));
-      notice.textContent = 'Routing choice saved for new T3 sessions. Reconnect Briq Agent in T3 to apply it.';
-    }
-    catch (error) { choice.checked = !choice.checked; notice.textContent = error.message; }
-    finally { choice.disabled = false; }
-  };
-  byId('t3-start').onclick = async () => {
-    byId('t3-start').disabled = true;
-    try { render(await request('POST', '/t3')); } catch (error) { failure(error); byId('t3-start').disabled = false; }
-  };
-  byId('t3-pair').onclick = async () => {
-    byId('t3-pair').disabled = true;
-    try {
-      const result = await request('POST', '/t3/pair');
-      const link = byId('t3-pair-open');
-      link.href = result.url; link.hidden = false;
-      byId('t3-notice').textContent = 'Private, one-use browser link ready. Expires ' + new Date(result.expiresAt).toLocaleTimeString() + '.';
-      clearTimeout(pairingExpiry);
-      pairingExpiry = setTimeout(() => { link.hidden = true; link.removeAttribute('href'); }, Math.max(0, Date.parse(result.expiresAt) - Date.now()));
-    } catch (error) { failure(error); }
-    finally { byId('t3-pair').disabled = false; }
-  };
   function briq(state) {
     byId('briq-status').textContent = state.authenticated === true ? 'Briq CLI is connected.' :
       state.authenticated === false ? 'Briq CLI is signed out.' : 'Briq CLI connection could not be verified.';
@@ -76,5 +32,5 @@ export function createHomeServices({ call, byId, onCapabilitiesChanged = () => {
     try { briq({ authenticated: null, login: await request('POST', '/briq/login') }); }
     catch (error) { byId('briq-status').textContent = error.message; byId('briq-login').disabled = false; }
   };
-  refresh();
+  request('GET', '').then(render).catch((error) => { byId('dsh-service').textContent = error.message; });
 }

@@ -296,8 +296,6 @@ test(
     await page.getByRole('tab', { name: 'Fleet', exact: true }).press('ArrowRight');
     assert.equal(await page.getByRole('tab', { name: 'Auto Agent', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await page.locator('#panel-auto-agent input[type="password"]').count(), 0);
-    assert.equal(await page.locator('#panel-auto-agent #t3-openrouter').count(), 1);
-    assert.equal(await page.locator('#panel-t3 #t3-openrouter').count(), 0);
     await page.goto('http://accounts.test/');
     assert.equal(await page.getByRole('tab', { name: 'Auto Agent', exact: true }).getAttribute('aria-selected'), 'true');
     await page.getByRole('tab', { name: 'Connections', exact: true }).click();

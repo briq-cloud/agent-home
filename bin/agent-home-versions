@@ -32,9 +32,8 @@ echo "## Terminal"
 echo
 echo "\`ttyd\` $(ver ttyd --version) serves it. A link a CLI opens (\`BROWSER\`, \`xdg-open\`) shows as plain text in a window of its own: \`show-url\`."
 echo
-echo "## Coding workspace"
+echo "## Briq CLI"
 echo
-echo "T3 Cloud is maintained in its own repository: https://github.com/briq-cloud/t3-cloud."
 echo "Briq CLI $(ver briq --version) is installed with a complete integrity-checked npm lockfile. Its native sign-in uses \`BRIQ_CONFIG_DIR\` (default \`RUNNER_LOGINS/config/briq\`)."
 echo
 echo "## Runner"

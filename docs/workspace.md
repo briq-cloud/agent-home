@@ -1,7 +1,6 @@
-# Coding workspaces
+# Agent workspace
 
 Agent Home provides the Briq Agent orchestration runner and its native CLI connections.
-[T3 Cloud](https://github.com/briq-cloud/t3-cloud) is maintained in its own repository.
 
 ## Terminal and Briq
 

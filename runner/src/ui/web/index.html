@@ -23,7 +23,6 @@
     <button id="tab-auto-agent" role="tab" aria-controls="panel-auto-agent" aria-selected="false" tabindex="-1">Auto Agent</button>
     <button id="tab-connections" role="tab" aria-controls="panel-connections" aria-selected="false" tabindex="-1">Connections</button>
     <button id="tab-tools" role="tab" aria-controls="panel-tools" aria-selected="false" tabindex="-1">Tools</button>
-    <button id="tab-t3" hidden role="tab" aria-controls="panel-t3" aria-selected="false" tabindex="-1">T3 Code</button>
     <button id="tab-terminal" role="tab" aria-controls="panel-terminal" aria-selected="false" tabindex="-1">Terminal</button>
     <button id="tab-briq" role="tab" aria-controls="panel-briq" aria-selected="false" tabindex="-1">Briq</button>
   </nav>
@@ -51,12 +50,6 @@
     </section>
     <section aria-labelledby="auto-accounts-title"><h2 id="auto-accounts-title">Subscription accounts</h2><p class="muted">Include or exclude Claude accounts from automatic selection. Excluded accounts remain available when selected explicitly.</p><div id="auto-accounts" class="grid"></div></section>
     <section aria-labelledby="auto-models-title"><h2 id="auto-models-title">Model profiles</h2><p class="muted">Prepare the default OpenRouter models in one click, or configure a profile below. Saving a key in Connections does not prepare models or approve paid tasks.</p><div id="auto-models" class="grid"></div></section>
-    <section id="auto-t3-section" hidden aria-labelledby="auto-t3-title"><h2 id="auto-t3-title">T3 sessions</h2>
-      <label class="api-choice"><input type="checkbox" id="t3-openrouter"> Allow OpenRouter API profiles and paid routing decisions for new Briq Agent connections in T3</label>
-      <p class="muted">Requires your OpenRouter key in Connections. Admission estimates: $0.10 for execution and $0.001 for routing per task; actual CLI charges are unknown. Reconnect the Briq Agent in T3 after changing this choice.</p>
-      <p class="muted">This setting does not change Chat or Fleet paid-use consent.</p>
-      <p id="auto-t3-notice" role="status" class="muted"></p>
-    </section>
   </div>
   <div id="panel-chat" role="tabpanel" aria-labelledby="tab-chat">
   <section class="chat-shell" aria-labelledby="chat-title" id="chat">
@@ -73,18 +66,7 @@
   <section aria-labelledby="tasks-title"><div class="section-title"><div><p class="eyebrow">PROJECT EXECUTION</p><h2 id="tasks-title">Tasks &amp; agents</h2></div><span class="muted">Continues while disconnected</span></div><div id="task-list" class="grid"><p class="muted">Auto conversations appear here.</p></div></section>
   </div>
   <div id="panel-tools" role="tabpanel" aria-labelledby="tab-tools" hidden>
-    <section aria-labelledby="tools-title"><div class="section-title"><div><p class="eyebrow">SHARED CAPABILITIES</p><h1 id="tools-title">Tools</h1></div></div><p id="tools-disabled" class="muted" hidden>Shared tools are disabled for this home.</p><div id="extensions-root"></div></section>
-  </div>
-  <div id="panel-t3" role="tabpanel" aria-labelledby="tab-t3" hidden>
-    <section aria-labelledby="t3-title"><p class="eyebrow">YOUR CODING WORKSPACE</p><h1 id="t3-title">T3 Code</h1>
-      <p>T3 Code uses Briq Agent for your connected CLIs, shared tools and durable tasks. Sign in to the CLIs in Connections, then select Briq Agent in T3.</p>
-      <p id="t3-status" role="status">Checking T3 Code…</p>
-      <div class="actions"><button id="t3-start">Start T3 Code</button><a id="t3-open" class="button" href="/api/services/t3/open" target="_blank" rel="noopener noreferrer" hidden>Open T3 Code ↗</a><button id="t3-pair" disabled>Create browser pairing link</button><a id="t3-pair-open" class="button" target="_blank" rel="noopener noreferrer" hidden>Pair this browser ↗</a><button id="services-refresh">Refresh status</button></div>
-      <p id="t3-notice" role="status" class="muted"></p>
-      <p>Configure paid routing for new T3 sessions in <a href="#auto-agent">Auto Agent settings</a>.</p>
-      <p>Pairing links expire after five minutes and can be used once. Keep them private. The terminal and CLI sign-ins remain available here while T3 runs.</p>
-      <p id="dsh-service" class="muted"></p>
-    </section>
+    <section aria-labelledby="tools-title"><div class="section-title"><div><p class="eyebrow">SHARED CAPABILITIES</p><h1 id="tools-title">Tools</h1></div></div><p id="tools-disabled" class="muted" hidden>Shared tools are disabled for this home.</p><div id="extensions-root"></div><p id="dsh-service" class="muted"></p></section>
   </div>
   <div id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden>
     <section aria-labelledby="terminal-title"><p class="eyebrow">THIS HOME</p><h1 id="terminal-title">Terminal</h1>
